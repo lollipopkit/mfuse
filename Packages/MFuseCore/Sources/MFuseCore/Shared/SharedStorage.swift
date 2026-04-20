@@ -17,6 +17,7 @@ public final class SharedStorage: Sendable {
 
     public init(
         legacyDefaults: UserDefaults? = nil,
+        allowFallbackToTemporaryDirectory: Bool = false,
         containerURL: URL? = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
         )
@@ -24,21 +25,33 @@ public final class SharedStorage: Sendable {
         self.legacyDefaults = legacyDefaults
         if let containerURL {
             self.containerURL = containerURL
-        } else {
-            // Fallback for testing
+        } else if allowFallbackToTemporaryDirectory {
             self.containerURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("MFuseShared")
+        } else {
+            preconditionFailure(
+                "SharedStorage failed to resolve App Group container for \(AppGroupConstants.groupIdentifier). " +
+                "Pass allowFallbackToTemporaryDirectory: true only for tests, or inject an explicit containerURL."
+            )
         }
-        ensureDirectories()
+        do {
+            try ensureDirectories()
+        } catch {
+            preconditionFailure(
+                "SharedStorage failed to create storage directories under \(self.containerURL.path): \(error)"
+            )
+        }
     }
 
     public static func withLegacyMigration(
+        allowFallbackToTemporaryDirectory: Bool = false,
         containerURL: URL? = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
         )
     ) -> SharedStorage {
         SharedStorage(
             legacyDefaults: UserDefaults(suiteName: AppGroupConstants.groupIdentifier),
+            allowFallbackToTemporaryDirectory: allowFallbackToTemporaryDirectory,
             containerURL: containerURL
         )
     }
@@ -56,12 +69,12 @@ public final class SharedStorage: Sendable {
             return []
         }
 
-        persistConnections(connections)
+        try? persistConnections(connections)
         return connections
     }
 
-    public func saveConnections(_ connections: [ConnectionConfig]) {
-        persistConnections(connections)
+    public func saveConnections(_ connections: [ConnectionConfig]) throws {
+        try persistConnections(connections)
     }
 
     /// Find a single connection by its domain identifier.
@@ -111,16 +124,17 @@ public final class SharedStorage: Sendable {
             .appendingPathComponent("MFuse", isDirectory: true)
     }
 
-    private func ensureDirectories() {
-        try? FileManager.default.createDirectory(at: applicationSupportURL, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: databasesURL, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: cachesURL, withIntermediateDirectories: true)
+    private func ensureDirectories() throws {
+        try FileManager.default.createDirectory(at: applicationSupportURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: databasesURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cachesURL, withIntermediateDirectories: true)
     }
 
-    private func persistConnections(_ connections: [ConnectionConfig]) {
+    private func persistConnections(_ connections: [ConnectionConfig]) throws {
         do {
-            ensureDirectories()
+            try ensureDirectories()
             var coordinationError: NSError?
+            var writeError: Error?
             let coordinator = NSFileCoordinator()
             coordinator.coordinate(writingItemAt: connectionsFileURL, options: .forReplacing, error: &coordinationError) { coordinatedURL in
                 do {
@@ -129,6 +143,7 @@ public final class SharedStorage: Sendable {
                     let data = try JSONEncoder().encode(mergedConnections)
                     try data.write(to: coordinatedURL, options: .atomic)
                 } catch {
+                    writeError = error
                     Self.logger.error(
                         "Failed to persist connections to \(coordinatedURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
                     )
@@ -138,10 +153,14 @@ public final class SharedStorage: Sendable {
             if let coordinationError {
                 throw coordinationError
             }
+            if let writeError {
+                throw writeError
+            }
         } catch {
             Self.logger.error(
                 "Failed to persist connections to \(self.connectionsFileURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
+            throw error
         }
     }
 

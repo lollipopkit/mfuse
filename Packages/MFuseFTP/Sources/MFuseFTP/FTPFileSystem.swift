@@ -61,7 +61,7 @@ public actor FTPFileSystem: RemoteFileSystem {
             _ = try await conn.sendCommand("TYPE I")
         } catch {
             try? await conn.close()
-            throw error
+            throw mapConnectionError(error)
         }
 
         self.connection = conn
@@ -90,8 +90,10 @@ public actor FTPFileSystem: RemoteFileSystem {
         }
 
         let rawData = try await dataHandler.collectData()
-        // Read transfer complete
-        _ = try await conn.readResponse() // wait for server-initiated transfer completion
+        try validateTransferCompletion(
+            try await conn.readResponse(),
+            failurePrefix: "LIST completion failed"
+        )
         let listing = String(data: rawData, encoding: .utf8) ?? ""
 
         return FTPDirectoryParser.parse(listing).map { entry in
@@ -155,11 +157,10 @@ public actor FTPFileSystem: RemoteFileSystem {
         }
 
         let data = try await dataHandler.collectData()
-        // Wait for transfer complete (226)
-        let doneResp = try await conn.readResponse()
-        if doneResp.code != 226 && doneResp.code != 250 {
-            // Some servers are lenient
-        }
+        try validateTransferCompletion(
+            try await conn.readResponse(),
+            failurePrefix: "RETR completion failed"
+        )
         return data
     }
 
@@ -251,6 +252,29 @@ public actor FTPFileSystem: RemoteFileSystem {
         return connection
     }
 
+    private func mapConnectionError(_ error: Error) -> RemoteFileSystemError {
+        if let error = error as? RemoteFileSystemError {
+            return error
+        }
+
+        if let error = error as? FTPError {
+            switch error {
+            case .authenticationFailed:
+                return .authenticationFailed
+            case .notConnected:
+                return .notConnected
+            case .connectionTimedOut:
+                return .connectionFailed(error.localizedDescription)
+            case .connectionFailed(let message):
+                return .connectionFailed(message)
+            case .unexpectedResponse, .protocolError, .transferFailed:
+                return .operationFailed(error.localizedDescription)
+            }
+        }
+
+        return .operationFailed(error.localizedDescription)
+    }
+
     private func resolvedPath(_ path: RemotePath) -> String {
         if path.isRoot { return config.remotePath }
         let base = config.remotePath.hasSuffix("/") ? config.remotePath : config.remotePath + "/"
@@ -275,10 +299,10 @@ public actor FTPFileSystem: RemoteFileSystem {
         }
 
         let rawData = try await dataHandler.collectData()
-        let doneResp = try await conn.readResponse()
-        if doneResp.code != 226 && doneResp.code != 250 {
-            throw RemoteFileSystemError.operationFailed("LIST completion failed: \(doneResp.text)")
-        }
+        try validateTransferCompletion(
+            try await conn.readResponse(),
+            failurePrefix: "LIST completion failed"
+        )
 
         if path.isRoot {
             return RemoteItem(path: path, type: .directory, modificationDate: Date())
@@ -343,5 +367,11 @@ public actor FTPFileSystem: RemoteFileSystem {
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.dateFormat = "yyyyMMddHHmmss"
         return formatter.date(from: timeStr)
+    }
+
+    private func validateTransferCompletion(_ response: FTPResponse, failurePrefix: String) throws {
+        guard response.code == 226 || response.code == 250 else {
+            throw RemoteFileSystemError.operationFailed("\(failurePrefix): \(response.text)")
+        }
     }
 }

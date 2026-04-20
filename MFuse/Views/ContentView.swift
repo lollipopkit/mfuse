@@ -99,9 +99,9 @@ struct ContentView: View {
                 let keychain = KeychainService()
                 try await keychain.store(credential, for: config.id)
                 if connectionManager.connections.contains(where: { $0.id == config.id }) {
-                    connectionManager.update(config)
+                    try connectionManager.update(config)
                 } else {
-                    connectionManager.add(config)
+                    try connectionManager.add(config)
                 }
                 await MainActor.run {
                     editorPresentation = nil

@@ -78,7 +78,13 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             session.prefersEphemeralWebBrowserSession = false
             session.presentationContextProvider = self
             authSession = session
-            session.start()
+            guard session.start() else {
+                authSession = nil
+                continuation.resume(
+                    throwing: GoogleDriveError.oauthFailed("Failed to start ASWebAuthenticationSession")
+                )
+                return
+            }
         }
 
         defer { pendingState = nil }

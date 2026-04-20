@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import NIO
 import NIOFoundationCompat
 import NIOSSL
@@ -182,7 +183,76 @@ final class FTPConnection: @unchecked Sendable {
         guard let controlHost = currentChannel()?.remoteAddress?.ipAddress else {
             return pasvHost
         }
-        return pasvHost == controlHost ? pasvHost : controlHost
+        return isUnusablePASVAddress(pasvHost) ? controlHost : pasvHost
+    }
+
+    private func isUnusablePASVAddress(_ host: String) -> Bool {
+        if let ipv4 = ipv4Octets(for: host) {
+            return isUnusableIPv4(ipv4)
+        }
+        if let ipv6 = ipv6Words(for: host) {
+            return isUnusableIPv6(ipv6)
+        }
+        return false
+    }
+
+    private func ipv4Octets(for host: String) -> [UInt8]? {
+        var address = in_addr()
+        guard host.withCString({ inet_pton(AF_INET, $0, &address) }) == 1 else {
+            return nil
+        }
+
+        let value = UInt32(bigEndian: address.s_addr)
+        return [
+            UInt8((value >> 24) & 0xff),
+            UInt8((value >> 16) & 0xff),
+            UInt8((value >> 8) & 0xff),
+            UInt8(value & 0xff),
+        ]
+    }
+
+    private func ipv6Words(for host: String) -> [UInt16]? {
+        var address = in6_addr()
+        guard host.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else {
+            return nil
+        }
+
+        return withUnsafeBytes(of: address.__u6_addr.__u6_addr16) { rawBuffer in
+            rawBuffer.bindMemory(to: UInt16.self).map { UInt16(bigEndian: $0) }
+        }
+    }
+
+    private func isUnusableIPv4(_ octets: [UInt8]) -> Bool {
+        guard octets.count == 4 else { return false }
+        let first = octets[0]
+        let second = octets[1]
+
+        if octets == [0, 0, 0, 0] { return true }                 // unspecified
+        if first == 10 { return true }                            // RFC1918
+        if first == 127 { return true }                           // loopback
+        if first == 169 && second == 254 { return true }          // link-local
+        if first == 172 && (16...31).contains(second) { return true }
+        if first == 192 && second == 168 { return true }
+        if first == 100 && (64...127).contains(second) { return true } // CGNAT
+        if first == 198 && [18, 19, 51].contains(second) { return true }
+        if first == 192 && second == 0 && octets[2] == 2 { return true } // TEST-NET-1
+        if first == 198 && second == 51 && octets[2] == 100 { return true } // TEST-NET-2
+        if first == 203 && second == 0 && octets[2] == 113 { return true } // TEST-NET-3
+        if first >= 224 { return true }                           // multicast/reserved
+        return false
+    }
+
+    private func isUnusableIPv6(_ words: [UInt16]) -> Bool {
+        guard words.count == 8 else { return false }
+        if words.allSatisfy({ $0 == 0 }) { return true }          // unspecified
+        if words.dropLast().allSatisfy({ $0 == 0 }) && words.last == 1 { return true } // loopback
+
+        let first = words[0]
+        if (first & 0xfe00) == 0xfc00 { return true }             // ULA fc00::/7
+        if (first & 0xffc0) == 0xfe80 { return true }             // link-local fe80::/10
+        if (first & 0xff00) == 0xff00 { return true }             // multicast ff00::/8
+        if first == 0x2001 && words[1] == 0x0db8 { return true } // documentation 2001:db8::/32
+        return false
     }
 
     private func currentChannel() -> Channel? {
@@ -285,6 +355,19 @@ final class FTPResponseHandler: ChannelInboundHandler {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
+        let continuations: [CheckedContinuation<FTPResponse, Error>]
+
+        lock.lock()
+        terminalError = error
+        continuations = self.continuations
+        self.continuations.removeAll()
+        lock.unlock()
+
+        continuations.forEach { $0.resume(throwing: error) }
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        let error = FTPError.connectionFailed("FTP control connection closed")
         let continuations: [CheckedContinuation<FTPResponse, Error>]
 
         lock.lock()

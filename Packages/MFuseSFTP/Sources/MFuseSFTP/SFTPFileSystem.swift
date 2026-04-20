@@ -79,6 +79,9 @@ public actor SFTPFileSystem: RemoteFileSystem {
             self.client = sshClient
             self.sftp = try await sshClient.openSFTP()
         } catch {
+            if let sshClient = self.client {
+                try? await sshClient.close()
+            }
             self.client = nil
             self.sftp = nil
             throw mapConnectionError(error)

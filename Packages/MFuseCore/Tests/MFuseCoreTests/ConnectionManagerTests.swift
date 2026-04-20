@@ -168,7 +168,7 @@ final class ConnectionManagerTests: XCTestCase {
             legacyDefaults: legacyDefaults,
             containerURL: testContainerURL
         )
-        storage.saveConnections([])
+        try? storage.saveConnections([])
         credentialProvider = MockCredentialProvider()
         originalSymlinkBaseURL = FileProviderMountProvider.symlinkBaseURL
         testSymlinkBaseURL = FileManager.default.temporaryDirectory
@@ -190,7 +190,7 @@ final class ConnectionManagerTests: XCTestCase {
     }
 
     override func tearDown() {
-        storage.saveConnections([])
+        try? storage.saveConnections([])
         MockFileSystemFactory.lastCreated = nil
         if let legacyDefaultsSuiteName {
             legacyDefaults?.removePersistentDomain(forName: legacyDefaultsSuiteName)
@@ -207,47 +207,47 @@ final class ConnectionManagerTests: XCTestCase {
         super.tearDown()
     }
 
-    func testAddConnection() {
+    func testAddConnection() throws {
         let config = ConnectionConfig(
             name: "Test",
             backendType: .sftp,
             host: "example.com",
             username: "user"
         )
-        manager.add(config)
+        try manager.add(config)
         XCTAssertEqual(manager.connections.count, 1)
         XCTAssertEqual(manager.connections.first?.name, "Test")
         XCTAssertEqual(manager.state(for: config.id), .disconnected)
     }
 
-    func testUpdateConnection() {
+    func testUpdateConnection() throws {
         var config = ConnectionConfig(
             name: "Original",
             backendType: .sftp,
             host: "example.com"
         )
-        manager.add(config)
+        try manager.add(config)
         config.name = "Updated"
-        manager.update(config)
+        try manager.update(config)
         XCTAssertEqual(manager.connections.first?.name, "Updated")
     }
 
-    func testRemoveConnection() async {
+    func testRemoveConnection() async throws {
         let config = ConnectionConfig(
             name: "ToRemove",
             backendType: .sftp,
             host: "example.com"
         )
-        manager.add(config)
+        try manager.add(config)
         credentialProvider.credentials[config.id] = Credential(password: "pass")
         XCTAssertEqual(manager.connections.count, 1)
-        await manager.remove(config)
+        try await manager.remove(config)
         XCTAssertTrue(manager.connections.isEmpty)
         XCTAssertNil(credentialProvider.credentials[config.id])
         XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
     }
 
-    func testConnectSuccess() async {
+    func testConnectSuccess() async throws {
         let config = ConnectionConfig(
             name: "Test",
             backendType: .sftp,
@@ -255,21 +255,21 @@ final class ConnectionManagerTests: XCTestCase {
             username: "user"
         )
         credentialProvider.credentials[config.id] = Credential(password: "pass")
-        manager.add(config)
+        try manager.add(config)
 
         await manager.connect(config.id)
         XCTAssertEqual(manager.state(for: config.id), .connected)
         XCTAssertNotNil(manager.fileSystem(for: config.id))
     }
 
-    func testDisconnect() async {
+    func testDisconnect() async throws {
         let config = ConnectionConfig(
             name: "Test",
             backendType: .sftp,
             host: "example.com"
         )
         credentialProvider.credentials[config.id] = Credential(password: "pass")
-        manager.add(config)
+        try manager.add(config)
 
         await manager.connect(config.id)
         XCTAssertEqual(manager.state(for: config.id), .connected)
@@ -279,13 +279,13 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNil(manager.fileSystem(for: config.id))
     }
 
-    func testConnectUnsupportedBackend() async {
+    func testConnectUnsupportedBackend() async throws {
         let config = ConnectionConfig(
             name: "WebDAV",
             backendType: .webdav,
             host: "example.com"
         )
-        manager.add(config)
+        try manager.add(config)
 
         await manager.connect(config.id)
         if case .error = manager.state(for: config.id) {
@@ -321,7 +321,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(paths, [.root])
     }
 
-    func testConnectDoesNotReportMountedUntilMountURLIsReady() async {
+    func testConnectDoesNotReportMountedUntilMountURLIsReady() async throws {
         let config = ConnectionConfig(
             name: "tb",
             backendType: .sftp,
@@ -335,7 +335,7 @@ final class ConnectionManagerTests: XCTestCase {
         await mountProvider.setNilMountURLCount(5, for: config.domainIdentifier)
         manager.mountProvider = mountProvider
         credentialProvider.credentials[config.id] = Credential(password: "pass")
-        manager.add(config)
+        try manager.add(config)
 
         await manager.connect(config.id)
 
@@ -346,7 +346,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
     }
 
-    func testSyncMountsRestoresMountedStateAndSymlink() async {
+    func testSyncMountsRestoresMountedStateAndSymlink() async throws {
         let config = ConnectionConfig(
             name: "tb",
             backendType: .sftp,
@@ -360,7 +360,7 @@ final class ConnectionManagerTests: XCTestCase {
         await mountProvider.setMountedDomainIDs([config.domainIdentifier])
         await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
         manager.mountProvider = mountProvider
-        manager.add(config)
+        try manager.add(config)
 
         await manager.syncMounts()
 
@@ -371,7 +371,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
     }
 
-    func testSyncMountsRemovesOrphanedDomainAndSymlink() async {
+    func testSyncMountsRemovesOrphanedDomainAndSymlink() async throws {
         let config = ConnectionConfig(
             name: "known",
             backendType: .sftp,
@@ -387,7 +387,7 @@ final class ConnectionManagerTests: XCTestCase {
         manager.staleDomainRemover = { domainID in
             await mountProvider.recordStaleDomainRemoval(domainID)
         }
-        manager.add(config)
+        try manager.add(config)
 
         await manager.syncMounts()
 

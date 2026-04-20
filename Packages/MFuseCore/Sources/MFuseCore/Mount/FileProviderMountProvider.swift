@@ -28,7 +28,9 @@ public final class FileProviderMountProvider: MountProvider {
         do {
             try await NSFileProviderManager.add(domain)
         } catch {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            try Task.checkCancellation()
             try await NSFileProviderManager.add(domain)
         }
     }

@@ -72,8 +72,16 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 
         let taskID = UUID()
         let task = Task { [weak self] in
+            var didFinish = false
+            defer {
+                if let self {
+                    self.clearItemEnumerationTask(id: taskID)
+                }
+                if !didFinish {
+                    observer.finishEnumeratingWithError(Self.cancellationError())
+                }
+            }
             guard let self else { return }
-            defer { self.clearItemEnumerationTask(id: taskID) }
             do {
                 logger.info(
                     "Starting enumerateItems for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public)"
@@ -97,6 +105,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                         observer.didEnumerate(batch)
                     }
                     guard !Task.isCancelled, self.isCurrentItemEnumerationTask(id: taskID) else { return }
+                    didFinish = true
                     observer.finishEnumerating(upTo: nil)
                     return
                 }
@@ -124,12 +133,14 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                     observer.didEnumerate(batch)
                 }
                 guard !Task.isCancelled, self.isCurrentItemEnumerationTask(id: taskID) else { return }
+                didFinish = true
                 observer.finishEnumerating(upTo: nil)
             } catch {
                 guard !Task.isCancelled, self.isCurrentItemEnumerationTask(id: taskID) else { return }
                 logger.error(
                     "enumerateItems failed for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
+                didFinish = true
                 observer.finishEnumeratingWithError(errorMapper(error))
             }
         }
@@ -154,8 +165,16 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 
         let taskID = UUID()
         let task = Task { [weak self] in
+            var didFinish = false
+            defer {
+                if let self {
+                    self.clearChangesEnumerationTask(id: taskID)
+                }
+                if !didFinish {
+                    observer.finishEnumeratingWithError(Self.cancellationError())
+                }
+            }
             guard let self else { return }
-            defer { self.clearChangesEnumerationTask(id: taskID) }
             do {
                 logger.info(
                     "Starting enumerateChanges for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public)"
@@ -194,6 +213,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 
                 let anchorData = withUnsafeBytes(of: newAnchor) { Data($0) }
                 guard !Task.isCancelled, self.isCurrentChangesEnumerationTask(id: taskID) else { return }
+                didFinish = true
                 observer.finishEnumeratingChanges(
                     upTo: NSFileProviderSyncAnchor(anchorData),
                     moreComing: false
@@ -203,6 +223,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 logger.error(
                     "enumerateChanges failed for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
+                didFinish = true
                 observer.finishEnumeratingWithError(errorMapper(error))
             }
         }
@@ -229,6 +250,10 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 }
 
 private extension FileProviderEnumerator {
+    static func cancellationError() -> NSError {
+        NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
+    }
+
     func replaceItemEnumerationTask(_ task: Task<Void, Never>, id: UUID) {
         let previousTask: Task<Void, Never>?
         taskLock.lock()

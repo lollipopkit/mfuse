@@ -117,10 +117,12 @@ struct SidebarView: View {
         Button("Edit…") { onEdit(config) }
         Button("Remove", role: .destructive) {
             Task {
-                await connectionManager.disconnect(config.id)
-                await connectionManager.remove(config)
-                if selectedConnection?.id == config.id {
-                    selectedConnection = nil
+                do {
+                    await connectionManager.disconnect(config.id)
+                    try await connectionManager.remove(config)
+                    if selectedConnection?.id == config.id {
+                        selectedConnection = nil
+                    }
                 }
             }
         }

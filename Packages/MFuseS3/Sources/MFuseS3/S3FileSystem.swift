@@ -70,9 +70,14 @@ public actor S3FileSystem: RemoteFileSystem {
             )
         }
 
-        // Test connectivity by listing with max 1 key
-        let request = S3.ListObjectsV2Request(bucket: bucket, maxKeys: 1)
-        _ = try await serviceConfig!.listObjectsV2(request)
+        do {
+            // Test connectivity by listing with max 1 key
+            let request = S3.ListObjectsV2Request(bucket: bucket, maxKeys: 1)
+            _ = try await serviceConfig!.listObjectsV2(request)
+        } catch {
+            try? await client.shutdown()
+            throw error
+        }
 
         self.awsClient = client
         self.s3 = serviceConfig
@@ -196,7 +201,8 @@ public actor S3FileSystem: RemoteFileSystem {
 
         let s3 = try requireS3()
         let key = s3Key(for: path, isDirectory: false)
-        let end = offset + UInt64(length) - 1
+        let (sum, overflow) = offset.addingReportingOverflow(UInt64(length))
+        let end = overflow ? UInt64.max : sum - 1
         let request = S3.GetObjectRequest(
             bucket: bucket,
             key: key,
@@ -221,8 +227,25 @@ public actor S3FileSystem: RemoteFileSystem {
     }
 
     public func createFile(at path: RemotePath, data: Data) async throws {
-        // S3 PutObject is idempotent; just write
-        try await writeFile(at: path, data: data)
+        let s3 = try requireS3()
+        let key = s3Key(for: path, isDirectory: false)
+        let request = S3.PutObjectRequest(
+            body: AWSHTTPBody(bytes: data),
+            bucket: bucket,
+            ifNoneMatch: "*",
+            key: key
+        )
+
+        do {
+            _ = try await s3.putObject(request)
+        } catch let error as AWSErrorType {
+            if let responseCode = error.context?.responseCode.code, responseCode == 409 || responseCode == 412 {
+                throw RemoteFileSystemError.alreadyExists(path)
+            }
+            throw error
+        } catch {
+            throw error
+        }
     }
 
     // MARK: - Mutations

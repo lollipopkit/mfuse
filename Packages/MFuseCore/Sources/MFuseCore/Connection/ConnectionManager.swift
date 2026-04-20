@@ -45,27 +45,53 @@ public final class ConnectionManager: ObservableObject {
 
     // MARK: - CRUD
 
-    public func add(_ config: ConnectionConfig) {
+    public func add(_ config: ConnectionConfig) throws {
         connections.append(config)
         states[config.id] = .disconnected
-        storage.saveConnections(connections)
-    }
-
-    public func update(_ config: ConnectionConfig) {
-        if let idx = connections.firstIndex(where: { $0.id == config.id }) {
-            connections[idx] = config
-            storage.saveConnections(connections)
+        do {
+            try storage.saveConnections(connections)
+        } catch {
+            connections.removeAll { $0.id == config.id }
+            states.removeValue(forKey: config.id)
+            throw error
         }
     }
 
-    public func remove(_ config: ConnectionConfig) async {
+    public func update(_ config: ConnectionConfig) throws {
+        if let idx = connections.firstIndex(where: { $0.id == config.id }) {
+            let previous = connections[idx]
+            connections[idx] = config
+            do {
+                try storage.saveConnections(connections)
+            } catch {
+                connections[idx] = previous
+                throw error
+            }
+        }
+    }
+
+    public func remove(_ config: ConnectionConfig) async throws {
         if states[config.id]?.isConnected == true {
             await disconnect(config.id)
         }
+        let previousConnections = connections
+        let previousState = states[config.id]
+        let previousFileSystem = fileSystems[config.id]
         connections.removeAll { $0.id == config.id }
         states.removeValue(forKey: config.id)
         fileSystems.removeValue(forKey: config.id)
-        storage.saveConnections(connections)
+        do {
+            try storage.saveConnections(connections)
+        } catch {
+            connections = previousConnections
+            if let previousState {
+                states[config.id] = previousState
+            }
+            if let previousFileSystem {
+                fileSystems[config.id] = previousFileSystem
+            }
+            throw error
+        }
         try? await credentialProvider.delete(for: config.id)
     }
 

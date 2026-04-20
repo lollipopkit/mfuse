@@ -26,7 +26,7 @@ final class SharedStorageTests: XCTestCase {
         super.tearDown()
     }
 
-    func testSaveAndLoadConnectionsFromFileBackedStorage() {
+    func testSaveAndLoadConnectionsFromFileBackedStorage() throws {
         let storage = SharedStorage(
             legacyDefaults: legacyDefaults,
             containerURL: containerURL
@@ -38,7 +38,7 @@ final class SharedStorageTests: XCTestCase {
             username: "lk"
         )
 
-        storage.saveConnections([config])
+        try storage.saveConnections([config])
 
         XCTAssertEqual(storage.loadConnections(), [config])
         XCTAssertTrue(FileManager.default.fileExists(atPath: storage.connectionsFileURL.path))

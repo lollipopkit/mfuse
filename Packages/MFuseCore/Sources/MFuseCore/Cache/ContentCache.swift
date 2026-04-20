@@ -54,6 +54,11 @@ public actor ContentCache {
         try? fileManager.removeItem(at: rootURL)
     }
 
+    public func close() {
+        // ContentCache does not keep open handles, but exposing a close hook
+        // keeps cleanup paths consistent with other provider-local stores.
+    }
+
     private func fileURL(for item: RemoteItem) -> URL {
         pathDirectoryURL(for: item.path).appendingPathComponent(versionFilename(for: item), isDirectory: false)
     }

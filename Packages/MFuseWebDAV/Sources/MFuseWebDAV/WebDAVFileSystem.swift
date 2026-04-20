@@ -37,7 +37,6 @@ public actor WebDAVFileSystem: RemoteFileSystem {
             to: rootURL,
             isDirectory: true
         )
-        self.baseURL = url
 
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.timeoutIntervalForRequest = 30
@@ -51,10 +50,18 @@ public actor WebDAVFileSystem: RemoteFileSystem {
             }
         }
 
-        self.session = URLSession(configuration: sessionConfig)
+        let session = URLSession(configuration: sessionConfig)
 
-        // Test connectivity with PROPFIND on root
-        _ = try await propfind(url: url, depth: "0")
+        do {
+            // Test connectivity with PROPFIND on root before committing connection state.
+            _ = try await propfind(url: url, depth: "0", session: session)
+        } catch {
+            session.invalidateAndCancel()
+            throw error
+        }
+
+        self.baseURL = url
+        self.session = session
     }
 
     public func disconnect() async throws {
@@ -227,6 +234,10 @@ public actor WebDAVFileSystem: RemoteFileSystem {
 
     private func propfind(url: URL, depth: String) async throws -> [WebDAVResource] {
         let session = try requireSession()
+        return try await propfind(url: url, depth: depth, session: session)
+    }
+
+    private func propfind(url: URL, depth: String, session: URLSession) async throws -> [WebDAVResource] {
         var request = URLRequest(url: url)
         request.httpMethod = "PROPFIND"
         request.setValue(depth, forHTTPHeaderField: "Depth")
