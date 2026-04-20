@@ -1,5 +1,6 @@
 import Foundation
 import MFuseCore
+import SotoCore
 import SotoS3
 import NIOCore
 import NIOFoundationCompat
@@ -25,6 +26,21 @@ public actor S3FileSystem: RemoteFileSystem {
     private var region: String { config.parameters["region"] ?? "us-east-1" }
     private var customEndpoint: String? { config.parameters["endpoint"] }
     private var pathStyle: Bool { config.parameters["pathStyle"] == "true" }
+
+    private func isNotFoundError(_ error: Error) -> Bool {
+        if let s3Error = error as? S3ErrorType {
+            return s3Error.error == .noSuchKey || s3Error.error == .notFound
+        }
+
+        if let awsError = error as? AWSErrorType {
+            let normalizedCode = awsError.errorCode.lowercased()
+            return normalizedCode == "nosuchkey"
+                || normalizedCode == "notfound"
+                || awsError.context?.responseCode.code == 404
+        }
+
+        return false
+    }
 
     // MARK: - Lifecycle
 
@@ -142,6 +158,10 @@ public actor S3FileSystem: RemoteFileSystem {
                 modificationDate: head.lastModified ?? Date()
             )
         } catch {
+            guard isNotFoundError(error) else {
+                throw error
+            }
+
             // Try as directory (check if prefix has children)
             let dirPrefix = s3Key(for: path, isDirectory: true)
             let listReq = S3.ListObjectsV2Request(bucket: bucket, maxKeys: 1, prefix: dirPrefix)
@@ -165,7 +185,7 @@ public actor S3FileSystem: RemoteFileSystem {
         let key = s3Key(for: path, isDirectory: false)
         let request = S3.GetObjectRequest(bucket: bucket, key: key)
         let response = try await s3.getObject(request)
-        let buffer = try await response.body.collect(upTo: 100 * 1024 * 1024)
+        let buffer = try await response.body.collect(upTo: .max)
         return Data(buffer: buffer)
     }
 

@@ -15,6 +15,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
     private let redirectURI: String
     private let scopes: [String]
     @MainActor private var pendingState: String?
+    @MainActor private var authSession: ASWebAuthenticationSession?
 
     private static let authURL = "https://accounts.google.com/o/oauth2/v2/auth"
     private static let tokenURL = "https://oauth2.googleapis.com/token"
@@ -65,6 +66,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
 
         let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: callbackScheme) { url, error in
+                self.authSession = nil
                 if let error = error {
                     continuation.resume(throwing: error)
                 } else if let url = url {
@@ -75,6 +77,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             }
             session.prefersEphemeralWebBrowserSession = false
             session.presentationContextProvider = self
+            authSession = session
             session.start()
         }
 
@@ -176,6 +179,3 @@ extension GoogleOAuthProvider: ASWebAuthenticationPresentationContextProviding {
         ASPresentationAnchor()
     }
 }
-
-// CommonCrypto bridge for SHA-256
-import CommonCrypto

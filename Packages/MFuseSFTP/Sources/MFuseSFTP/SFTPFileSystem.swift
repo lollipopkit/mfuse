@@ -55,10 +55,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
             )
 
         case .agent:
-            guard let password = credential.password else {
-                throw RemoteFileSystemError.authenticationFailed
-            }
-            authMethod = .passwordBased(username: config.username, password: password)
+            throw RemoteFileSystemError.unsupported("SSH agent authentication is not supported for SFTP")
 
         case .accessKey, .anonymous, .oauth:
             throw RemoteFileSystemError.authenticationFailed

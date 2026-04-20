@@ -32,7 +32,10 @@ public final class DomainManager: ObservableObject {
         let baseDir = FileProviderMountProvider.symlinkBaseURL
         if fm.fileExists(atPath: baseDir.path),
            let contents = try? fm.contentsOfDirectory(atPath: baseDir.path) {
-            let knownNames = Set(connectionManager.connections.map { FileProviderMountProvider.sanitizeName($0.name) })
+            let knownNames = Set(connectionManager.connections.map { connection in
+                let sanitizedName = FileProviderMountProvider.sanitizeName(connection.name)
+                return "\(sanitizedName)-\(connection.id.uuidString)"
+            })
             for name in contents where !knownNames.contains(name) {
                 try? fm.removeItem(at: baseDir.appendingPathComponent(name))
             }

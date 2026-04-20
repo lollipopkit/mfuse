@@ -105,10 +105,13 @@ public final class FileProviderMountProvider: MountProvider {
         return result.isEmpty ? "unnamed" : result
     }
 
-    private static func symlinkURL(for config: ConnectionConfig, baseDir: URL) -> URL {
+    public static func symlinkFilename(for config: ConnectionConfig) -> String {
         let sanitizedName = sanitizeName(config.name)
-        let fileName = "\(sanitizedName)-\(config.id.uuidString)"
-        return baseDir.appendingPathComponent(fileName)
+        return "\(sanitizedName)-\(config.id.uuidString)"
+    }
+
+    public static func symlinkURL(for config: ConnectionConfig, baseDir: URL) -> URL {
+        baseDir.appendingPathComponent(symlinkFilename(for: config))
     }
 
     private func removeManagedSymlinkIfNeeded(at symlinkURL: URL, expectedDestinationURL: URL?) throws {

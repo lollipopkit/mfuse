@@ -110,7 +110,7 @@ struct MenuBarView: View {
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                 if mount.isMounted {
-                    Text("~/MFuse/\(FileProviderMountProvider.sanitizeName(config.name))")
+                    Text("~/MFuse/\(FileProviderMountProvider.symlinkFilename(for: config))")
                         .font(.caption2)
                         .foregroundStyle(.green.opacity(0.8))
                         .lineLimit(1)
@@ -187,8 +187,10 @@ struct MenuBarView: View {
     }
 
     private func resolveFinderURL(for config: ConnectionConfig) async -> URL? {
-        let symlinkURL = FileProviderMountProvider.symlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
+        let symlinkURL = FileProviderMountProvider.symlinkURL(
+            for: config,
+            baseDir: FileProviderMountProvider.symlinkBaseURL
+        )
         if linkExists(at: symlinkURL) {
             return symlinkURL
         }

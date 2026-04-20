@@ -104,6 +104,7 @@ func withOperationTimeout<T: Sendable>(
 public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     private static let bootstrapTimeoutSeconds = 15.0
+    private static let contentCacheStoreRetryCount = 2
     private let domain: NSFileProviderDomain
     private let storage = SharedStorage()
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse.provider", category: "Extension")
@@ -131,9 +132,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             guard let bootstrapTask, let context = try? await bootstrapTask.value else { return }
 
             try? await context.fileSystem.disconnect()
-            guard !Task.isCancelled else { return }
             await context.cache.close()
-            guard !Task.isCancelled else { return }
             await context.anchorStore.close()
             context.stateStore.close()
         }
@@ -229,7 +228,11 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
                 let data = try await context.fileSystem.readFile(at: path)
                 progress.completedUnitCount = 80
-                let cachedURL = try await context.contentCache.store(data: data, for: remoteItem)
+                let cachedURL = try await storeContentCache(
+                    data: data,
+                    for: remoteItem,
+                    using: context
+                )
                 await context.cache.put(item: remoteItem)
 
                 let parentID = parentIdentifier(for: path)
@@ -326,6 +329,12 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 if finalPath != originalPath {
                     try await context.fileSystem.move(from: originalPath, to: finalPath)
                     await context.cache.invalidate(path: originalPath)
+                    if let originalParent = originalPath.parent {
+                        await context.cache.invalidateChildren(of: originalParent)
+                    }
+                    if let finalParent = finalPath.parent {
+                        await context.cache.invalidateChildren(of: finalParent)
+                    }
                     await context.contentCache.invalidate(path: originalPath)
                     currentPath = finalPath
                 }
@@ -549,6 +558,28 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             await bootstrapTaskStore.clearIfCurrent(task)
             throw error
         }
+    }
+
+    private func storeContentCache(
+        data: Data,
+        for remoteItem: RemoteItem,
+        using context: FileProviderRuntimeContext
+    ) async throws -> URL {
+        var lastError: Error?
+
+        for attempt in 0..<Self.contentCacheStoreRetryCount {
+            do {
+                return try await context.contentCache.store(data: data, for: remoteItem)
+            } catch {
+                lastError = error
+                await context.contentCache.invalidate(path: remoteItem.path)
+                guard attempt < Self.contentCacheStoreRetryCount - 1 else { break }
+            }
+        }
+
+        throw lastError ?? RemoteFileSystemError.operationFailed(
+            "Failed to cache content for \(remoteItem.path.absoluteString)"
+        )
     }
 
     private func currentOrCreateBootstrapTask() async -> Task<FileProviderRuntimeContext, Error> {

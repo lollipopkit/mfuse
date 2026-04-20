@@ -13,6 +13,7 @@ final class FTPConnection: @unchecked Sendable {
     private let port: Int
     private let useTLS: Bool
     private let group: EventLoopGroup
+    private let channelLock = NSLock()
     private var channel: Channel?
 
     init(host: String, port: Int, useTLS: Bool) {
@@ -47,9 +48,10 @@ final class FTPConnection: @unchecked Sendable {
                 ])
             }
 
-        self.channel = try await waitForFuture(
+        let connectedChannel = try await waitForFuture(
             bootstrap.connect(host: host, port: port)
         )
+        setChannel(connectedChannel)
 
         // Read welcome banner
         let welcome = try await handler.readResponse()
@@ -59,14 +61,14 @@ final class FTPConnection: @unchecked Sendable {
     }
 
     func close() async throws {
+        let channel = takeChannel()
         try await channel?.close()
-        channel = nil
     }
 
     // MARK: - Command Execution
 
     func sendCommand(_ command: String) async throws -> FTPResponse {
-        guard let channel = channel else { throw FTPError.notConnected }
+        guard let channel = currentChannel() else { throw FTPError.notConnected }
         var buffer = channel.allocator.buffer(capacity: command.utf8.count + 2)
         buffer.writeString(command + "\r\n")
         try await channel.writeAndFlush(buffer)
@@ -74,7 +76,7 @@ final class FTPConnection: @unchecked Sendable {
     }
 
     func readResponse() async throws -> FTPResponse {
-        guard let channel = channel else { throw FTPError.notConnected }
+        guard let channel = currentChannel() else { throw FTPError.notConnected }
         let handler = try await channel.pipeline.handler(type: FTPResponseHandler.self).get()
         return try await handler.readResponse()
     }
@@ -177,10 +179,30 @@ final class FTPConnection: @unchecked Sendable {
     }
 
     private func normalizedDataConnectionHost(_ pasvHost: String) -> String {
-        guard let controlHost = channel?.remoteAddress?.ipAddress else {
+        guard let controlHost = currentChannel()?.remoteAddress?.ipAddress else {
             return pasvHost
         }
         return pasvHost == controlHost ? pasvHost : controlHost
+    }
+
+    private func currentChannel() -> Channel? {
+        channelLock.lock()
+        defer { channelLock.unlock() }
+        return channel
+    }
+
+    private func setChannel(_ channel: Channel?) {
+        channelLock.lock()
+        self.channel = channel
+        channelLock.unlock()
+    }
+
+    private func takeChannel() -> Channel? {
+        channelLock.lock()
+        let channel = self.channel
+        self.channel = nil
+        channelLock.unlock()
+        return channel
     }
 }
 

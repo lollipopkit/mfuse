@@ -33,31 +33,36 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.connectionFailed(error.localizedDescription)
         }
 
-        // Authenticate
-        if config.authMethod == .anonymous {
-            let userResp = try await conn.sendCommand("USER anonymous")
-            if userResp.code == 331 {
-                let passResp = try await conn.sendCommand("PASS anonymous@")
-                guard passResp.code == 230 else {
+        do {
+            // Authenticate
+            if config.authMethod == .anonymous {
+                let userResp = try await conn.sendCommand("USER anonymous")
+                if userResp.code == 331 {
+                    let passResp = try await conn.sendCommand("PASS anonymous@")
+                    guard passResp.code == 230 else {
+                        throw RemoteFileSystemError.authenticationFailed
+                    }
+                } else if userResp.code != 230 {
                     throw RemoteFileSystemError.authenticationFailed
                 }
-            } else if userResp.code != 230 {
-                throw RemoteFileSystemError.authenticationFailed
-            }
-        } else {
-            let userResp = try await conn.sendCommand("USER \(config.username)")
-            if userResp.code == 331 {
-                let passResp = try await conn.sendCommand("PASS \(credential.password ?? "")")
-                guard passResp.code == 230 else {
+            } else {
+                let userResp = try await conn.sendCommand("USER \(config.username)")
+                if userResp.code == 331 {
+                    let passResp = try await conn.sendCommand("PASS \(credential.password ?? "")")
+                    guard passResp.code == 230 else {
+                        throw RemoteFileSystemError.authenticationFailed
+                    }
+                } else if userResp.code != 230 {
                     throw RemoteFileSystemError.authenticationFailed
                 }
-            } else if userResp.code != 230 {
-                throw RemoteFileSystemError.authenticationFailed
             }
-        }
 
-        // Set binary mode
-        _ = try await conn.sendCommand("TYPE I")
+            // Set binary mode
+            _ = try await conn.sendCommand("TYPE I")
+        } catch {
+            try? await conn.close()
+            throw error
+        }
 
         self.connection = conn
     }
@@ -184,7 +189,17 @@ public actor FTPFileSystem: RemoteFileSystem {
     }
 
     public func createFile(at path: RemotePath, data: Data) async throws {
-        try await writeFile(at: path, data: data)
+        do {
+            _ = try await itemInfo(at: path)
+            throw RemoteFileSystemError.alreadyExists(path)
+        } catch let error as RemoteFileSystemError {
+            switch error {
+            case .notFound:
+                try await writeFile(at: path, data: data)
+            default:
+                throw error
+            }
+        }
     }
 
     // MARK: - Mutations

@@ -56,7 +56,7 @@ struct ConnectionDetailView: View {
                     }
                     if mount.isMounted {
                         LabeledContent("Symlink") {
-                            Text("~/MFuse/\(FileProviderMountProvider.sanitizeName(config.name))")
+                            Text("~/MFuse/\(FileProviderMountProvider.symlinkFilename(for: config))")
                                 .textSelection(.enabled)
                         }
                         if let path = mount.mountPath {
@@ -166,8 +166,10 @@ struct ConnectionDetailView: View {
     }
 
     private func resolveFinderURL() async -> URL? {
-        let symlinkURL = FileProviderMountProvider.symlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
+        let symlinkURL = FileProviderMountProvider.symlinkURL(
+            for: config,
+            baseDir: FileProviderMountProvider.symlinkBaseURL
+        )
         if linkExists(at: symlinkURL) {
             return symlinkURL
         }

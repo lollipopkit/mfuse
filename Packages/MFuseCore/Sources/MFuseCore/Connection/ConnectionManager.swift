@@ -177,7 +177,7 @@ public final class ConnectionManager: ObservableObject {
         }
         do {
             try await fs.connect()
-            _ = try await fs.enumerate(at: RemotePath(config.remotePath))
+            _ = try await fs.enumerate(at: .root)
             try await fs.disconnect()
             return .success(())
         } catch {
@@ -209,10 +209,18 @@ public final class ConnectionManager: ObservableObject {
             // Rebuild mount states and symlinks for existing mounted configs
             for config in connections {
                 if domainIDs.contains(config.domainIdentifier) {
-                    states[config.id] = .connected
                     mountStates[config.id] = .mounting
-                    try? await mp.signalEnumerator(for: config)
-                    scheduleMountResolution(for: config, using: mp)
+                    do {
+                        try await mp.signalEnumerator(for: config)
+                        states[config.id] = .connected
+                        scheduleMountResolution(for: config, using: mp)
+                    } catch {
+                        states[config.id] = .connecting
+                        mountResolutionTasks[config.id]?.cancel()
+                        mountResolutionTasks.removeValue(forKey: config.id)
+                        mountStates[config.id] = .unmounted
+                        try? await mp.removeSymlink(for: config)
+                    }
                 } else {
                     mountResolutionTasks[config.id]?.cancel()
                     mountResolutionTasks.removeValue(forKey: config.id)
@@ -316,7 +324,7 @@ public final class ConnectionManager: ObservableObject {
             return
         }
 
-        let knownNames = Set(connections.map { FileProviderMountProvider.sanitizeName($0.name) })
+        let knownNames = Set(connections.map(FileProviderMountProvider.symlinkFilename(for:)))
         for name in contents where !knownNames.contains(name) {
             try? fm.removeItem(at: baseDir.appendingPathComponent(name))
         }

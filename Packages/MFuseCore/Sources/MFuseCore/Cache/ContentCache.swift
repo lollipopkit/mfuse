@@ -28,7 +28,17 @@ public actor ContentCache {
 
         let temporaryURL = pathDirectory.appendingPathComponent(UUID().uuidString, isDirectory: false)
         try data.write(to: temporaryURL, options: .atomic)
-        try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        do {
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        } catch {
+            let nsError = error as NSError
+            guard nsError.domain == NSCocoaErrorDomain,
+                  nsError.code == NSFileWriteFileExistsError else {
+                throw error
+            }
+
+            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+        }
         pruneVersions(in: pathDirectory, keeping: destinationURL.lastPathComponent)
         return destinationURL
     }

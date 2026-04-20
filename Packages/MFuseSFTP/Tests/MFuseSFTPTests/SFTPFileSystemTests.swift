@@ -200,6 +200,10 @@ private enum TestSSHKeyFixtures {
 
         let stderr = Pipe()
         process.standardError = stderr
+        guard let executableURL = process.executableURL,
+              FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            throw XCTSkip("ssh-keygen is unavailable or not executable at \(process.executableURL?.path ?? "unknown path")")
+        }
         try process.run()
         process.waitUntilExit()
 

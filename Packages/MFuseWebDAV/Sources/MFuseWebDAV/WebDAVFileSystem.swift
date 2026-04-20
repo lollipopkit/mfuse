@@ -70,11 +70,12 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         let resources = try await propfind(url: url, depth: "1")
 
         // First entry is the directory itself; skip it
-        let parentHref = url.path
+        let parentHref = cleanHref(url.path)
         return resources.compactMap { res -> RemoteItem? in
-            let resPath = cleanHref(res.href)
-            guard resPath != cleanHref(parentHref) else { return nil }
-            let name = extractName(from: res.href, isCollection: res.isCollection)
+            let normalizedHref = normalizeHref(res.href, relativeTo: url)
+            let resPath = cleanHref(normalizedHref)
+            guard resPath != parentHref else { return nil }
+            let name = extractName(from: normalizedHref, isCollection: res.isCollection)
             guard !name.isEmpty else { return nil }
             let childPath = path.appending(name)
             return RemoteItem(
@@ -126,19 +127,18 @@ public actor WebDAVFileSystem: RemoteFileSystem {
     }
 
     public func createFile(at path: RemotePath, data: Data) async throws {
-        // WebDAV PUT creates or overwrites; check existence first
         let url = try resourceURL(for: path)
         let session = try requireSession()
-
-        // Check if exists with HEAD
-        var headReq = URLRequest(url: url)
-        headReq.httpMethod = "HEAD"
-        let (_, headResp) = try await session.data(for: headReq)
-        if let http = headResp as? HTTPURLResponse, http.statusCode == 200 {
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.httpBody = data
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("*", forHTTPHeaderField: "If-None-Match")
+        let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 412 {
             throw RemoteFileSystemError.alreadyExists(path)
         }
-
-        try await writeFile(at: path, data: data)
+        try checkHTTPResponse(response, path: path, acceptCodes: 200...299)
     }
 
     // MARK: - Mutations
@@ -266,10 +266,12 @@ public actor WebDAVFileSystem: RemoteFileSystem {
     }
 
     private func cleanHref(_ href: String) -> String {
-        var h = href
-        if h.hasSuffix("/") { h = String(h.dropLast()) }
-        // Remove percent encoding for comparison
-        return h.removingPercentEncoding ?? h
+        let decoded = href.removingPercentEncoding ?? href
+        let collapsed = decoded.replacingOccurrences(of: #"\/+"#, with: "/", options: .regularExpression)
+        guard collapsed.count > 1, collapsed.hasSuffix("/") else {
+            return collapsed
+        }
+        return String(collapsed.dropLast())
     }
 
     private func extractName(from href: String, isCollection: Bool) -> String {
@@ -277,6 +279,13 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         if h.hasSuffix("/") { h = String(h.dropLast()) }
         h = h.removingPercentEncoding ?? h
         return (h as NSString).lastPathComponent
+    }
+
+    private func normalizeHref(_ href: String, relativeTo baseURL: URL) -> String {
+        if let resolvedURL = URL(string: href, relativeTo: baseURL)?.absoluteURL {
+            return resolvedURL.path
+        }
+        return href
     }
 
     private let propfindBody = """
