@@ -1,0 +1,92 @@
+name: MFuse
+
+options:
+  bundleIdPrefix: com.lollipopkit.mfuse
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  groupSortPosition: top
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+
+packages:
+  MFuseCore:
+    path: Packages/MFuseCore
+  MFuseSFTP:
+    path: Packages/MFuseSFTP
+  MFuseS3:
+    path: Packages/MFuseS3
+  MFuseWebDAV:
+    path: Packages/MFuseWebDAV
+  MFuseSMB:
+    path: Packages/MFuseSMB
+  MFuseFTP:
+    path: Packages/MFuseFTP
+  MFuseNFS:
+    path: Packages/MFuseNFS
+  MFuseGoogleDrive:
+    path: Packages/MFuseGoogleDrive
+
+targets:
+  MFuse:
+    type: application
+    platform: macOS
+    sources:
+      - path: MFuse
+    dependencies:
+      - package: MFuseCore
+      - package: MFuseSFTP
+      - package: MFuseS3
+      - package: MFuseWebDAV
+      - package: MFuseSMB
+      - package: MFuseFTP
+      - package: MFuseNFS
+      - package: MFuseGoogleDrive
+      - target: MFuseProvider
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lollipopkit.mfuse
+        INFOPLIST_FILE: MFuse/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MFuse/MFuse.entitlements
+        ENABLE_APP_SANDBOX: true
+        COMBINE_HIDPI_IMAGES: true
+        PRODUCT_NAME: MFuse
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Release:
+          ENABLE_HARDENED_RUNTIME: true
+
+  MFuseProvider:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: MFuseProvider
+    dependencies:
+      - package: MFuseCore
+      - package: MFuseSFTP
+      - package: MFuseS3
+      - package: MFuseWebDAV
+      - package: MFuseSMB
+      - package: MFuseFTP
+      - package: MFuseNFS
+      - package: MFuseGoogleDrive
+      - sdk: FileProvider.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lollipopkit.mfuse.provider
+        INFOPLIST_FILE: MFuseProvider/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MFuseProvider/MFuseProvider.entitlements
+        ENABLE_APP_SANDBOX: true
+        PRODUCT_NAME: MFuseProvider
+      configs:
+        Release:
+          ENABLE_HARDENED_RUNTIME: true

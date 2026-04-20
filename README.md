@@ -1,0 +1,178 @@
+# MFuse
+
+[中文说明](README.zh-CN.md) | [License](LICENSE) | [Third-Party Notices](THIRD_PARTY_NOTICES.md)
+
+MFuse is a macOS app that exposes remote storage in Finder through File Provider, with a modular backend layer for multiple protocols.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td valign="top" width="28%">
+      <img src="docs/pics/app.png" alt="MFuse app UI">
+    </td>
+    <td valign="top" width="32%">
+      <img src="docs/pics/menubar.png" alt="MFuse menubar status">
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <img src="docs/pics/finder.png" alt="MFuse mounted in Finder">
+    </td>
+  </tr>
+</table>
+
+## What MFuse Is
+
+MFuse combines a macOS app, a File Provider extension, and a set of protocol-specific Swift packages into one remote filesystem client.
+
+The app manages connection definitions, credentials, and user actions. The File Provider extension bridges those connections into Finder-visible domains. Each remote protocol is implemented as an independent backend package behind a shared virtual filesystem interface.
+
+## Supported Backends
+
+- SFTP
+- S3
+- WebDAV
+- SMB
+- FTP
+- NFS
+- Google Drive
+
+## How It Works
+
+MFuse is split into three main layers:
+
+- `MFuse/`: the macOS SwiftUI app for managing connections and user workflows.
+- `MFuseProvider/`: the File Provider extension that exposes remote content to Finder.
+- `Packages/`: reusable Swift packages, including `MFuseCore` plus protocol backends such as `MFuseSFTP`, `MFuseS3`, and `MFuseWebDAV`.
+
+Shared connection metadata is stored through `SharedStorage`, while secrets are handled by `KeychainService`. Mounting is handled through `FileProviderMountProvider`, and mounted domains become visible through macOS File Provider.
+Mounted domains are persistent across app relaunches as long as the connection config still exists. MFuse also recreates a convenience symlink at `~/MFuse/<name>` for active mounts. A manual disconnect removes both the File Provider domain and the symlink, so it will not be restored automatically on the next launch.
+
+## Project Structure
+
+```text
+.
+├── MFuse/                  # macOS app
+├── MFuseProvider/          # File Provider extension
+├── Packages/
+│   ├── MFuseCore/          # shared models, storage, mount abstractions
+│   ├── MFuseSFTP/
+│   ├── MFuseS3/
+│   ├── MFuseWebDAV/
+│   ├── MFuseSMB/
+│   ├── MFuseFTP/
+│   ├── MFuseNFS/
+│   └── MFuseGoogleDrive/
+├── project.yml             # XcodeGen project definition
+└── Makefile
+```
+
+## Getting Started
+
+### Requirements
+
+- macOS 14+
+- Xcode 15+
+- Swift 5.9+
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+- `swiftlint` for linting
+
+### Generate the Xcode project
+
+```bash
+make generate
+```
+
+### Run tests
+
+```bash
+make test
+```
+
+### Lint
+
+```bash
+make lint
+```
+
+### Build
+
+```bash
+make build
+```
+
+## Common Commands
+
+```bash
+make generate   # regenerate MFuse.xcodeproj from project.yml
+make test       # run package tests
+make lint       # run SwiftLint
+make build      # build the app scheme
+make clean      # remove build outputs
+```
+
+## Local Release DMG
+
+The repository includes local release scripts for building a signed, notarized `DMG` on your Mac:
+
+- `scripts/release/install-apple-signing.sh`
+- `scripts/release/cleanup-apple-signing.sh`
+- `scripts/release/build-and-notarize-dmg.sh`
+- `scripts/release/release-dmg.sh`
+
+Required local inputs:
+
+- `APPLE_DEVELOPER_ID_APP_P12_PATH`
+- `APPLE_DEVELOPER_ID_APP_P12_PASSWORD`
+- `APPLE_DEVELOPER_ID_APP_PROFILE_PATH`
+- `APPLE_DEVELOPER_ID_EXTENSION_PROFILE_PATH`
+- `APPLE_TEAM_ID`
+- `APPLE_NOTARY_KEY_ID`
+- `APPLE_NOTARY_ISSUER_ID`
+- `APPLE_NOTARY_API_KEY_PATH`
+
+The scripts load `.env` from the repository root by default. Environment variables exported in the shell still take precedence. A starter template is provided at `.env.release.example`.
+
+Typical flow:
+
+- install the Developer ID Application certificate and two provisioning profiles into a temporary local keychain
+- regenerate `MFuse.xcodeproj` from `project.yml`
+- archive and export a `Release` build with `developer-id` signing
+- build and sign a `DMG`
+- notarize the `DMG` with `notarytool` and staple the ticket
+- restore the previous default keychain and remove temporary signing assets automatically
+
+Example:
+
+```bash
+cp .env.release.example .env
+# edit .env
+
+make generate
+make release-dmg
+```
+
+`make release-dmg` now performs install, build, notarization, and cleanup in one run. If you need manual control, use `make release-install-signing` and `make release-clean-signing`.
+
+`PKG` is intentionally not included here. It requires a separate `Developer ID Installer` certificate.
+
+## Testing
+
+Current test coverage is centered on Swift packages, especially:
+
+- `MFuseCore` core models and connection management
+- `MFuseFTP` parser behavior
+- `MFuseWebDAV` XML parsing
+
+Some backend tests are placeholders or integration-oriented, so protocol coverage is not uniform yet.
+
+## ADRs
+
+- [ADR 0001: Diagnose empty File Provider mounts caused by missing domain config](docs/adr/0001-file-provider-empty-mount-diagnosis.md)
+
+## License
+
+MFuse is licensed under the GNU Affero General Public License v3.0. See [LICENSE](LICENSE).
+
+Third-party dependencies remain under their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the current dependency notice summary.
