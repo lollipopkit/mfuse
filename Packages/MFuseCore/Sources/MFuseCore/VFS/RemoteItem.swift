@@ -31,6 +31,9 @@ public struct RemoteItem: Sendable, Identifiable, Codable {
     /// POSIX permissions (e.g. 0o644), if available.
     public let permissions: UInt16?
 
+    /// Whether the item is marked hidden by the remote backend, if known.
+    public let isHidden: Bool
+
     // MARK: - Convenience
 
     public var name: String { path.name }
@@ -54,7 +57,8 @@ public struct RemoteItem: Sendable, Identifiable, Codable {
         size: UInt64 = 0,
         modificationDate: Date = Date(),
         creationDate: Date? = nil,
-        permissions: UInt16? = nil
+        permissions: UInt16? = nil,
+        isHidden: Bool = false
     ) {
         self.id = id ?? path.absoluteString
         self.path = path
@@ -63,5 +67,6 @@ public struct RemoteItem: Sendable, Identifiable, Codable {
         self.modificationDate = modificationDate
         self.creationDate = creationDate
         self.permissions = permissions
+        self.isHidden = isHidden
     }
 }

@@ -32,6 +32,11 @@ actor BootstrapTaskStore {
         bootstrapTask = nil
     }
 
+    func clearIfCurrent(_ task: Task<FileProviderRuntimeContext, Error>) {
+        guard let bootstrapTask, bootstrapTask == task else { return }
+        self.bootstrapTask = nil
+    }
+
     func currentOrCreate(
         _ create: @Sendable () -> Task<FileProviderRuntimeContext, Error>
     ) -> Task<FileProviderRuntimeContext, Error> {
@@ -308,33 +313,27 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 let context = try await runtimeContext()
                 var currentPath = item.itemIdentifier.remotePath
                 var updatedData: Data?
+                let originalPath = currentPath
 
-                if changedFields.contains(.filename) {
-                    let parentPath = item.parentItemIdentifier.remotePath
-                    let newPath = parentPath.appending(item.filename)
-                    if newPath != currentPath {
-                        let oldPath = currentPath
-                        try await context.fileSystem.move(from: currentPath, to: newPath)
-                        await context.cache.invalidate(path: currentPath)
-                        await context.contentCache.invalidate(path: oldPath)
-                        currentPath = newPath
-                    }
+                let targetParent = changedFields.contains(.parentItemIdentifier)
+                    ? item.parentItemIdentifier.remotePath
+                    : (currentPath.parent ?? .root)
+                let targetName = changedFields.contains(.filename)
+                    ? item.filename
+                    : currentPath.name
+                let finalPath = targetParent.appending(targetName)
+
+                if finalPath != originalPath {
+                    try await context.fileSystem.move(from: originalPath, to: finalPath)
+                    await context.cache.invalidate(path: originalPath)
+                    await context.contentCache.invalidate(path: originalPath)
+                    currentPath = finalPath
                 }
 
                 if changedFields.contains(.contents), let url = newContents {
                     let data = try Data(contentsOf: url)
                     try await context.fileSystem.writeFile(at: currentPath, data: data)
                     updatedData = data
-                }
-
-                if changedFields.contains(.parentItemIdentifier) {
-                    let newParent = item.parentItemIdentifier.remotePath
-                    let newPath = newParent.appending(currentPath.name)
-                    let oldPath = currentPath
-                    try await context.fileSystem.move(from: currentPath, to: newPath)
-                    await context.cache.invalidate(path: currentPath)
-                    await context.contentCache.invalidate(path: oldPath)
-                    currentPath = newPath
                 }
 
                 let remoteItem = try await context.fileSystem.itemInfo(at: currentPath)
@@ -547,7 +546,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         do {
             return try await task.value
         } catch {
-            await bootstrapTaskStore.clear()
+            await bootstrapTaskStore.clearIfCurrent(task)
             throw error
         }
     }

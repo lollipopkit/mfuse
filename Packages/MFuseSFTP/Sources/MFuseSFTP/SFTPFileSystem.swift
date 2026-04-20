@@ -251,7 +251,17 @@ public actor SFTPFileSystem: RemoteFileSystem {
     }
 
     public func setPermissions(_ permissions: UInt16, at path: RemotePath) async throws {
-        throw RemoteFileSystemError.unsupported("setPermissions not yet implemented for SFTP")
+        do {
+            let sftp = try requireSFTP()
+            var attributes = SFTPFileAttributes()
+            attributes.permissions = UInt32(permissions)
+            try await sftp.setAttributes(
+                at: resolvedPath(path),
+                to: attributes
+            )
+        } catch {
+            throw mapOperationError(error, path: path)
+        }
     }
 
     // MARK: - Helpers

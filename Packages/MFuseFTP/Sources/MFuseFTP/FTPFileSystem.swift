@@ -37,7 +37,12 @@ public actor FTPFileSystem: RemoteFileSystem {
         if config.authMethod == .anonymous {
             let userResp = try await conn.sendCommand("USER anonymous")
             if userResp.code == 331 {
-                _ = try await conn.sendCommand("PASS anonymous@")
+                let passResp = try await conn.sendCommand("PASS anonymous@")
+                guard passResp.code == 230 else {
+                    throw RemoteFileSystemError.authenticationFailed
+                }
+            } else if userResp.code != 230 {
+                throw RemoteFileSystemError.authenticationFailed
             }
         } else {
             let userResp = try await conn.sendCommand("USER \(config.username)")

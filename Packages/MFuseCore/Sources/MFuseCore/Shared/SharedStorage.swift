@@ -119,13 +119,49 @@ public final class SharedStorage: Sendable {
 
     private func persistConnections(_ connections: [ConnectionConfig]) {
         do {
-            let data = try JSONEncoder().encode(connections)
             ensureDirectories()
-            try data.write(to: connectionsFileURL, options: .atomic)
+            var coordinationError: NSError?
+            let coordinator = NSFileCoordinator()
+            coordinator.coordinate(writingItemAt: connectionsFileURL, options: .forReplacing, error: &coordinationError) { coordinatedURL in
+                do {
+                    let latestConnections = self.readConnectionsFromDisk(at: coordinatedURL)
+                    let mergedConnections = self.mergeConnections(latest: latestConnections, incoming: connections)
+                    let data = try JSONEncoder().encode(mergedConnections)
+                    try data.write(to: coordinatedURL, options: .atomic)
+                } catch {
+                    Self.logger.error(
+                        "Failed to persist connections to \(coordinatedURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+
+            if let coordinationError {
+                throw coordinationError
+            }
         } catch {
             Self.logger.error(
                 "Failed to persist connections to \(self.connectionsFileURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
         }
+    }
+
+    private func readConnectionsFromDisk(at url: URL) -> [ConnectionConfig] {
+        guard let data = try? Data(contentsOf: url),
+              let connections = try? JSONDecoder().decode([ConnectionConfig].self, from: data) else {
+            return []
+        }
+        return connections
+    }
+
+    private func mergeConnections(
+        latest: [ConnectionConfig],
+        incoming: [ConnectionConfig]
+    ) -> [ConnectionConfig] {
+        var merged = incoming
+        let incomingIDs = Set(incoming.map(\.id))
+        for connection in latest where !incomingIDs.contains(connection.id) {
+            merged.append(connection)
+        }
+        return merged
     }
 }

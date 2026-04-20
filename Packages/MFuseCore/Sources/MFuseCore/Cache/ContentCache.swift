@@ -22,7 +22,6 @@ public actor ContentCache {
         try fileManager.createDirectory(at: pathDirectory, withIntermediateDirectories: true)
 
         let destinationURL = fileURL(for: item)
-        pruneVersions(in: pathDirectory, keeping: destinationURL.lastPathComponent)
         if fileManager.fileExists(atPath: destinationURL.path) {
             return destinationURL
         }
@@ -30,6 +29,7 @@ public actor ContentCache {
         let temporaryURL = pathDirectory.appendingPathComponent(UUID().uuidString, isDirectory: false)
         try data.write(to: temporaryURL, options: .atomic)
         try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        pruneVersions(in: pathDirectory, keeping: destinationURL.lastPathComponent)
         return destinationURL
     }
 

@@ -19,15 +19,12 @@ public final class DomainManager: ObservableObject {
     /// Sync current connections with File Provider domains.
     /// Removes stale domains that no longer have a corresponding connection.
     public func syncDomains() async throws {
-        let currentDomains = try await mountProvider.mountedDomains()
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
         let domains = try await NSFileProviderManager.domains()
 
         // Remove stale domains
-        for domainID in currentDomains where !knownIDs.contains(domainID) {
-            if let domain = domains.first(where: { $0.identifier.rawValue == domainID }) {
-                try await NSFileProviderManager.remove(domain)
-            }
+        for domain in domains where !knownIDs.contains(domain.identifier.rawValue) {
+            try await NSFileProviderManager.remove(domain)
         }
 
         // Remove orphaned symlinks

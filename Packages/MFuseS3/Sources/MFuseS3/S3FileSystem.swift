@@ -170,6 +170,10 @@ public actor S3FileSystem: RemoteFileSystem {
     }
 
     public func readFile(at path: RemotePath, offset: UInt64, length: UInt32) async throws -> Data {
+        guard length > 0 else {
+            return Data()
+        }
+
         let s3 = try requireS3()
         let key = s3Key(for: path, isDirectory: false)
         let end = offset + UInt64(length) - 1
@@ -261,17 +265,36 @@ public actor S3FileSystem: RemoteFileSystem {
 
     public func copy(from source: RemotePath, to destination: RemotePath) async throws {
         let s3 = try requireS3()
-        let srcKey = s3Key(for: source, isDirectory: false)
-        let dstKey = s3Key(for: destination, isDirectory: false)
-        guard let encodedSrcKey = percentEncodeCopySourceKey(srcKey) else {
-            throw RemoteFileSystemError.operationFailed("Failed to percent-encode S3 copy source key")
+        let sourceItem = try await itemInfo(at: source)
+
+        if sourceItem.isDirectory {
+            let sourcePrefix = s3Key(for: source, isDirectory: true)
+            let destinationPrefix = s3Key(for: destination, isDirectory: true)
+            var continuationToken: String?
+
+            repeat {
+                let listReq = S3.ListObjectsV2Request(
+                    bucket: bucket,
+                    continuationToken: continuationToken,
+                    prefix: sourcePrefix
+                )
+                let listResp = try await s3.listObjectsV2(listReq)
+
+                for key in (listResp.contents ?? []).compactMap(\.key) {
+                    let suffix = String(key.dropFirst(sourcePrefix.count))
+                    try await copyObject(fromKey: key, toKey: destinationPrefix + suffix, using: s3)
+                }
+
+                continuationToken = listResp.nextContinuationToken
+            } while continuationToken != nil
+            return
         }
-        let request = S3.CopyObjectRequest(
-            bucket: bucket,
-            copySource: "\(bucket)/\(encodedSrcKey)",
-            key: dstKey
+
+        try await copyObject(
+            fromKey: s3Key(for: source, isDirectory: false),
+            toKey: s3Key(for: destination, isDirectory: false),
+            using: s3
         )
-        _ = try await s3.copyObject(request)
     }
 
     // MARK: - Helpers
@@ -281,6 +304,18 @@ public actor S3FileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.notConnected
         }
         return s3
+    }
+
+    private func copyObject(fromKey srcKey: String, toKey dstKey: String, using s3: S3) async throws {
+        guard let encodedSrcKey = percentEncodeCopySourceKey(srcKey) else {
+            throw RemoteFileSystemError.operationFailed("Failed to percent-encode S3 copy source key")
+        }
+        let request = S3.CopyObjectRequest(
+            bucket: bucket,
+            copySource: "\(bucket)/\(encodedSrcKey)",
+            key: dstKey
+        )
+        _ = try await s3.copyObject(request)
     }
 
     /// Convert RemotePath to S3 key. Directory keys end with "/".

@@ -177,7 +177,7 @@ public final class ConnectionManager: ObservableObject {
         }
         do {
             try await fs.connect()
-            _ = try await fs.enumerate(at: .root)
+            _ = try await fs.enumerate(at: RemotePath(config.remotePath))
             try await fs.disconnect()
             return .success(())
         } catch {

@@ -64,31 +64,16 @@ APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' MFuse/Info.plis
 DMG_BASENAME="MFuse-${APP_VERSION}-${APP_BUILD}"
 DMG_PATH="$ARTIFACTS_PATH/${DMG_BASENAME}.dmg"
 
-cat > "$EXPORT_OPTIONS_PATH" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>method</key>
-  <string>developer-id</string>
-  <key>signingStyle</key>
-  <string>manual</string>
-  <key>stripSwiftSymbols</key>
-  <true/>
-  <key>teamID</key>
-  <string>${APPLE_TEAM_ID}</string>
-  <key>signingCertificate</key>
-  <string>Developer ID Application</string>
-  <key>provisioningProfiles</key>
-  <dict>
-    <key>${APP_BUNDLE_ID}</key>
-    <string>${APP_PROFILE_NAME}</string>
-    <key>${EXTENSION_BUNDLE_ID}</key>
-    <string>${EXTENSION_PROFILE_NAME}</string>
-  </dict>
-</dict>
-</plist>
-EOF
+rm -f "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c 'Clear dict' "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c 'Add :method string developer-id' "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c 'Add :signingStyle string manual' "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c 'Add :stripSwiftSymbols bool true' "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c "Add :teamID string $APPLE_TEAM_ID" "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c 'Add :signingCertificate string Developer ID Application' "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c 'Add :provisioningProfiles dict' "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$APP_BUNDLE_ID string $APP_PROFILE_NAME" "$EXPORT_OPTIONS_PATH"
+/usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$EXTENSION_BUNDLE_ID string $EXTENSION_PROFILE_NAME" "$EXPORT_OPTIONS_PATH"
 
 xcodebuild archive \
   -project "$PROJECT_PATH" \

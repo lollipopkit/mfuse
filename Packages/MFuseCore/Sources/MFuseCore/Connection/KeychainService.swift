@@ -40,7 +40,6 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
         if let group = accessGroup {
             query[kSecAttrAccessGroup as String] = group

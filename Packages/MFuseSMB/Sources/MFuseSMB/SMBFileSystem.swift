@@ -61,14 +61,14 @@ public actor SMBFileSystem: RemoteFileSystem {
         return files.compactMap { file -> RemoteItem? in
             let name = file.name
             guard name != "." && name != ".." else { return nil }
-            guard !file.isHidden else { return nil }
             let childPath = path.appending(name)
             return RemoteItem(
                 path: childPath,
                 type: file.isDirectory ? .directory : .file,
                 size: file.size,
                 modificationDate: file.lastWriteTime,
-                creationDate: file.creationTime
+                creationDate: file.creationTime,
+                isHidden: file.isHidden
             )
         }
     }
@@ -82,7 +82,8 @@ public actor SMBFileSystem: RemoteFileSystem {
             type: stat.isDirectory ? .directory : .file,
             size: stat.size,
             modificationDate: stat.lastWriteTime,
-            creationDate: stat.creationTime
+            creationDate: stat.creationTime,
+            isHidden: stat.isHidden
         )
     }
 

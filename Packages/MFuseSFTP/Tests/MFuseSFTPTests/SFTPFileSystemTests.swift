@@ -41,19 +41,11 @@ final class SFTPFileSystemTests: XCTestCase {
     }
 
     func testPublicKeyAuthenticationMethodSupportsED25519() throws {
-        let privateKey = """
-        -----BEGIN OPENSSH PRIVATE KEY-----
-        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-        QyNTUxOQAAACAi19yxbgtZH0Y26GZGr2vyVErGFskeOY9HwHLxYbmkAwAAAKAPNV8QDzVf
-        EAAAAAtzc2gtZWQyNTUxOQAAACAi19yxbgtZH0Y26GZGr2vyVErGFskeOY9HwHLxYbmkAw
-        AAAED3UDHB29MB7vQDpb7PGFjEMAYT9FzpnadYWrCPSUma5SLX3LFuC1kfRjboZkava/JU
-        SsYWyR45j0fAcvFhuaQDAAAAHGphYXBASmFhcHMtTWFjQm9vay1Qcm8ubG9jYWwB
-        -----END OPENSSH PRIVATE KEY-----
-        """
+        let privateKey = try TestSSHKeyFixtures.ed25519PrivateKey()
 
         let authMethod = try SFTPFileSystem.publicKeyAuthenticationMethod(
             username: "test",
-            keyData: Data(privateKey.utf8),
+            keyData: privateKey,
             passphrase: nil
         )
 
@@ -61,21 +53,11 @@ final class SFTPFileSystemTests: XCTestCase {
     }
 
     func testPublicKeyAuthenticationMethodSupportsOpenSSHECDSAP256() throws {
-        let privateKey = """
-        -----BEGIN OPENSSH PRIVATE KEY-----
-        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAaAAAABNlY2RzYS
-        1zaGEyLW5pc3RwMjU2AAAACG5pc3RwMjU2AAAAQQR/G9rJovBSvdkd9XoGNURImI5vQP/2
-        w7TQNb/b8hGI5oq844XjI7V4j8XDwjqlcNfeD7gqoHf8ekpmL4EUtzYaAAAAqFZzBpBWcw
-        aQAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBH8b2smi8FK92R31
-        egY1REiYjm9A//bDtNA1v9vyEYjmirzjheMjtXiPxcPCOqVw194PuCqgd/x6SmYvgRS3Nh
-        oAAAAgPV1jW6vy45i2F3WBFirMPgiJU7FgIl4rJy264fkhPU4AAAALeW91QGV4YW1wbGUB
-        AgMEBQ==
-        -----END OPENSSH PRIVATE KEY-----
-        """
+        let privateKey = try TestSSHKeyFixtures.ecdsaP256PrivateKey()
 
         let authMethod = try SFTPFileSystem.publicKeyAuthenticationMethod(
             username: "test",
-            keyData: Data(privateKey.utf8),
+            keyData: privateKey,
             passphrase: nil
         )
 
@@ -83,44 +65,23 @@ final class SFTPFileSystemTests: XCTestCase {
     }
 
     func testPublicKeyAuthenticationMethodSupportsEncryptedOpenSSHECDSAP256() throws {
-        let privateKey = """
-        -----BEGIN OPENSSH PRIVATE KEY-----
-        b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAkrdClHz
-        uuxprLhsjBEV/nAAAAGAAAAAEAAABoAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlz
-        dHAyNTYAAABBBNYdRdTdZashwwYb64Mk2EGndHXAN9DcbOiolNKdljziz/W7//a76x8WgT
-        VvqLMOiI2Hk2+p5ymg4kvdK6+EyYoAAACwZ6guCU7bs6Xl56/c/4YNxYyoXdfboX6GR80A
-        TZ1zNDIEe52la3P1MUSagCg9pkIYv9BNJDYgGRUj/alKpIKPJsae9YimGH0JKpcRkhIpap
-        E9B80Cz8sR0MHCUjHBMiEQlfqoY4KS0Pxv42ZWAyqAocBvv9zzASb3TBm2rMwMZNy4QzkI
-        XfV9hnSUVLj+da1NtI4ysVMnPNVGuhkdsbWC2M+ZOEGtLOcRb2OTfx+QdPs=
-        -----END OPENSSH PRIVATE KEY-----
-        """
+        let privateKey = try TestSSHKeyFixtures.encryptedECDSAP256PrivateKey()
 
         let authMethod = try SFTPFileSystem.publicKeyAuthenticationMethod(
             username: "test",
-            keyData: Data(privateKey.utf8),
-            passphrase: "example"
+            keyData: privateKey,
+            passphrase: TestSSHKeyFixtures.encryptedKeyPassphrase
         )
 
         XCTAssertNotNil(authMethod)
     }
 
-    func testPublicKeyAuthenticationMethodRejectsWrongPassphrase() {
-        let privateKey = """
-        -----BEGIN OPENSSH PRIVATE KEY-----
-        b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAkrdClHz
-        uuxprLhsjBEV/nAAAAGAAAAAEAAABoAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlz
-        dHAyNTYAAABBBNYdRdTdZashwwYb64Mk2EGndHXAN9DcbOiolNKdljziz/W7//a76x8WgT
-        VvqLMOiI2Hk2+p5ymg4kvdK6+EyYoAAACwZ6guCU7bs6Xl56/c/4YNxYyoXdfboX6GR80A
-        TZ1zNDIEe52la3P1MUSagCg9pkIYv9BNJDYgGRUj/alKpIKPJsae9YimGH0JKpcRkhIpap
-        E9B80Cz8sR0MHCUjHBMiEQlfqoY4KS0Pxv42ZWAyqAocBvv9zzASb3TBm2rMwMZNy4QzkI
-        XfV9hnSUVLj+da1NtI4ysVMnPNVGuhkdsbWC2M+ZOEGtLOcRb2OTfx+QdPs=
-        -----END OPENSSH PRIVATE KEY-----
-        """
-
+    func testPublicKeyAuthenticationMethodRejectsWrongPassphrase() throws {
+        let privateKey = try TestSSHKeyFixtures.encryptedECDSAP256PrivateKey()
         XCTAssertThrowsError(
             try SFTPFileSystem.publicKeyAuthenticationMethod(
                 username: "test",
-                keyData: Data(privateKey.utf8),
+                keyData: privateKey,
                 passphrase: "wrong-passphrase"
             )
         ) { error in
@@ -131,13 +92,12 @@ final class SFTPFileSystemTests: XCTestCase {
         }
     }
 
-    func testPublicKeyAuthenticationMethodRejectsPublicKeyFile() {
-        let publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICLXXLFuC1kfRjboZkava/JUSsYWyR45j0fAcvFhuaQD test@example.com"
-
+    func testPublicKeyAuthenticationMethodRejectsPublicKeyFile() throws {
+        let publicKey = try TestSSHKeyFixtures.ed25519PublicKey()
         XCTAssertThrowsError(
             try SFTPFileSystem.publicKeyAuthenticationMethod(
                 username: "test",
-                keyData: Data(publicKey.utf8),
+                keyData: publicKey,
                 passphrase: nil
             )
         ) { error in
@@ -178,5 +138,82 @@ final class SFTPFileSystemTests: XCTestCase {
         let command = SFTPFileSystem.makeExecEnumerationCommand(for: "/home/lk/demo")
         XCTAssertTrue(command.contains("python3 -c"))
         XCTAssertTrue(command.contains(Data("/home/lk/demo".utf8).base64EncodedString()))
+    }
+}
+
+private enum TestSSHKeyFixtures {
+    static let encryptedKeyPassphrase = "example"
+    private static let comment = "test@example.com"
+    private static let cache = NSCache<NSString, NSData>()
+
+    static func ed25519PrivateKey() throws -> Data {
+        try keyPair(named: "ed25519", algorithm: "ed25519").privateKey
+    }
+
+    static func ed25519PublicKey() throws -> Data {
+        try keyPair(named: "ed25519", algorithm: "ed25519").publicKey
+    }
+
+    static func ecdsaP256PrivateKey() throws -> Data {
+        try keyPair(named: "ecdsa-p256", algorithm: "ecdsa", extraArguments: ["-b", "256"]).privateKey
+    }
+
+    static func encryptedECDSAP256PrivateKey() throws -> Data {
+        try keyPair(
+            named: "ecdsa-p256-encrypted",
+            algorithm: "ecdsa",
+            passphrase: encryptedKeyPassphrase,
+            extraArguments: ["-b", "256"]
+        ).privateKey
+    }
+
+    private static func keyPair(
+        named name: String,
+        algorithm: String,
+        passphrase: String? = nil,
+        extraArguments: [String] = []
+    ) throws -> (privateKey: Data, publicKey: Data) {
+        let privateCacheKey = "\(name)-private" as NSString
+        let publicCacheKey = "\(name)-public" as NSString
+        if let privateKey = cache.object(forKey: privateCacheKey) as Data?,
+           let publicKey = cache.object(forKey: publicCacheKey) as Data? {
+            return (privateKey, publicKey)
+        }
+
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mfuse-sftp-test-keys", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        let keyURL = directoryURL.appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+        process.arguments = [
+            "-q",
+            "-t", algorithm,
+            "-f", keyURL.path,
+            "-C", comment,
+            "-N", passphrase ?? "",
+        ] + extraArguments
+
+        let stderr = Pipe()
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
+            let errorMessage = String(data: errorData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown error"
+            throw XCTSkip("ssh-keygen failed to create test key: \(errorMessage)")
+        }
+
+        let privateKey = try Data(contentsOf: keyURL)
+        let publicKey = try Data(contentsOf: keyURL.appendingPathExtension("pub"))
+        cache.setObject(privateKey as NSData, forKey: privateCacheKey)
+        cache.setObject(publicKey as NSData, forKey: publicCacheKey)
+        return (privateKey, publicKey)
     }
 }

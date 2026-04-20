@@ -5,18 +5,25 @@ import os.log
 
 private final class SecurityScopedAccessTracker: @unchecked Sendable {
     private let lock = NSLock()
-    private var releaseHandlers: [() -> Void] = []
+    private var trackedPaths: [String: () -> Void] = [:]
 
-    func track(_ release: @escaping () -> Void) {
+    func isTracking(_ path: String) -> Bool {
         lock.lock()
-        releaseHandlers.append(release)
+        let isTracking = trackedPaths[path] != nil
+        lock.unlock()
+        return isTracking
+    }
+
+    func track(path: String, _ release: @escaping () -> Void) {
+        lock.lock()
+        trackedPaths[path] = release
         lock.unlock()
     }
 
     func close() {
         lock.lock()
-        let handlers = releaseHandlers
-        releaseHandlers.removeAll()
+        let handlers = trackedPaths.values
+        trackedPaths.removeAll()
         lock.unlock()
 
         for release in handlers.reversed() {
@@ -141,6 +148,11 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         guard let url else {
             return nil
         }
+        let cacheKey = url.standardizedFileURL.path
+
+        if securityScopedAccessTracker.isTracking(cacheKey) {
+            return url
+        }
 
         guard url.startAccessingSecurityScopedResource() else {
             throw RemoteFileSystemError.operationFailed(
@@ -155,7 +167,7 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
             throw error
         }
 
-        securityScopedAccessTracker.track {
+        securityScopedAccessTracker.track(path: cacheKey) {
             url.stopAccessingSecurityScopedResource()
         }
         return url

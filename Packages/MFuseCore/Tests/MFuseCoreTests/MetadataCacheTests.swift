@@ -53,6 +53,16 @@ final class MetadataCacheTests: XCTestCase {
         XCTAssertEqual(childrenResult?.count, 3)
     }
 
+    func testChildrenReturnsEmptyArrayForCachedEmptyDirectory() async throws {
+        let parent = RemotePath("/home/empty")
+
+        try await cache.putAll(items: [], parent: parent)
+
+        let childrenResult = await cache.children(of: parent)
+        XCTAssertNotNil(childrenResult)
+        XCTAssertEqual(childrenResult, [])
+    }
+
     func testInvalidate() async {
         let item = RemoteItem(
             path: RemotePath("/home/user/file.txt"),

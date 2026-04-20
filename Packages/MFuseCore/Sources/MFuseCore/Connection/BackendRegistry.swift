@@ -22,8 +22,9 @@ public final class BackendRegistry: @unchecked Sendable {
     /// Create a `RemoteFileSystem` for the given config and credential.
     public func createFileSystem(config: ConnectionConfig, credential: Credential) -> (any RemoteFileSystem)? {
         lock.lock()
-        defer { lock.unlock() }
-        return factories[config.backendType]?(config, credential)
+        let factory = factories[config.backendType]
+        lock.unlock()
+        return factory?(config, credential)
     }
 
     /// Whether a factory is registered for the given backend type.

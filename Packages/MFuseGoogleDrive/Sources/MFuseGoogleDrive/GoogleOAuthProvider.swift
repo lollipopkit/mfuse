@@ -1,6 +1,9 @@
 import Foundation
 import AuthenticationServices
 import CryptoKit
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Handles Google OAuth 2.0 authentication using ASWebAuthenticationSession.
 ///
@@ -11,6 +14,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
     private let clientID: String
     private let redirectURI: String
     private let scopes: [String]
+    @MainActor private var pendingState: String?
 
     private static let authURL = "https://accounts.google.com/o/oauth2/v2/auth"
     private static let tokenURL = "https://oauth2.googleapis.com/token"
@@ -40,6 +44,8 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
     public func authorize() async throws -> TokenResponse {
         let codeVerifier = generateCodeVerifier()
         let codeChallenge = generateCodeChallenge(from: codeVerifier)
+        let state = generateState()
+        pendingState = state
 
         var components = URLComponents(string: Self.authURL)!
         components.queryItems = [
@@ -51,6 +57,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "access_type", value: "offline"),
             URLQueryItem(name: "prompt", value: "consent"),
+            URLQueryItem(name: "state", value: state),
         ]
 
         let authURL = components.url!
@@ -71,7 +78,15 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             session.start()
         }
 
-        guard let code = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?
+        defer { pendingState = nil }
+
+        let callbackComponents = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
+        let callbackState = callbackComponents?.queryItems?.first(where: { $0.name == "state" })?.value
+        guard callbackState == pendingState else {
+            throw GoogleDriveError.oauthFailed("Invalid OAuth state in callback")
+        }
+
+        guard let code = callbackComponents?
             .queryItems?.first(where: { $0.name == "code" })?.value else {
             throw GoogleDriveError.oauthFailed("No authorization code in callback")
         }
@@ -143,10 +158,21 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
     }
+
+    private func generateState() -> String {
+        UUID().uuidString
+    }
 }
 
 extension GoogleOAuthProvider: ASWebAuthenticationPresentationContextProviding {
     public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if canImport(AppKit)
+        if let window = NSApplication.shared.keyWindow
+            ?? NSApplication.shared.mainWindow
+            ?? NSApplication.shared.windows.first(where: { $0.isVisible }) {
+            return window
+        }
+        #endif
         ASPresentationAnchor()
     }
 }

@@ -14,6 +14,7 @@ struct ConnectionEditorSheet: View {
     @State private var authMethod: AuthMethod
     @State private var remotePath: String
     @State private var password: String = ""
+    @State private var oauthToken: String = ""
     @State private var privateKeyPath: String = ""
 
     // Backend-specific parameters
@@ -231,6 +232,9 @@ struct ConnectionEditorSheet: View {
         .task(id: existingID) {
             await loadStoredCredentialIfNeeded()
         }
+        .onChange(of: authMethod) { newMethod in
+            clearCredentialState(except: newMethod)
+        }
     }
 
     // MARK: - Validation
@@ -248,19 +252,24 @@ struct ConnectionEditorSheet: View {
     // MARK: - Actions
 
     private func save() {
-        let config = ConnectionConfig(
-            id: existingID ?? UUID(),
-            name: name,
-            backendType: backendType,
-            host: host,
-            port: UInt16(port) ?? backendType.defaultPort,
-            username: username,
-            authMethod: authMethod,
-            remotePath: remotePath.isEmpty ? "/" : remotePath,
-            parameters: buildParameters()
-        )
-        let credential = buildCredential()
-        onSave(config, credential)
+        do {
+            let credential = try buildCredential()
+            let config = ConnectionConfig(
+                id: existingID ?? UUID(),
+                name: name,
+                backendType: backendType,
+                host: host,
+                port: UInt16(port) ?? backendType.defaultPort,
+                username: username,
+                authMethod: authMethod,
+                remotePath: remotePath.isEmpty ? "/" : remotePath,
+                parameters: buildParameters()
+            )
+            onSave(config, credential)
+        } catch {
+            testResult = error.localizedDescription
+            testSuccess = false
+        }
     }
 
     private func testConnection() {
@@ -276,7 +285,15 @@ struct ConnectionEditorSheet: View {
             remotePath: remotePath.isEmpty ? "/" : remotePath,
             parameters: buildParameters()
         )
-        let credential = buildCredential()
+        let credential: Credential
+        do {
+            credential = try buildCredential()
+        } catch {
+            testResult = error.localizedDescription
+            testSuccess = false
+            isTesting = false
+            return
+        }
 
         Task {
             let storage = SharedStorage.withLegacyMigration()
@@ -300,17 +317,27 @@ struct ConnectionEditorSheet: View {
         }
     }
 
-    private func buildCredential() -> Credential {
+    private func buildCredential() throws -> Credential {
         switch authMethod {
         case .password:
             return Credential(password: password)
         case .publicKey:
-            let keyData = try? Data(contentsOf: URL(fileURLWithPath: privateKeyPath))
-            return Credential(
-                password: nil,
-                privateKey: keyData,
-                passphrase: password.isEmpty ? nil : password
-            )
+            guard !privateKeyPath.isEmpty else {
+                throw RemoteFileSystemError.authenticationFailed
+            }
+            let keyURL = URL(fileURLWithPath: privateKeyPath)
+            do {
+                let keyData = try Data(contentsOf: keyURL)
+                return Credential(
+                    password: nil,
+                    privateKey: keyData,
+                    passphrase: password.isEmpty ? nil : password
+                )
+            } catch {
+                throw RemoteFileSystemError.operationFailed(
+                    "Unable to read private key at \(privateKeyPath): \(error.localizedDescription)"
+                )
+            }
         case .agent:
             return Credential()
         case .accessKey:
@@ -321,7 +348,7 @@ struct ConnectionEditorSheet: View {
         case .anonymous:
             return Credential()
         case .oauth:
-            return Credential(token: password.isEmpty ? nil : password)
+            return Credential(token: oauthToken.isEmpty ? nil : oauthToken)
         }
     }
 
@@ -350,11 +377,40 @@ struct ConnectionEditorSheet: View {
                 s3SecretAccessKey = credential.secretAccessKey ?? ""
             }
         case .oauth:
-            if password.isEmpty {
-                password = credential.token ?? ""
+            if oauthToken.isEmpty {
+                oauthToken = credential.token ?? ""
             }
         case .agent, .anonymous:
             break
+        }
+    }
+
+    private func clearCredentialState(except method: AuthMethod) {
+        switch method {
+        case .password:
+            oauthToken = ""
+            privateKeyPath = ""
+            s3AccessKeyID = ""
+            s3SecretAccessKey = ""
+        case .publicKey:
+            oauthToken = ""
+            s3AccessKeyID = ""
+            s3SecretAccessKey = ""
+        case .agent, .anonymous:
+            password = ""
+            oauthToken = ""
+            privateKeyPath = ""
+            s3AccessKeyID = ""
+            s3SecretAccessKey = ""
+        case .accessKey:
+            password = ""
+            oauthToken = ""
+            privateKeyPath = ""
+        case .oauth:
+            password = ""
+            privateKeyPath = ""
+            s3AccessKeyID = ""
+            s3SecretAccessKey = ""
         }
     }
 

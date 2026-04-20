@@ -88,7 +88,8 @@ final class FTPConnection: @unchecked Sendable {
             throw FTPError.unexpectedResponse(response)
         }
 
-        let (dataHost, dataPort) = try parsePASV(response.text)
+        let (pasvHost, dataPort) = try parsePASV(response.text)
+        let dataHost = normalizedDataConnectionHost(pasvHost)
         let dataHandler = FTPDataHandler()
         var tlsHandler: NIOSSLClientHandler?
 
@@ -173,6 +174,13 @@ final class FTPConnection: @unchecked Sendable {
         let host = "\(parts[0]).\(parts[1]).\(parts[2]).\(parts[3])"
         let port = parts[4] * 256 + parts[5]
         return (host, port)
+    }
+
+    private func normalizedDataConnectionHost(_ pasvHost: String) -> String {
+        guard let controlHost = channel?.remoteAddress?.ipAddress else {
+            return pasvHost
+        }
+        return pasvHost == controlHost ? pasvHost : controlHost
     }
 }
 

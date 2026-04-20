@@ -33,8 +33,14 @@ public actor MetadataCache {
                 data BLOB NOT NULL,
                 expires REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS directory_states (
+                parent TEXT PRIMARY KEY,
+                expires REAL NOT NULL,
+                is_empty INTEGER NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_parent ON items(parent);
             CREATE INDEX IF NOT EXISTS idx_expires ON items(expires);
+            CREATE INDEX IF NOT EXISTS idx_directory_states_expires ON directory_states(expires);
         """)
         pruneExpired()
     }
@@ -68,13 +74,14 @@ public actor MetadataCache {
     /// Get all cached children of a directory.
     public func children(of parent: RemotePath) -> [RemoteItem]? {
         guard let db = db else { return nil }
+        let now = Date().timeIntervalSince1970
         let sql = "SELECT data FROM items WHERE parent = ?1 AND expires > ?2"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
 
         sqlite3_bind_text(stmt, 1, parent.absoluteString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 2, now)
 
         let decoder = JSONDecoder()
         var items: [RemoteItem] = []
@@ -86,7 +93,11 @@ public actor MetadataCache {
                 items.append(item)
             }
         }
-        return items.isEmpty ? nil : items
+        if !items.isEmpty {
+            return items
+        }
+
+        return cachedEmptyDirectoryState(for: parent, now: now) ? [] : nil
     }
 
     // MARK: - Put
@@ -98,6 +109,7 @@ public actor MetadataCache {
     public func putAll(items: [RemoteItem], parent: RemotePath) throws {
         try withTransaction {
             try invalidateChildrenInternal(of: parent)
+            try putDirectoryStateInternal(parent: parent, isEmpty: items.isEmpty)
             for item in items {
                 try putInternal(item: item)
             }
@@ -121,19 +133,25 @@ public actor MetadataCache {
     }
 
     public func invalidateAll() {
-        try? execute("DELETE FROM items")
+        try? execute("DELETE FROM items; DELETE FROM directory_states;")
     }
 
     // MARK: - Maintenance
 
     public func pruneExpired() {
         guard let db = db else { return }
-        let sql = "DELETE FROM items WHERE expires < ?1"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        let now = Date().timeIntervalSince1970
+        guard sqlite3_prepare_v2(db, "DELETE FROM items WHERE expires < ?1", -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_double(stmt, 1, Date().timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 1, now)
         sqlite3_step(stmt)
+
+        var directoryStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM directory_states WHERE expires < ?1", -1, &directoryStmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(directoryStmt) }
+        sqlite3_bind_double(directoryStmt, 1, now)
+        sqlite3_step(directoryStmt)
     }
 
     // MARK: - Helpers
@@ -204,6 +222,46 @@ public actor MetadataCache {
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw sqliteError(db: db, message: "MetadataCache invalidateChildren failed")
         }
+
+        var directoryStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM directory_states WHERE parent = ?1", -1, &directoryStmt, nil) == SQLITE_OK else {
+            throw sqliteError(db: db, message: "MetadataCache invalidateChildren state prepare failed")
+        }
+        defer { sqlite3_finalize(directoryStmt) }
+        sqlite3_bind_text(directoryStmt, 1, parent.absoluteString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(directoryStmt) == SQLITE_DONE else {
+            throw sqliteError(db: db, message: "MetadataCache invalidateChildren state failed")
+        }
+    }
+
+    private func putDirectoryStateInternal(parent: RemotePath, isEmpty: Bool) throws {
+        guard let db = db else {
+            throw databaseUnavailableError()
+        }
+        let sql = "INSERT OR REPLACE INTO directory_states (parent, expires, is_empty) VALUES (?1, ?2, ?3)"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw sqliteError(db: db, message: "MetadataCache directory state prepare failed")
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, parent.absoluteString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970 + ttl)
+        sqlite3_bind_int(stmt, 3, isEmpty ? 1 : 0)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw sqliteError(db: db, message: "MetadataCache directory state write failed")
+        }
+    }
+
+    private func cachedEmptyDirectoryState(for parent: RemotePath, now: TimeInterval) -> Bool {
+        guard let db = db else { return false }
+        let sql = "SELECT is_empty FROM directory_states WHERE parent = ?1 AND expires > ?2"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, parent.absoluteString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_double(stmt, 2, now)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return false }
+        return sqlite3_column_int(stmt, 0) != 0
     }
 
     private func databaseUnavailableError() -> Error {

@@ -76,26 +76,18 @@ public final class FileProviderMountProvider: MountProvider {
             try fm.createDirectory(at: baseDir, withIntermediateDirectories: true)
         }
 
-        let sanitizedName = Self.sanitizeName(config.name)
-        let symlinkURL = baseDir.appendingPathComponent(sanitizedName)
+        let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
 
-        // Remove existing symlink/file at path
-        if fm.fileExists(atPath: symlinkURL.path) || (try? fm.attributesOfItem(atPath: symlinkURL.path)) != nil {
-            try? fm.removeItem(at: symlinkURL)
-        }
+        try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
 
         try fm.createSymbolicLink(at: symlinkURL, withDestinationURL: mountURL)
         return symlinkURL
     }
 
     public func removeSymlink(for config: ConnectionConfig) async throws {
-        let fm = FileManager.default
-        let sanitizedName = Self.sanitizeName(config.name)
-        let symlinkURL = Self.symlinkBaseURL.appendingPathComponent(sanitizedName)
-
-        if fm.fileExists(atPath: symlinkURL.path) || (try? fm.attributesOfItem(atPath: symlinkURL.path)) != nil {
-            try fm.removeItem(at: symlinkURL)
-        }
+        let expectedDestinationURL = (try? await mountURL(for: config)) ?? nil
+        let symlinkURL = Self.symlinkURL(for: config, baseDir: Self.symlinkBaseURL)
+        try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
     }
 
     /// Sanitize a connection name for use as a filesystem directory name.
@@ -111,6 +103,34 @@ public final class FileProviderMountProvider: MountProvider {
         }
         result = result.trimmingCharacters(in: CharacterSet(charactersIn: "-."))
         return result.isEmpty ? "unnamed" : result
+    }
+
+    private static func symlinkURL(for config: ConnectionConfig, baseDir: URL) -> URL {
+        let sanitizedName = sanitizeName(config.name)
+        let fileName = "\(sanitizedName)-\(config.id.uuidString)"
+        return baseDir.appendingPathComponent(fileName)
+    }
+
+    private func removeManagedSymlinkIfNeeded(at symlinkURL: URL, expectedDestinationURL: URL?) throws {
+        let fm = FileManager.default
+        let path = symlinkURL.path
+        guard let attributes = try? fm.attributesOfItem(atPath: path) else {
+            return
+        }
+        guard attributes[.type] as? FileAttributeType == .typeSymbolicLink else {
+            return
+        }
+        if let expectedDestinationURL {
+            let destinationPath = try fm.destinationOfSymbolicLink(atPath: path)
+            let resolvedDestinationURL = URL(
+                fileURLWithPath: destinationPath,
+                relativeTo: symlinkURL.deletingLastPathComponent()
+            ).standardizedFileURL
+            guard resolvedDestinationURL == expectedDestinationURL.standardizedFileURL else {
+                return
+            }
+        }
+        try fm.removeItem(at: symlinkURL)
     }
 
     private func findDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain? {
@@ -131,19 +151,14 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     private func refreshExistingDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain? {
-        guard try await findDomain(for: config) != nil else {
-            return nil
-        }
-        return try await refreshDomain(for: config)
+        try await findDomain(for: config)
     }
 
     private func refreshDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain {
-        guard try await findDomain(for: config) != nil else {
+        guard let existingDomain = try await findDomain(for: config) else {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
-        let updatedDomain = try makeDomain(for: config)
-        try await NSFileProviderManager.add(updatedDomain)
-        return updatedDomain
+        return existingDomain
     }
 
     private func resolveDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain {

@@ -25,9 +25,18 @@ public actor WebDAVFileSystem: RemoteFileSystem {
 
     public func connect() async throws {
         let scheme = useTLS ? "https" : "http"
-        guard let url = URL(string: "\(scheme)://\(config.host):\(config.port)\(config.remotePath)") else {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = config.host
+        components.port = Int(config.port)
+        guard let rootURL = components.url else {
             throw RemoteFileSystemError.connectionFailed("Invalid WebDAV URL")
         }
+        let url = Self.appendingPathComponents(
+            config.remotePath.split(separator: "/").map(String.init),
+            to: rootURL,
+            isDirectory: true
+        )
         self.baseURL = url
 
         let sessionConfig = URLSessionConfiguration.default
@@ -189,16 +198,31 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         guard let base = baseURL else {
             throw RemoteFileSystemError.notConnected
         }
-        if path.isRoot { return base }
-        let relative = path.components.joined(separator: "/")
-        var urlString = base.absoluteString
-        if !urlString.hasSuffix("/") { urlString += "/" }
-        urlString += relative
-        if isDirectory && !urlString.hasSuffix("/") { urlString += "/" }
-        guard let url = URL(string: urlString) else {
-            throw RemoteFileSystemError.operationFailed("Invalid URL for path: \(path)")
+        if path.isRoot {
+            return isDirectory ? Self.normalizedDirectoryURL(base) : base
         }
-        return url
+        return Self.appendingPathComponents(path.components, to: base, isDirectory: isDirectory)
+    }
+
+    private static func appendingPathComponents(
+        _ pathComponents: [String],
+        to baseURL: URL,
+        isDirectory: Bool
+    ) -> URL {
+        let url = pathComponents.reduce(baseURL) { partialURL, component in
+            partialURL.appendingPathComponent(component)
+        }
+        return isDirectory ? normalizedDirectoryURL(url) : url
+    }
+
+    private static func normalizedDirectoryURL(_ url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        if !components.percentEncodedPath.hasSuffix("/") {
+            components.percentEncodedPath += "/"
+        }
+        return components.url ?? url
     }
 
     private func propfind(url: URL, depth: String) async throws -> [WebDAVResource] {
