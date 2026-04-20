@@ -10,6 +10,9 @@ public enum AppGroupConstants {
     /// Key for storing connection configs in shared UserDefaults.
     public static let connectionsKey = "com.lollipopkit.mfuse.connections"
 
+    /// Key for marking File Provider extension onboarding as completed.
+    public static let extensionOnboardedKey = "extensionOnboarded"
+
     /// Shared container directory name for databases.
     public static let databasesDir = "Databases"
 

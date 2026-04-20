@@ -93,7 +93,8 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             }
 
             let req = try authorizedRequest(url: urlStr)
-            let (data, _) = try await session.data(for: req)
+            let (data, response) = try await session.data(for: req)
+            try checkHTTPResponse(response, path: path)
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let files = json["files"] as? [[String: Any]] ?? []
 
@@ -128,7 +129,8 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let fileID = try await resolveFileID(for: path)
         let urlStr = "\(Self.apiBase)/files/\(fileID)?fields=id,name,mimeType,size,modifiedTime,createdTime"
         let req = try authorizedRequest(url: urlStr)
-        let (data, _) = try await session.data(for: req)
+        let (data, response) = try await session.data(for: req)
+        try checkHTTPResponse(response, path: path)
         let file = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
 
         let mimeType = file["mimeType"] as? String ?? ""
@@ -318,7 +320,8 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             let urlStr = "\(Self.apiBase)/files?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)&fields=files(id,mimeType)&pageSize=2"
 
             let req = try authorizedRequest(url: urlStr)
-            let (data, _) = try await session.data(for: req)
+            let (data, response) = try await session.data(for: req)
+            try checkHTTPResponse(response, path: path)
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let files = json["files"] as? [[String: Any]] ?? []
 

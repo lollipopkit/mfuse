@@ -326,7 +326,26 @@ public actor SFTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("Failed to decode exec-based directory listing.")
         }
 
-        return try Self.decodeExecEnumerationItems(from: data, parentPath: path)
+        do {
+            return try Self.decodeExecEnumerationItems(from: data, parentPath: path)
+        } catch let error as ExecEnumerationError {
+            switch error.code {
+            case "python_not_available":
+                Self.logger.error(
+                    "Exec enumeration fallback requires python3 on the remote host for path \(remotePath, privacy: .public)"
+                )
+                throw RemoteFileSystemError.operationFailed(
+                    "Directory fallback enumeration requires python3 on the remote host."
+                )
+            default:
+                Self.logger.error(
+                    "Exec enumeration fallback failed for \(remotePath, privacy: .public): \(error.message, privacy: .public)"
+                )
+                throw RemoteFileSystemError.operationFailed(
+                    "Exec-based directory enumeration failed: \(error.message)"
+                )
+            }
+        }
     }
 
     private func shouldFallbackEnumeration(after error: Error) -> Bool {
@@ -635,48 +654,55 @@ public actor SFTPFileSystem: RemoteFileSystem {
         import stat
         import sys
 
-        path = base64.b64decode(sys.argv[1]).decode("utf-8")
-        items = []
+        try:
+            path = base64.b64decode(sys.argv[1]).decode("utf-8")
+            items = []
 
-        with os.scandir(path) as iterator:
-            for entry in iterator:
-                if entry.name in {".", ".."}:
-                    continue
+            with os.scandir(path) as iterator:
+                for entry in iterator:
+                    if entry.name in {".", ".."}:
+                        continue
 
-                info = entry.stat(follow_symlinks=False)
-                mode = info.st_mode
-                if stat.S_ISDIR(mode):
-                    item_type = "directory"
-                    target = None
-                elif stat.S_ISLNK(mode):
-                    item_type = "symlink"
-                    try:
-                        target = os.readlink(entry.path)
-                    except OSError:
+                    info = entry.stat(follow_symlinks=False)
+                    mode = info.st_mode
+                    if stat.S_ISDIR(mode):
+                        item_type = "directory"
                         target = None
-                else:
-                    item_type = "file"
-                    target = None
+                    elif stat.S_ISLNK(mode):
+                        item_type = "symlink"
+                        try:
+                            target = os.readlink(entry.path)
+                        except OSError:
+                            target = None
+                    else:
+                        item_type = "file"
+                        target = None
 
-                items.append({
-                    "name": entry.name,
-                    "type": item_type,
-                    "size": info.st_size,
-                    "mtime": info.st_mtime,
-                    "mode": stat.S_IMODE(mode),
-                    "target": target,
-                })
+                    items.append({
+                        "name": entry.name,
+                        "type": item_type,
+                        "size": info.st_size,
+                        "mtime": info.st_mtime,
+                        "mode": stat.S_IMODE(mode),
+                        "target": target,
+                    })
 
-        print(json.dumps(items, separators=(",", ":")))
+            print(json.dumps(items, separators=(",", ":")))
+        except Exception as exc:
+            print(json.dumps({"error":"exec_enumeration_failed","message":str(exc)}, separators=(",", ":")))
+            sys.exit(1)
         """
 
         let scriptBase64 = Data(script.utf8).base64EncodedString()
         let pathBase64 = Data(remotePath.utf8).base64EncodedString()
-        return #"python3 -c "import base64; exec(base64.b64decode('\#(scriptBase64)'))" "\#(pathBase64)""#
+        return #"if command -v python3 >/dev/null 2>&1; then python3 -c "import base64; exec(base64.b64decode('\#(scriptBase64)'))" "\#(pathBase64)"; else printf '%s\n' '{"error":"python_not_available","message":"python3 is required on the remote host for exec-based enumeration"}'; exit 1; fi"#
     }
 
     static func decodeExecEnumerationItems(from data: Data, parentPath: RemotePath) throws -> [RemoteItem] {
         let decoder = JSONDecoder()
+        if let execError = try? decoder.decode(ExecEnumerationError.self, from: data) {
+            throw execError
+        }
         let entries = try decoder.decode([ExecEnumerationEntry].self, from: data)
         return entries.map { entry in
             let childPath = parentPath.appending(entry.name)
@@ -710,6 +736,13 @@ private struct ExecEnumerationEntry: Decodable {
     let mtime: TimeInterval
     let mode: UInt32
     let target: String?
+}
+
+private struct ExecEnumerationError: Error, Decodable {
+    let error: String
+    let message: String
+
+    var code: String { error }
 }
 
 private enum OpenSSHECDSAPrivateKeyParser {

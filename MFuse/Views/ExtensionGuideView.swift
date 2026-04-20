@@ -139,7 +139,7 @@ struct ExtensionGuideView: View {
                 return false
             }
             _ = try await mountProvider.mountedDomains()
-            UserDefaults.standard.set(true, forKey: "extensionOnboarded")
+            UserDefaults.standard.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
             return true
         } catch {
             return false

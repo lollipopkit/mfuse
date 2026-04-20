@@ -34,10 +34,20 @@ public final class FileProviderMountProvider: MountProvider {
         do {
             try await NSFileProviderManager.add(domain)
         } catch {
+            if isExtensionNotEnabledError(error) {
+                throw MountError.extensionNotEnabled
+            }
             try Task.checkCancellation()
             try await Task.sleep(nanoseconds: 1_000_000_000)
             try Task.checkCancellation()
-            try await NSFileProviderManager.add(domain)
+            do {
+                try await NSFileProviderManager.add(domain)
+            } catch {
+                if isExtensionNotEnabledError(error) {
+                    throw MountError.extensionNotEnabled
+                }
+                throw error
+            }
         }
     }
 
@@ -163,6 +173,15 @@ public final class FileProviderMountProvider: MountProvider {
         let domainID = NSFileProviderDomainIdentifier(rawValue: config.domainIdentifier)
         let domains = try await NSFileProviderManager.domains()
         return domains.first(where: { $0.identifier == domainID })
+    }
+
+    private func isExtensionNotEnabledError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSFileProviderErrorDomain,
+           nsError.code == NSFileProviderError.Code.providerNotFound.rawValue {
+            return true
+        }
+        return MountError.matchesExtensionNotEnabledMessage(nsError.localizedDescription)
     }
 
     private func makeDomain(for config: ConnectionConfig) throws -> NSFileProviderDomain {

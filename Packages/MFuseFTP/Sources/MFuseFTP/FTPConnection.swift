@@ -116,7 +116,7 @@ final class FTPConnection: @unchecked Sendable {
             .channelInitializer { channel in
                 if self.useTLS {
                     do {
-                        let handler = try self.makeTLSHandler(serverHostname: dataHost)
+                        let handler = try self.makeTLSHandler(serverHostname: pasvHost)
                         tlsHandler = handler
                         return channel.pipeline.addHandlers([
                             handler,
@@ -371,6 +371,13 @@ final class FTPResponseHandler: ChannelInboundHandler {
     private var terminalError: Error?
     private var multilineCode: Int?
     private var multilineText = ""
+    private var context: ChannelHandlerContext?
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        lock.lock()
+        self.context = context
+        lock.unlock()
+    }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         var buffer = unwrapInboundIn(data)
@@ -417,6 +424,7 @@ final class FTPResponseHandler: ChannelInboundHandler {
 
         lock.lock()
         terminalError = error
+        pendingResponses.removeAll()
         continuations = self.continuations.map(\.continuation)
         self.continuations.removeAll()
         lock.unlock()
@@ -430,6 +438,7 @@ final class FTPResponseHandler: ChannelInboundHandler {
 
         lock.lock()
         terminalError = error
+        pendingResponses.removeAll()
         continuations = self.continuations.map(\.continuation)
         self.continuations.removeAll()
         lock.unlock()
@@ -467,16 +476,23 @@ final class FTPResponseHandler: ChannelInboundHandler {
 
     private func enqueue(_ response: FTPResponse) {
         let continuation: CheckedContinuation<FTPResponse, Error>?
+        let shouldDrop: Bool
 
         lock.lock()
-        if !self.continuations.isEmpty {
+        if terminalError != nil {
+            shouldDrop = true
+            continuation = nil
+        } else if !self.continuations.isEmpty {
+            shouldDrop = false
             continuation = self.continuations.removeFirst().continuation
         } else {
+            shouldDrop = false
             pendingResponses.append(response)
             continuation = nil
         }
         lock.unlock()
 
+        guard !shouldDrop else { return }
         continuation?.resume(returning: response)
     }
 
@@ -489,17 +505,26 @@ final class FTPResponseHandler: ChannelInboundHandler {
     }
 
     private func failContinuationIfPending(id: UUID, error: Error) {
-        let continuation: CheckedContinuation<FTPResponse, Error>?
+        let continuations: [CheckedContinuation<FTPResponse, Error>]
+        let context: ChannelHandlerContext?
 
         lock.lock()
-        if let index = continuations.firstIndex(where: { $0.id == id }) {
-            continuation = continuations.remove(at: index).continuation
+        if let index = self.continuations.firstIndex(where: { $0.id == id }) {
+            terminalError = error
+            pendingResponses.removeAll()
+            var pending = self.continuations
+            let timedOut = pending.remove(at: index)
+            continuations = [timedOut.continuation] + pending.map(\.continuation)
+            context = self.context
+            self.continuations.removeAll()
         } else {
-            continuation = nil
+            continuations = []
+            context = nil
         }
         lock.unlock()
 
-        continuation?.resume(throwing: error)
+        continuations.forEach { $0.resume(throwing: error) }
+        context?.close(promise: nil)
     }
 }
 

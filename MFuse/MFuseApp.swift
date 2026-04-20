@@ -80,10 +80,10 @@ struct MFuseApp: App {
                 .task {
                     await connectionManager.syncMounts()
                     // First-launch: check if extension is available
-                    if !UserDefaults.standard.bool(forKey: "extensionOnboarded") {
+                    if !UserDefaults.standard.bool(forKey: AppGroupConstants.extensionOnboardedKey) {
                         do {
                             _ = try await connectionManager.mountProvider?.mountedDomains()
-                            UserDefaults.standard.set(true, forKey: "extensionOnboarded")
+                            UserDefaults.standard.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
                         } catch {
                             connectionManager.needsExtensionSetup = true
                         }

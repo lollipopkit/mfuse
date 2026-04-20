@@ -121,13 +121,10 @@ public final class ConnectionManager: ObservableObject {
                     scheduleMountResolution(for: config, using: mp)
                 } catch {
                     let desc = describe(error)
-                    let errorState = ConnectionState.error(desc)
                     if isMissingFileProviderExtensionError(error) {
                         needsExtensionSetup = true
                     }
-                    states[id] = errorState
                     mountStates[id] = .error(desc)
-                    onStateChange?(config, errorState)
                 }
             }
         } catch {
@@ -278,10 +275,6 @@ public final class ConnectionManager: ObservableObject {
     ) async throws -> String {
         for attempt in 0..<Self.mountURLRetryCount {
             if let url = try await mountProvider.mountURL(for: config) {
-                guard let symlinkURL = try await mountProvider.createSymlink(for: config) else {
-                    throw MountError.mountFailed("Failed to create symlink for \(config.name)")
-                }
-                _ = symlinkURL
                 return url.path
             }
 
@@ -302,6 +295,9 @@ public final class ConnectionManager: ObservableObject {
             guard let self else { return }
             do {
                 let path = try await self.resolveMountPath(for: config, using: mountProvider)
+                guard try await mountProvider.createSymlink(for: config) != nil else {
+                    throw MountError.mountFailed("Failed to create symlink for \(config.name)")
+                }
                 if Task.isCancelled { return }
                 self.mountStates[config.id] = .mounted(path: path)
             } catch {

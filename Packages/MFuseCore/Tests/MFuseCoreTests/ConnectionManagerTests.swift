@@ -176,7 +176,7 @@ final class ConnectionManagerTests: XCTestCase {
         FileProviderMountProvider.symlinkBaseURL = testSymlinkBaseURL
 
         // Register mock backend
-        BackendRegistry.shared.register(.sftp) { config, credential in
+        BackendRegistry.shared.register(.sftp) { _, _ in
             let fs = MockFileSystem()
             MockFileSystemFactory.lastCreated = fs
             return fs
