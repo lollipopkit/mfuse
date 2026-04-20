@@ -96,7 +96,7 @@ public final class FileProviderMountProvider: MountProvider {
 
         let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
 
-        if try isSymbolicLink(at: symlinkURL) {
+        if try itemType(at: symlinkURL) == .typeSymbolicLink {
             try fm.removeItem(at: symlinkURL)
         } else {
             try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
@@ -142,18 +142,23 @@ public final class FileProviderMountProvider: MountProvider {
         baseDir.appendingPathComponent(symlinkFilename(for: config))
     }
 
-    private func isSymbolicLink(at url: URL) throws -> Bool {
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        return attributes[.type] as? FileAttributeType == .typeSymbolicLink
+    func itemType(at url: URL) throws -> FileAttributeType? {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            return attributes[.type] as? FileAttributeType
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+            return nil
+        }
     }
 
     private func removeManagedSymlinkIfNeeded(at symlinkURL: URL, expectedDestinationURL: URL?) throws {
         let fm = FileManager.default
         let path = symlinkURL.path
-        guard let attributes = try? fm.attributesOfItem(atPath: path) else {
+        guard let itemType = try itemType(at: symlinkURL) else {
             return
         }
-        guard attributes[.type] as? FileAttributeType == .typeSymbolicLink else {
+        guard itemType == .typeSymbolicLink else {
             return
         }
         if let expectedDestinationURL {
@@ -199,18 +204,19 @@ public final class FileProviderMountProvider: MountProvider {
         try await findDomain(for: config)
     }
 
-    private func refreshDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain {
-        guard let existingDomain = try await findDomain(for: config) else {
-            throw MountError.domainNotFound(config.domainIdentifier)
-        }
-        return existingDomain
-    }
-
-    private func resolveDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain {
+    private func domainOrThrow(for config: ConnectionConfig) async throws -> NSFileProviderDomain {
         guard let domain = try await findDomain(for: config) else {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
         return domain
+    }
+
+    private func refreshDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain {
+        try await domainOrThrow(for: config)
+    }
+
+    private func resolveDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain {
+        try await domainOrThrow(for: config)
     }
 
     private func persistBootstrapConfig(for config: ConnectionConfig) throws {

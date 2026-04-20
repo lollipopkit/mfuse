@@ -88,5 +88,7 @@ targets:
         ENABLE_APP_SANDBOX: true
         PRODUCT_NAME: MFuseProvider
       configs:
+        Debug:
+          ENABLE_HARDENED_RUNTIME: true
         Release:
           ENABLE_HARDENED_RUNTIME: true

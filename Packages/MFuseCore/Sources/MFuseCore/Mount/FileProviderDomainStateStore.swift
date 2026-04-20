@@ -7,17 +7,23 @@ private final class SecurityScopedAccessTracker: @unchecked Sendable {
     private let lock = NSLock()
     private var trackedPaths: [String: () -> Void] = [:]
 
-    func isTracking(_ path: String) -> Bool {
+    func trackIfNotExists(path: String, _ release: @escaping () -> Void) -> Bool {
         lock.lock()
-        let isTracking = trackedPaths[path] != nil
-        lock.unlock()
-        return isTracking
-    }
-
-    func track(path: String, _ release: @escaping () -> Void) {
-        lock.lock()
+        guard trackedPaths[path] == nil else {
+            lock.unlock()
+            return false
+        }
         trackedPaths[path] = release
         lock.unlock()
+        return true
+    }
+
+    func release(path: String) {
+        lock.lock()
+        let handler = trackedPaths.removeValue(forKey: path)
+        lock.unlock()
+
+        handler?()
     }
 
     func close() {
@@ -150,25 +156,24 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         }
         let cacheKey = url.standardizedFileURL.path
 
-        if securityScopedAccessTracker.isTracking(cacheKey) {
-            return url
-        }
-
         guard url.startAccessingSecurityScopedResource() else {
             throw RemoteFileSystemError.operationFailed(
                 "Unable to access File Provider managed directory: \(url.path)"
             )
         }
 
+        guard securityScopedAccessTracker.trackIfNotExists(path: cacheKey, {
+            url.stopAccessingSecurityScopedResource()
+        }) else {
+            url.stopAccessingSecurityScopedResource()
+            return url
+        }
+
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         } catch {
-            url.stopAccessingSecurityScopedResource()
+            securityScopedAccessTracker.release(path: cacheKey)
             throw error
-        }
-
-        securityScopedAccessTracker.track(path: cacheKey) {
-            url.stopAccessingSecurityScopedResource()
         }
         return url
     }

@@ -229,7 +229,7 @@ final class FTPConnection: @unchecked Sendable {
             UInt8((value >> 24) & 0xff),
             UInt8((value >> 16) & 0xff),
             UInt8((value >> 8) & 0xff),
-            UInt8(value & 0xff),
+            UInt8(value & 0xff)
         ]
     }
 
@@ -544,6 +544,13 @@ final class FTPDataHandler: ChannelInboundHandler {
     private var continuations: [PendingContinuation] = []
     private var completed = false
     private var terminalError: Error?
+    private var context: ChannelHandlerContext?
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        lock.lock()
+        self.context = context
+        lock.unlock()
+    }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         var buf = unwrapInboundIn(data)
@@ -624,17 +631,26 @@ final class FTPDataHandler: ChannelInboundHandler {
     }
 
     private func failContinuationIfPending(id: UUID, error: Error) {
-        let continuation: CheckedContinuation<Data, Error>?
+        let continuations: [CheckedContinuation<Data, Error>]
+        let context: ChannelHandlerContext?
 
         lock.lock()
         if let index = continuations.firstIndex(where: { $0.id == id }) {
-            continuation = continuations.remove(at: index).continuation
+            terminalError = error
+            completed = true
+            var pending = continuations
+            let timedOut = pending.remove(at: index)
+            continuations = [timedOut.continuation] + pending.map(\.continuation)
+            context = self.context
+            self.continuations.removeAll()
         } else {
-            continuation = nil
+            continuations = []
+            context = nil
         }
         lock.unlock()
 
-        continuation?.resume(throwing: error)
+        continuations.forEach { $0.resume(throwing: error) }
+        context?.close(promise: nil)
     }
 }
 
@@ -655,7 +671,7 @@ enum FTPError: Error, LocalizedError {
         case .connectionTimedOut: return "FTP connection timed out"
         case .connectionFailed(let msg): return "FTP connection failed: \(msg)"
         case .authenticationFailed: return "FTP authentication failed"
-        case .unexpectedResponse(let r): return "Unexpected FTP response \(r.code): \(r.text)"
+        case .unexpectedResponse(let response): return "Unexpected FTP response \(response.code): \(response.text)"
         case .protocolError(let msg): return "FTP protocol error: \(msg)"
         case .transferFailed(let msg): return "FTP transfer failed: \(msg)"
         }

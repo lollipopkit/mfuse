@@ -238,6 +238,16 @@ public final class ConnectionManager: ObservableObject {
                     mountStates[config.id] = .mounting
                     do {
                         try await mp.signalEnumerator(for: config)
+                        // `syncMounts()` may discover an already-mounted File Provider domain
+                        // after app relaunch. In that case the extension owns the active mount,
+                        // not this process, so we intentionally drop any stale local entry from
+                        // `fileSystems`, mark `states[config.id]` as `.disconnected`, keep the
+                        // mount alive via `mountStates[config.id] = .mounting`, and let
+                        // `scheduleMountResolution(for:using:)` refresh the mounted state after
+                        // `mp.signalEnumerator(for:)`. This is why the UI can show a disconnected
+                        // app-side connection while Finder still has an active mount, and it is
+                        // also why failures here fall back to `mp.removeSymlink(for:)` instead of
+                        // trying to recreate an in-process filesystem session.
                         fileSystems.removeValue(forKey: config.id)
                         states[config.id] = .disconnected
                         scheduleMountResolution(for: config, using: mp)

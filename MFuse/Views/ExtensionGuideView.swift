@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import MFuseCore
 
 /// Onboarding sheet guiding users to enable the File Provider extension in System Settings.
@@ -8,6 +9,7 @@ struct ExtensionGuideView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @State private var checking = false
     @State private var checkFailed = false
+    @State private var verifyTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,14 +70,23 @@ struct ExtensionGuideView: View {
                     Button {
                         checkFailed = false
                         checking = true
-                        Task {
+                        verifyTask?.cancel()
+                        verifyTask = Task {
                             try? await Task.sleep(nanoseconds: 500_000_000)
                             let ok = await verifyExtension()
-                            checking = false
+                            guard !Task.isCancelled else { return }
+                            await MainActor.run {
+                                checking = false
+                                verifyTask = nil
+                            }
                             if ok {
-                                dismiss()
+                                await MainActor.run {
+                                    dismissGuide()
+                                }
                             } else {
-                                checkFailed = true
+                                await MainActor.run {
+                                    checkFailed = true
+                                }
                             }
                         }
                     } label: {
@@ -90,16 +101,21 @@ struct ExtensionGuideView: View {
                     .disabled(checking)
 
                     Button("Later") {
-                        dismiss()
+                        dismissGuide()
                     }
                     .buttonStyle(.bordered)
                     .foregroundStyle(.secondary)
+                    .disabled(checking)
                 }
             }
             .padding(.horizontal, 40)
             .padding(.bottom, 28)
         }
         .frame(width: 440, height: 500)
+        .onDisappear {
+            verifyTask?.cancel()
+            verifyTask = nil
+        }
     }
 
     // MARK: - Subviews
@@ -133,13 +149,20 @@ struct ExtensionGuideView: View {
         }
     }
 
+    private func dismissGuide() {
+        verifyTask?.cancel()
+        verifyTask = nil
+        dismiss()
+    }
+
     private func verifyExtension() async -> Bool {
         do {
             guard let mountProvider = connectionManager.mountProvider else {
                 return false
             }
             _ = try await mountProvider.mountedDomains()
-            UserDefaults.standard.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
+            UserDefaults(suiteName: AppGroupConstants.groupIdentifier)?
+                .set(true, forKey: AppGroupConstants.extensionOnboardedKey)
             return true
         } catch {
             return false

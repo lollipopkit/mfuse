@@ -389,7 +389,12 @@ public actor SFTPFileSystem: RemoteFileSystem {
                 throw RemoteFileSystemError.operationFailed("Timed out while enumerating directory")
             }
 
-            let result = try await group.next()!
+            guard let result = try await group.next() else {
+                group.cancelAll()
+                throw RemoteFileSystemError.operationFailed(
+                    "Operation cancelled or produced no result while enumerating directory"
+                )
+            }
             group.cancelAll()
             return result
         }

@@ -1,9 +1,13 @@
 import Foundation
 import AuthenticationServices
 import CryptoKit
+import OSLog
 import Security
 #if canImport(AppKit)
 import AppKit
+#endif
+#if canImport(UIKit)
+import UIKit
 #endif
 
 /// Handles Google OAuth 2.0 authentication using ASWebAuthenticationSession.
@@ -11,6 +15,7 @@ import AppKit
 /// Requires a Google Cloud project with Drive API enabled and an OAuth 2.0 client ID
 /// configured for macOS/iOS (custom URI scheme redirect).
 public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
+    private static let logger = Logger(subsystem: "MFuseGoogleDrive", category: "GoogleOAuthProvider")
 
     private let clientID: String
     private let redirectURI: String
@@ -57,7 +62,9 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
         let codeChallenge = generateCodeChallenge(from: codeVerifier)
         let state = generateState()
 
-        var components = URLComponents(string: Self.authURL)!
+        guard var components = URLComponents(string: Self.authURL) else {
+            throw GoogleDriveError.oauthFailed("Invalid Google OAuth authorization URL")
+        }
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
@@ -70,7 +77,9 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             URLQueryItem(name: "state", value: state)
         ]
 
-        let authURL = components.url!
+        guard let authURL = components.url else {
+            throw GoogleDriveError.oauthFailed("Failed to construct Google OAuth authorization URL")
+        }
         let callbackScheme = URL(string: redirectURI)?.scheme ?? "com.lollipopkit.mfuse"
 
         let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
@@ -192,6 +201,27 @@ extension GoogleOAuthProvider: ASWebAuthenticationPresentationContextProviding {
             return window
         }
         #endif
-        ASPresentationAnchor()
+        #if canImport(UIKit)
+        let connectedSceneWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .sorted { lhs, rhs in
+                lhs.activationState == .foregroundActive && rhs.activationState != .foregroundActive
+            }
+            .lazy
+            .compactMap { scene in
+                scene.windows.first(where: \.isKeyWindow)
+                    ?? scene.windows.first(where: { !$0.isHidden })
+                    ?? scene.windows.first
+            }
+            .first
+        if let window = connectedSceneWindow
+            ?? UIApplication.shared.windows.first(where: \.isKeyWindow)
+            ?? UIApplication.shared.windows.first(where: { !$0.isHidden })
+            ?? UIApplication.shared.windows.first {
+            return window
+        }
+        #endif
+        Self.logger.error("Unable to locate a presentation anchor for ASWebAuthenticationSession")
+        preconditionFailure("No valid presentation anchor available for ASWebAuthenticationSession")
     }
 }

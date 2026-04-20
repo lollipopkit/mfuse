@@ -315,6 +315,7 @@ final class ConnectionManagerTests: XCTestCase {
         }
 
         guard let fs = MockFileSystemFactory.lastCreated else {
+            XCTFail("MockFileSystemFactory.lastCreated is nil")
             return
         }
         let paths = await fs.enumeratedPaths
@@ -383,9 +384,16 @@ final class ConnectionManagerTests: XCTestCase {
         let mountProvider = MockMountProvider()
         let orphanDomainID = UUID().uuidString
         await mountProvider.setMountedDomainIDs([config.domainIdentifier, orphanDomainID])
-        let orphanSymlinkURL = testSymlinkBaseURL.appendingPathComponent("orphan")
+        let orphanSymlinkURL = testSymlinkBaseURL.appendingPathComponent("orphan-\(UUID().uuidString)")
+        let orphanTargetURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("CloudStorage", isDirectory: true)
+            .appendingPathComponent("MFuse-Orphan", isDirectory: true)
         try? FileManager.default.createDirectory(at: testSymlinkBaseURL, withIntermediateDirectories: true)
-        _ = FileManager.default.createFile(atPath: orphanSymlinkURL.path, contents: Data())
+        try? FileManager.default.createSymbolicLink(
+            atPath: orphanSymlinkURL.path,
+            withDestinationPath: orphanTargetURL.path
+        )
         manager.mountProvider = mountProvider
         manager.staleDomainRemover = { domainID in
             await mountProvider.recordStaleDomainRemoval(domainID)

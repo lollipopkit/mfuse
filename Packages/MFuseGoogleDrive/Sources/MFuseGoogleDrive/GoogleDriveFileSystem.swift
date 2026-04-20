@@ -7,6 +7,13 @@ import MFuseCore
 /// `Credential.password` (refresh token). `config.parameters["clientID"]` and
 /// `config.parameters["redirectURI"]` configure the OAuth client.
 public actor GoogleDriveFileSystem: RemoteFileSystem {
+    private static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let isoFormatterFallback = ISO8601DateFormatter()
 
     private let config: ConnectionConfig
     private var credential: Credential
@@ -85,11 +92,19 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         var pageToken: String?
 
         repeat {
-            var urlStr = "\(Self.apiBase)/files?q='\(folderID)'+in+parents+and+trashed=false"
-            urlStr += "&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime)"
-            urlStr += "&pageSize=1000"
-            if let pt = pageToken {
-                urlStr += "&pageToken=\(pt)"
+            guard var components = URLComponents(string: "\(Self.apiBase)/files") else {
+                throw RemoteFileSystemError.operationFailed("Invalid Google Drive files endpoint")
+            }
+            components.queryItems = [
+                URLQueryItem(name: "q", value: "'\(folderID)' in parents and trashed=false"),
+                URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime)"),
+                URLQueryItem(name: "pageSize", value: "1000")
+            ]
+            if let pageToken {
+                components.queryItems?.append(URLQueryItem(name: "pageToken", value: pageToken))
+            }
+            guard let urlStr = components.url?.absoluteString else {
+                throw RemoteFileSystemError.operationFailed("Failed to construct Google Drive enumeration URL")
             }
 
             let req = try authorizedRequest(url: urlStr)
@@ -379,9 +394,8 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
 
     private func parseISO8601(_ str: String?) -> Date? {
         guard let str = str else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: str) ?? ISO8601DateFormatter().date(from: str)
+        return Self.isoFormatterWithFractionalSeconds.date(from: str)
+            ?? Self.isoFormatterFallback.date(from: str)
     }
 
     private func cacheResolvedID(_ fileID: String, for path: RemotePath) {

@@ -16,10 +16,12 @@ struct MFuseApp: App {
     @StateObject private var connectionManager: ConnectionManager
     private let mountProvider: FileProviderMountProvider
     private let storage: SharedStorage
+    private let keychain: KeychainService
 
     init() {
-        let storage = SharedStorage.withLegacyMigration()
-        let keychain = KeychainService()
+        self.storage = SharedStorage.withLegacyMigration()
+        self.keychain = KeychainService()
+        self.mountProvider = FileProviderMountProvider()
         let registry = BackendRegistry.shared
         registry.register(.sftp) { config, credential in
             SFTPFileSystem(config: config, credential: credential)
@@ -44,14 +46,12 @@ struct MFuseApp: App {
                 config: config,
                 credential: credential
             ) { updatedCredential in
-                try await keychain.store(updatedCredential, for: config.id)
+                try await self.keychain.store(updatedCredential, for: config.id)
             }
         }
-        self.storage = storage
-        self.mountProvider = FileProviderMountProvider()
         let manager = ConnectionManager(
-            storage: storage,
-            credentialProvider: keychain,
+            storage: self.storage,
+            credentialProvider: self.keychain,
             registry: registry
         )
         manager.mountProvider = self.mountProvider
@@ -75,15 +75,16 @@ struct MFuseApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(connectionManager)
-                .environment(\.keychainService, KeychainService())
+                .environment(\.keychainService, keychain)
                 .frame(minWidth: 700, minHeight: 450)
                 .task {
                     await connectionManager.syncMounts()
                     // First-launch: check if extension is available
-                    if !UserDefaults.standard.bool(forKey: AppGroupConstants.extensionOnboardedKey) {
+                    let sharedDefaults = UserDefaults(suiteName: AppGroupConstants.groupIdentifier)
+                    if !(sharedDefaults?.bool(forKey: AppGroupConstants.extensionOnboardedKey) ?? false) {
                         do {
                             _ = try await connectionManager.mountProvider?.mountedDomains()
-                            UserDefaults.standard.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
+                            sharedDefaults?.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
                         } catch {
                             connectionManager.needsExtensionSetup = true
                         }
