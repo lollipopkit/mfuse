@@ -1,0 +1,155 @@
+import Foundation
+import AuthenticationServices
+import CryptoKit
+
+/// Handles Google OAuth 2.0 authentication using ASWebAuthenticationSession.
+///
+/// Requires a Google Cloud project with Drive API enabled and an OAuth 2.0 client ID
+/// configured for macOS/iOS (custom URI scheme redirect).
+public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
+
+    private let clientID: String
+    private let redirectURI: String
+    private let scopes: [String]
+
+    private static let authURL = "https://accounts.google.com/o/oauth2/v2/auth"
+    private static let tokenURL = "https://oauth2.googleapis.com/token"
+
+    public struct TokenResponse: Codable, Sendable {
+        public let accessToken: String
+        public let refreshToken: String?
+        public let expiresIn: Int
+        public let tokenType: String
+
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
+            case tokenType = "token_type"
+        }
+    }
+
+    public init(clientID: String, redirectURI: String, scopes: [String] = ["https://www.googleapis.com/auth/drive"]) {
+        self.clientID = clientID
+        self.redirectURI = redirectURI
+        self.scopes = scopes
+    }
+
+    /// Perform the OAuth authorization code flow.
+    @MainActor
+    public func authorize() async throws -> TokenResponse {
+        let codeVerifier = generateCodeVerifier()
+        let codeChallenge = generateCodeChallenge(from: codeVerifier)
+
+        var components = URLComponents(string: Self.authURL)!
+        components.queryItems = [
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
+            URLQueryItem(name: "code_challenge", value: codeChallenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "access_type", value: "offline"),
+            URLQueryItem(name: "prompt", value: "consent"),
+        ]
+
+        let authURL = components.url!
+        let callbackScheme = URL(string: redirectURI)?.scheme ?? "com.lollipopkit.mfuse"
+
+        let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: callbackScheme) { url, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if let url = url {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(throwing: GoogleDriveError.oauthFailed("No callback URL"))
+                }
+            }
+            session.prefersEphemeralWebBrowserSession = false
+            session.presentationContextProvider = self
+            session.start()
+        }
+
+        guard let code = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "code" })?.value else {
+            throw GoogleDriveError.oauthFailed("No authorization code in callback")
+        }
+
+        return try await exchangeCode(code, codeVerifier: codeVerifier)
+    }
+
+    /// Refresh an access token using a refresh token.
+    public func refresh(refreshToken: String) async throws -> TokenResponse {
+        var request = URLRequest(url: URL(string: Self.tokenURL)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        request.httpBody = formEncodedBody([
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "refresh_token", value: refreshToken),
+            URLQueryItem(name: "grant_type", value: "refresh_token"),
+        ])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw GoogleDriveError.oauthFailed("Token refresh failed")
+        }
+        return try JSONDecoder().decode(TokenResponse.self, from: data)
+    }
+
+    // MARK: - Private
+
+    private func exchangeCode(_ code: String, codeVerifier: String) async throws -> TokenResponse {
+        var request = URLRequest(url: URL(string: Self.tokenURL)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        request.httpBody = formEncodedBody([
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "code_verifier", value: codeVerifier),
+            URLQueryItem(name: "grant_type", value: "authorization_code"),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+        ])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw GoogleDriveError.oauthFailed("Token exchange failed")
+        }
+        return try JSONDecoder().decode(TokenResponse.self, from: data)
+    }
+
+    private func formEncodedBody(_ items: [URLQueryItem]) -> Data? {
+        var components = URLComponents()
+        components.queryItems = items
+        return components.percentEncodedQuery?.data(using: .utf8)
+    }
+
+    private func generateCodeVerifier() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func generateCodeChallenge(from verifier: String) -> String {
+        let data = Data(verifier.utf8)
+        let hash = SHA256.hash(data: data)
+        return Data(hash).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+extension GoogleOAuthProvider: ASWebAuthenticationPresentationContextProviding {
+    public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        ASPresentationAnchor()
+    }
+}
+
+// CommonCrypto bridge for SHA-256
+import CommonCrypto

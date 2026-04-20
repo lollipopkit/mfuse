@@ -167,10 +167,6 @@ Current test coverage is centered on Swift packages, especially:
 
 Some backend tests are placeholders or integration-oriented, so protocol coverage is not uniform yet.
 
-## ADRs
-
-- [ADR 0001: Diagnose empty File Provider mounts caused by missing domain config](docs/adr/0001-file-provider-empty-mount-diagnosis.md)
-
 ## License
 
 MFuse is licensed under the GNU Affero General Public License v3.0. See [LICENSE](LICENSE).

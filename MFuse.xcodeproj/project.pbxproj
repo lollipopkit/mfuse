@@ -1,0 +1,713 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		057CCCDC34587DE7A6DA3BA2 /* MFuseNFS in Frameworks */ = {isa = PBXBuildFile; productRef = 8BB648353E4FB4F8BBCB1D34 /* MFuseNFS */; };
+		1E57605C6F274529C11F2FAB /* ConnectionEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F325A94183E879E246E11EF7 /* ConnectionEditorSheet.swift */; };
+		23B5C506FA1032762E08B1D7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6D469675C816DBCC437E6D3C /* Assets.xcassets */; };
+		288B5C71F50BB54A34945292 /* ExtensionGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3446371281C234280B5B96A /* ExtensionGuideView.swift */; };
+		37EAB967C896833E6A7AB1B3 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00ED8446756C9B7AFE998232 /* SidebarView.swift */; };
+		3EB5D25B2551950935CCE632 /* ConnectionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80FB28F68E317EE6BA879641 /* ConnectionDetailView.swift */; };
+		53FBF490071DA03D7A708FD9 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B6A66F07E216C1AFA6FBC86 /* NotificationService.swift */; };
+		548C89BDEE34776B2429A993 /* MFuseS3 in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1191152DD54BE2F500F52F /* MFuseS3 */; };
+		65D4F146E69F51400229DD28 /* FileProvider.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 38A93FDCB4A831E494F223A9 /* FileProvider.framework */; };
+		6E2ADD8447C2E0F96F71DE13 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618EE0B5F204273106B71B31 /* ContentView.swift */; };
+		72A115D9CCD7002E3176B222 /* MFuseCore in Frameworks */ = {isa = PBXBuildFile; productRef = C7BD1586AC9E7DC89E58B6D8 /* MFuseCore */; };
+		7C7BCD42BB471A66399444AC /* DomainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 641045C86137A217F117D301 /* DomainManager.swift */; };
+		7D24C4338D8350B1380FA05E /* MFuseFTP in Frameworks */ = {isa = PBXBuildFile; productRef = 5F7981F6ECF44B6960C2B77E /* MFuseFTP */; };
+		830B55EB95399687FCBC1E8B /* MFuseSFTP in Frameworks */ = {isa = PBXBuildFile; productRef = 0C98C71A044DE9403E8476B6 /* MFuseSFTP */; };
+		87A0E9130A219F7A10866C26 /* MFuseS3 in Frameworks */ = {isa = PBXBuildFile; productRef = 341051C01A89D8EAD5829776 /* MFuseS3 */; };
+		8F713A9460DCCDC5B4143EF1 /* MFuseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1FF7DC0DBEBCEF62D05A4D8 /* MFuseApp.swift */; };
+		9280FFEC860158072EC49B64 /* MFuseGoogleDrive in Frameworks */ = {isa = PBXBuildFile; productRef = 01BE4CF29ADF4AC95EB94419 /* MFuseGoogleDrive */; };
+		9E9D0A54CD7DE9B2480875AD /* MFuseNFS in Frameworks */ = {isa = PBXBuildFile; productRef = 228EBBF46EDE11E9FDAAD28F /* MFuseNFS */; };
+		A4EF6B8BD2BC0595EC43850B /* MFuseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1633EC474157C61E42AD0085 /* MFuseCore */; };
+		AA0A01F7AC49EDF70CC2E79E /* MFuseSMB in Frameworks */ = {isa = PBXBuildFile; productRef = 9515A704745A0275857BD362 /* MFuseSMB */; };
+		C3E85C9BBB2A1F19947616F7 /* MFuseWebDAV in Frameworks */ = {isa = PBXBuildFile; productRef = 7A62698BCF3B4D0223117E6F /* MFuseWebDAV */; };
+		D228814418A49475ABD69D38 /* MFuseWebDAV in Frameworks */ = {isa = PBXBuildFile; productRef = 157057A478FF3A07A1D6B417 /* MFuseWebDAV */; };
+		D5F7D895164FBF41288357A5 /* FileProviderExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FEDD6AFA9D8D60CEB649D77 /* FileProviderExtension.swift */; };
+		D8F8B4F372CC82CD84EF8996 /* FileProviderItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9855778E3C9B88C480BD7BAD /* FileProviderItem.swift */; };
+		D96D5FD7A76068C0C17A9DD7 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C04BE2D19058E0F090206AC /* MenuBarView.swift */; };
+		DC00A9D9FBB1427A24E9D2A7 /* MFuseGoogleDrive in Frameworks */ = {isa = PBXBuildFile; productRef = ED0CE0B47675506BCC8A7362 /* MFuseGoogleDrive */; };
+		E73EA41A3A19FAB84B39445A /* MFuseSFTP in Frameworks */ = {isa = PBXBuildFile; productRef = 77D7B1A5EE87CA1CD94E9E15 /* MFuseSFTP */; };
+		ECBAE427A6E52D9C15654D8C /* MFuseFTP in Frameworks */ = {isa = PBXBuildFile; productRef = CD40DE46231CF253A97E3097 /* MFuseFTP */; };
+		ECE8CF36C3E8D76556B8DEFA /* FileProviderEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282F68648AF3DFD0973FA2B2 /* FileProviderEnumerator.swift */; };
+		EEF00C74310698324C00269F /* MFuseProvider.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = EAB2F5EFB482FEEC4A83D05C /* MFuseProvider.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FECD4059EB1AA1966202D2DD /* MFuseSMB in Frameworks */ = {isa = PBXBuildFile; productRef = 0BA856AE22E92DFE17033D1E /* MFuseSMB */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0AD25D1094B888BFBE84568F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1EC6ECA9428EB478CEAFB914 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FF4E55291BBE20322BDEA53B;
+			remoteInfo = MFuseProvider;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A4F7BCAE199CCFA0121272E6 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				EEF00C74310698324C00269F /* MFuseProvider.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		00ED8446756C9B7AFE998232 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		05CEB8BCBB0786462FD52D96 /* MFuseSFTP */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseSFTP; path = Packages/MFuseSFTP; sourceTree = SOURCE_ROOT; };
+		0FEDD6AFA9D8D60CEB649D77 /* FileProviderExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderExtension.swift; sourceTree = "<group>"; };
+		282F68648AF3DFD0973FA2B2 /* FileProviderEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderEnumerator.swift; sourceTree = "<group>"; };
+		38A93FDCB4A831E494F223A9 /* FileProvider.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = FileProvider.framework; path = System/Library/Frameworks/FileProvider.framework; sourceTree = SDKROOT; };
+		3B236DA03790F7A3CAC3D450 /* MFuseS3 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseS3; path = Packages/MFuseS3; sourceTree = SOURCE_ROOT; };
+		3B6A66F07E216C1AFA6FBC86 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		46A5BE9765F78698F83FEC3B /* MFuseFTP */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseFTP; path = Packages/MFuseFTP; sourceTree = SOURCE_ROOT; };
+		618EE0B5F204273106B71B31 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		641045C86137A217F117D301 /* DomainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainManager.swift; sourceTree = "<group>"; };
+		6CF315B1128E115CED41591F /* MFuseWebDAV */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseWebDAV; path = Packages/MFuseWebDAV; sourceTree = SOURCE_ROOT; };
+		6D469675C816DBCC437E6D3C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7A58973432AF511AD634C0AE /* MFuseSMB */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseSMB; path = Packages/MFuseSMB; sourceTree = SOURCE_ROOT; };
+		7C655C3F57148E2ED25B7A8E /* MFuse.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MFuse.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E0A5DEBF20F84F9B2AB9423 /* MFuseNFS */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseNFS; path = Packages/MFuseNFS; sourceTree = SOURCE_ROOT; };
+		80FB28F68E317EE6BA879641 /* ConnectionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionDetailView.swift; sourceTree = "<group>"; };
+		979E804BD93582C819EC72E2 /* MFuseGoogleDrive */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseGoogleDrive; path = Packages/MFuseGoogleDrive; sourceTree = SOURCE_ROOT; };
+		9855778E3C9B88C480BD7BAD /* FileProviderItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderItem.swift; sourceTree = "<group>"; };
+		9C04BE2D19058E0F090206AC /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		A1FF7DC0DBEBCEF62D05A4D8 /* MFuseApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MFuseApp.swift; sourceTree = "<group>"; };
+		B64BE0FF0049FC47D89DBE6E /* MFuse.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MFuse.entitlements; sourceTree = "<group>"; };
+		B8450D10A58493639E045F51 /* MFuseCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseCore; path = Packages/MFuseCore; sourceTree = SOURCE_ROOT; };
+		CF049908CAFD8A56B509E6E5 /* MFuseProvider.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MFuseProvider.entitlements; sourceTree = "<group>"; };
+		D1290DD7A47C057E88E6C301 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E1754DA5C23B4FE7129F971E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E3446371281C234280B5B96A /* ExtensionGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionGuideView.swift; sourceTree = "<group>"; };
+		EAB2F5EFB482FEEC4A83D05C /* MFuseProvider.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MFuseProvider.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		F325A94183E879E246E11EF7 /* ConnectionEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionEditorSheet.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1A615CD630A4FEDFB04B02C3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				72A115D9CCD7002E3176B222 /* MFuseCore in Frameworks */,
+				E73EA41A3A19FAB84B39445A /* MFuseSFTP in Frameworks */,
+				87A0E9130A219F7A10866C26 /* MFuseS3 in Frameworks */,
+				D228814418A49475ABD69D38 /* MFuseWebDAV in Frameworks */,
+				AA0A01F7AC49EDF70CC2E79E /* MFuseSMB in Frameworks */,
+				7D24C4338D8350B1380FA05E /* MFuseFTP in Frameworks */,
+				057CCCDC34587DE7A6DA3BA2 /* MFuseNFS in Frameworks */,
+				DC00A9D9FBB1427A24E9D2A7 /* MFuseGoogleDrive in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6C0882F1BFF82C5D61D76B3A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A4EF6B8BD2BC0595EC43850B /* MFuseCore in Frameworks */,
+				830B55EB95399687FCBC1E8B /* MFuseSFTP in Frameworks */,
+				548C89BDEE34776B2429A993 /* MFuseS3 in Frameworks */,
+				C3E85C9BBB2A1F19947616F7 /* MFuseWebDAV in Frameworks */,
+				FECD4059EB1AA1966202D2DD /* MFuseSMB in Frameworks */,
+				ECBAE427A6E52D9C15654D8C /* MFuseFTP in Frameworks */,
+				9E9D0A54CD7DE9B2480875AD /* MFuseNFS in Frameworks */,
+				9280FFEC860158072EC49B64 /* MFuseGoogleDrive in Frameworks */,
+				65D4F146E69F51400229DD28 /* FileProvider.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1671D220441865863D941CC7 /* MFuse */ = {
+			isa = PBXGroup;
+			children = (
+				82D2927A0E2F4529D56E951D /* Services */,
+				C486B216D5FF00FEF00B9D90 /* Views */,
+				6D469675C816DBCC437E6D3C /* Assets.xcassets */,
+				D1290DD7A47C057E88E6C301 /* Info.plist */,
+				B64BE0FF0049FC47D89DBE6E /* MFuse.entitlements */,
+				A1FF7DC0DBEBCEF62D05A4D8 /* MFuseApp.swift */,
+			);
+			path = MFuse;
+			sourceTree = "<group>";
+		};
+		1C60BAF33122A40A5F1A7B1E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7C655C3F57148E2ED25B7A8E /* MFuse.app */,
+				EAB2F5EFB482FEEC4A83D05C /* MFuseProvider.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		32CC9154965446F3261CF47E /* MFuseProvider */ = {
+			isa = PBXGroup;
+			children = (
+				282F68648AF3DFD0973FA2B2 /* FileProviderEnumerator.swift */,
+				0FEDD6AFA9D8D60CEB649D77 /* FileProviderExtension.swift */,
+				9855778E3C9B88C480BD7BAD /* FileProviderItem.swift */,
+				E1754DA5C23B4FE7129F971E /* Info.plist */,
+				CF049908CAFD8A56B509E6E5 /* MFuseProvider.entitlements */,
+			);
+			path = MFuseProvider;
+			sourceTree = "<group>";
+		};
+		50CE3BE3ACBE460F84869ADD /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				38A93FDCB4A831E494F223A9 /* FileProvider.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		53979D0785425422678DD110 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				B8450D10A58493639E045F51 /* MFuseCore */,
+				46A5BE9765F78698F83FEC3B /* MFuseFTP */,
+				979E804BD93582C819EC72E2 /* MFuseGoogleDrive */,
+				7E0A5DEBF20F84F9B2AB9423 /* MFuseNFS */,
+				3B236DA03790F7A3CAC3D450 /* MFuseS3 */,
+				05CEB8BCBB0786462FD52D96 /* MFuseSFTP */,
+				7A58973432AF511AD634C0AE /* MFuseSMB */,
+				6CF315B1128E115CED41591F /* MFuseWebDAV */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		7572D1A379BA1B1A3F4B7775 = {
+			isa = PBXGroup;
+			children = (
+				1671D220441865863D941CC7 /* MFuse */,
+				32CC9154965446F3261CF47E /* MFuseProvider */,
+				53979D0785425422678DD110 /* Packages */,
+				50CE3BE3ACBE460F84869ADD /* Frameworks */,
+				1C60BAF33122A40A5F1A7B1E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		82D2927A0E2F4529D56E951D /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				641045C86137A217F117D301 /* DomainManager.swift */,
+				3B6A66F07E216C1AFA6FBC86 /* NotificationService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		C486B216D5FF00FEF00B9D90 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				80FB28F68E317EE6BA879641 /* ConnectionDetailView.swift */,
+				F325A94183E879E246E11EF7 /* ConnectionEditorSheet.swift */,
+				618EE0B5F204273106B71B31 /* ContentView.swift */,
+				E3446371281C234280B5B96A /* ExtensionGuideView.swift */,
+				9C04BE2D19058E0F090206AC /* MenuBarView.swift */,
+				00ED8446756C9B7AFE998232 /* SidebarView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2EB997A163CA927AB9D3327B /* MFuse */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 28067098A401FDDBF8ABB17E /* Build configuration list for PBXNativeTarget "MFuse" */;
+			buildPhases = (
+				67D6288D95EE9D48BF033560 /* Sources */,
+				7E01445CEBC3A35043C90521 /* Resources */,
+				1A615CD630A4FEDFB04B02C3 /* Frameworks */,
+				A4F7BCAE199CCFA0121272E6 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C90F8782F73B71CB9AA74663 /* PBXTargetDependency */,
+			);
+			name = MFuse;
+			packageProductDependencies = (
+				C7BD1586AC9E7DC89E58B6D8 /* MFuseCore */,
+				77D7B1A5EE87CA1CD94E9E15 /* MFuseSFTP */,
+				341051C01A89D8EAD5829776 /* MFuseS3 */,
+				157057A478FF3A07A1D6B417 /* MFuseWebDAV */,
+				9515A704745A0275857BD362 /* MFuseSMB */,
+				5F7981F6ECF44B6960C2B77E /* MFuseFTP */,
+				8BB648353E4FB4F8BBCB1D34 /* MFuseNFS */,
+				ED0CE0B47675506BCC8A7362 /* MFuseGoogleDrive */,
+			);
+			productName = MFuse;
+			productReference = 7C655C3F57148E2ED25B7A8E /* MFuse.app */;
+			productType = "com.apple.product-type.application";
+		};
+		FF4E55291BBE20322BDEA53B /* MFuseProvider */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD0B175BB66E8F1DF4792FF4 /* Build configuration list for PBXNativeTarget "MFuseProvider" */;
+			buildPhases = (
+				45BC360039E3D0B786125AE5 /* Sources */,
+				6C0882F1BFF82C5D61D76B3A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MFuseProvider;
+			packageProductDependencies = (
+				1633EC474157C61E42AD0085 /* MFuseCore */,
+				0C98C71A044DE9403E8476B6 /* MFuseSFTP */,
+				9B1191152DD54BE2F500F52F /* MFuseS3 */,
+				7A62698BCF3B4D0223117E6F /* MFuseWebDAV */,
+				0BA856AE22E92DFE17033D1E /* MFuseSMB */,
+				CD40DE46231CF253A97E3097 /* MFuseFTP */,
+				228EBBF46EDE11E9FDAAD28F /* MFuseNFS */,
+				01BE4CF29ADF4AC95EB94419 /* MFuseGoogleDrive */,
+			);
+			productName = MFuseProvider;
+			productReference = EAB2F5EFB482FEEC4A83D05C /* MFuseProvider.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1EC6ECA9428EB478CEAFB914 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					2EB997A163CA927AB9D3327B = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					FF4E55291BBE20322BDEA53B = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 4D77E39556956050D05F98A6 /* Build configuration list for PBXProject "MFuse" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 7572D1A379BA1B1A3F4B7775;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				98734DE114F2A469269FA2FA /* XCLocalSwiftPackageReference "Packages/MFuseCore" */,
+				2D941051A877B937F3F5BD74 /* XCLocalSwiftPackageReference "Packages/MFuseFTP" */,
+				0600921366C1500A25C8A6EB /* XCLocalSwiftPackageReference "Packages/MFuseGoogleDrive" */,
+				A7A423F61F055C54836B24E9 /* XCLocalSwiftPackageReference "Packages/MFuseNFS" */,
+				DC9389FE68F25404D5107A47 /* XCLocalSwiftPackageReference "Packages/MFuseS3" */,
+				1FC1509B83D57A659256B5DD /* XCLocalSwiftPackageReference "Packages/MFuseSFTP" */,
+				3D308A1C371163F414FD9C45 /* XCLocalSwiftPackageReference "Packages/MFuseSMB" */,
+				BB2342C996AB0252A1EF04D1 /* XCLocalSwiftPackageReference "Packages/MFuseWebDAV" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 1C60BAF33122A40A5F1A7B1E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				2EB997A163CA927AB9D3327B /* MFuse */,
+				FF4E55291BBE20322BDEA53B /* MFuseProvider */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7E01445CEBC3A35043C90521 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				23B5C506FA1032762E08B1D7 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		45BC360039E3D0B786125AE5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ECE8CF36C3E8D76556B8DEFA /* FileProviderEnumerator.swift in Sources */,
+				D5F7D895164FBF41288357A5 /* FileProviderExtension.swift in Sources */,
+				D8F8B4F372CC82CD84EF8996 /* FileProviderItem.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		67D6288D95EE9D48BF033560 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3EB5D25B2551950935CCE632 /* ConnectionDetailView.swift in Sources */,
+				1E57605C6F274529C11F2FAB /* ConnectionEditorSheet.swift in Sources */,
+				6E2ADD8447C2E0F96F71DE13 /* ContentView.swift in Sources */,
+				7C7BCD42BB471A66399444AC /* DomainManager.swift in Sources */,
+				288B5C71F50BB54A34945292 /* ExtensionGuideView.swift in Sources */,
+				8F713A9460DCCDC5B4143EF1 /* MFuseApp.swift in Sources */,
+				D96D5FD7A76068C0C17A9DD7 /* MenuBarView.swift in Sources */,
+				53FBF490071DA03D7A708FD9 /* NotificationService.swift in Sources */,
+				37EAB967C896833E6A7AB1B3 /* SidebarView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C90F8782F73B71CB9AA74663 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FF4E55291BBE20322BDEA53B /* MFuseProvider */;
+			targetProxy = 0AD25D1094B888BFBE84568F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4E67D959EB67000F060C356D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MFuseProvider/MFuseProvider.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = MFuseProvider/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse.provider;
+				PRODUCT_NAME = MFuseProvider;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		90529F61CE0B838E92571371 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		A2065B57476E8668C12C73FE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = MFuse/MFuse.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = MFuse/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse;
+				PRODUCT_NAME = MFuse;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		A6BAC37F6FE02BD5B8C56CD3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MFuseProvider/MFuseProvider.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				INFOPLIST_FILE = MFuseProvider/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse.provider;
+				PRODUCT_NAME = MFuseProvider;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		C90E1031CB391F71614F7B42 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		EAB90A684EE8600C8D858615 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = MFuse/MFuse.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				INFOPLIST_FILE = MFuse/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse;
+				PRODUCT_NAME = MFuse;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		28067098A401FDDBF8ABB17E /* Build configuration list for PBXNativeTarget "MFuse" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EAB90A684EE8600C8D858615 /* Debug */,
+				A2065B57476E8668C12C73FE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4D77E39556956050D05F98A6 /* Build configuration list for PBXProject "MFuse" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C90E1031CB391F71614F7B42 /* Debug */,
+				90529F61CE0B838E92571371 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AD0B175BB66E8F1DF4792FF4 /* Build configuration list for PBXNativeTarget "MFuseProvider" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A6BAC37F6FE02BD5B8C56CD3 /* Debug */,
+				4E67D959EB67000F060C356D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		0600921366C1500A25C8A6EB /* XCLocalSwiftPackageReference "Packages/MFuseGoogleDrive" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseGoogleDrive;
+		};
+		1FC1509B83D57A659256B5DD /* XCLocalSwiftPackageReference "Packages/MFuseSFTP" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseSFTP;
+		};
+		2D941051A877B937F3F5BD74 /* XCLocalSwiftPackageReference "Packages/MFuseFTP" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseFTP;
+		};
+		3D308A1C371163F414FD9C45 /* XCLocalSwiftPackageReference "Packages/MFuseSMB" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseSMB;
+		};
+		98734DE114F2A469269FA2FA /* XCLocalSwiftPackageReference "Packages/MFuseCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseCore;
+		};
+		A7A423F61F055C54836B24E9 /* XCLocalSwiftPackageReference "Packages/MFuseNFS" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseNFS;
+		};
+		BB2342C996AB0252A1EF04D1 /* XCLocalSwiftPackageReference "Packages/MFuseWebDAV" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseWebDAV;
+		};
+		DC9389FE68F25404D5107A47 /* XCLocalSwiftPackageReference "Packages/MFuseS3" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MFuseS3;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		01BE4CF29ADF4AC95EB94419 /* MFuseGoogleDrive */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseGoogleDrive;
+		};
+		0BA856AE22E92DFE17033D1E /* MFuseSMB */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseSMB;
+		};
+		0C98C71A044DE9403E8476B6 /* MFuseSFTP */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseSFTP;
+		};
+		157057A478FF3A07A1D6B417 /* MFuseWebDAV */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseWebDAV;
+		};
+		1633EC474157C61E42AD0085 /* MFuseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseCore;
+		};
+		228EBBF46EDE11E9FDAAD28F /* MFuseNFS */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseNFS;
+		};
+		341051C01A89D8EAD5829776 /* MFuseS3 */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseS3;
+		};
+		5F7981F6ECF44B6960C2B77E /* MFuseFTP */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseFTP;
+		};
+		77D7B1A5EE87CA1CD94E9E15 /* MFuseSFTP */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseSFTP;
+		};
+		7A62698BCF3B4D0223117E6F /* MFuseWebDAV */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseWebDAV;
+		};
+		8BB648353E4FB4F8BBCB1D34 /* MFuseNFS */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseNFS;
+		};
+		9515A704745A0275857BD362 /* MFuseSMB */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseSMB;
+		};
+		9B1191152DD54BE2F500F52F /* MFuseS3 */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseS3;
+		};
+		C7BD1586AC9E7DC89E58B6D8 /* MFuseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseCore;
+		};
+		CD40DE46231CF253A97E3097 /* MFuseFTP */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseFTP;
+		};
+		ED0CE0B47675506BCC8A7362 /* MFuseGoogleDrive */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MFuseGoogleDrive;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 1EC6ECA9428EB478CEAFB914 /* Project object */;
+}

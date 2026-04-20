@@ -1,0 +1,324 @@
+import Foundation
+#if canImport(FileProvider)
+import FileProvider
+#endif
+
+/// Manages the lifecycle of remote filesystem connections.
+/// Used by the main app to create, connect, disconnect, and track connections.
+@MainActor
+public final class ConnectionManager: ObservableObject {
+
+    @Published public private(set) var connections: [ConnectionConfig] = []
+    @Published public private(set) var states: [UUID: ConnectionState] = [:]
+    @Published public private(set) var mountStates: [UUID: MountState] = [:]
+    @Published public var needsExtensionSetup = false
+
+    private let storage: SharedStorage
+    private let credentialProvider: CredentialProvider
+    private let registry: BackendRegistry
+    private var fileSystems: [UUID: any RemoteFileSystem] = [:]
+    private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
+    private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
+    var staleDomainRemover: ((String) async throws -> Void)?
+
+    /// Optional mount provider – when set, connect() auto-mounts and disconnect() auto-unmounts.
+    public var mountProvider: (any MountProvider)?
+
+    /// Optional callback for state change notifications (connect/disconnect/error).
+    public var onStateChange: ((ConnectionConfig, ConnectionState) -> Void)?
+
+    private static let maxRetries = 5
+    private static let baseDelay: UInt64 = 1_000_000_000 // 1 second in nanoseconds
+    private static let mountURLRetryCount = 20
+    private static let mountURLRetryDelay: UInt64 = 500_000_000 // 500 ms in nanoseconds
+
+    public init(
+        storage: SharedStorage,
+        credentialProvider: CredentialProvider,
+        registry: BackendRegistry = .shared
+    ) {
+        self.storage = storage
+        self.credentialProvider = credentialProvider
+        self.registry = registry
+        self.connections = storage.loadConnections()
+    }
+
+    // MARK: - CRUD
+
+    public func add(_ config: ConnectionConfig) {
+        connections.append(config)
+        states[config.id] = .disconnected
+        storage.saveConnections(connections)
+    }
+
+    public func update(_ config: ConnectionConfig) {
+        if let idx = connections.firstIndex(where: { $0.id == config.id }) {
+            connections[idx] = config
+            storage.saveConnections(connections)
+        }
+    }
+
+    public func remove(_ config: ConnectionConfig) async {
+        if states[config.id]?.isConnected == true {
+            await disconnect(config.id)
+        }
+        connections.removeAll { $0.id == config.id }
+        states.removeValue(forKey: config.id)
+        fileSystems.removeValue(forKey: config.id)
+        storage.saveConnections(connections)
+        try? await credentialProvider.delete(for: config.id)
+    }
+
+    // MARK: - Connection lifecycle
+
+    public func connect(_ id: UUID) async {
+        guard let config = connections.first(where: { $0.id == id }) else { return }
+        states[id] = .connecting
+
+        do {
+            let credential = try await credentialProvider.credential(for: id) ?? Credential()
+            guard let fs = registry.createFileSystem(config: config, credential: credential) else {
+                states[id] = .error("Unsupported backend: \(config.backendType.displayName)")
+                return
+            }
+            try await fs.connect()
+            fileSystems[id] = fs
+            states[id] = .connected
+            onStateChange?(config, .connected)
+
+            // Auto-mount if mount provider is set
+            if let mp = mountProvider {
+                mountStates[id] = .mounting
+                do {
+                    try await mp.mount(config: config)
+                    try? await mp.signalEnumerator(for: config)
+                    scheduleMountResolution(for: config, using: mp)
+                } catch {
+                    let desc = describe(error)
+                    if isMissingFileProviderExtensionError(error) {
+                        needsExtensionSetup = true
+                    }
+                    mountStates[id] = .error(desc)
+                }
+            }
+        } catch {
+            let errorState = ConnectionState.error(describe(error))
+            states[id] = errorState
+            onStateChange?(config, errorState)
+        }
+    }
+
+    public func disconnect(_ id: UUID) async {
+        reconnectTasks[id]?.cancel()
+        reconnectTasks.removeValue(forKey: id)
+        mountResolutionTasks[id]?.cancel()
+        mountResolutionTasks.removeValue(forKey: id)
+
+        // Auto-unmount if mount provider is set
+        if let config = connections.first(where: { $0.id == id }), let mp = mountProvider {
+            try? await mp.removeSymlink(for: config)
+            try? await mp.unmount(config: config)
+            mountStates[id] = .unmounted
+        }
+
+        if let fs = fileSystems[id] {
+            try? await fs.disconnect()
+        }
+        fileSystems.removeValue(forKey: id)
+        states[id] = .disconnected
+        if let config = connections.first(where: { $0.id == id }) {
+            onStateChange?(config, .disconnected)
+        }
+    }
+
+    /// Disconnect and unmount all known connections before terminating the app.
+    public func shutdown() async {
+        for task in reconnectTasks.values {
+            task.cancel()
+        }
+        reconnectTasks.removeAll()
+        for task in mountResolutionTasks.values {
+            task.cancel()
+        }
+        mountResolutionTasks.removeAll()
+
+        for config in connections where states[config.id]?.isConnected == true || mountState(for: config.id).isMounted {
+            await disconnect(config.id)
+        }
+    }
+
+    /// Attempt to reconnect with exponential backoff.
+    public func reconnect(_ id: UUID) {
+        reconnectTasks[id]?.cancel()
+        reconnectTasks[id] = Task { [weak self] in
+            guard let self else { return }
+            for attempt in 0..<Self.maxRetries {
+                let delay = Self.baseDelay * UInt64(1 << min(attempt, 4)) // 1s, 2s, 4s, 8s, 16s
+                try? await Task.sleep(nanoseconds: delay)
+                if Task.isCancelled { return }
+                await self.connect(id)
+                if self.states[id]?.isConnected == true { return }
+            }
+        }
+    }
+
+    public func fileSystem(for id: UUID) -> (any RemoteFileSystem)? {
+        fileSystems[id]
+    }
+
+    public func state(for id: UUID) -> ConnectionState {
+        states[id] ?? .disconnected
+    }
+
+    /// Test connectivity without persisting the filesystem.
+    public func testConnection(_ config: ConnectionConfig, credential: Credential) async -> Result<Void, Error> {
+        guard let fs = registry.createFileSystem(config: config, credential: credential) else {
+            return .failure(RemoteFileSystemError.unsupported(config.backendType.displayName))
+        }
+        do {
+            try await fs.connect()
+            _ = try await fs.enumerate(at: .root)
+            try await fs.disconnect()
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    // MARK: - Mount state
+
+    public func mountState(for id: UUID) -> MountState {
+        mountStates[id] ?? .unmounted
+    }
+
+    /// Sync mount states on startup: remove stale FP domains, rebuild symlinks for existing mounts.
+    public func syncMounts() async {
+        guard let mp = mountProvider else { return }
+        do {
+            let domainIDs = try await mp.mountedDomains()
+            let knownDomainIDs = Set(connections.map(\.domainIdentifier))
+
+            // Remove stale domains
+            for domainID in domainIDs where !knownDomainIDs.contains(domainID) {
+                let remover = staleDomainRemover ?? _removeStaleProviderDomain
+                try? await remover(domainID)
+            }
+
+            try? await cleanupOrphanedSymlinks(for: connections)
+
+            // Rebuild mount states and symlinks for existing mounted configs
+            for config in connections {
+                if domainIDs.contains(config.domainIdentifier) {
+                    states[config.id] = .connected
+                    mountStates[config.id] = .mounting
+                    try? await mp.signalEnumerator(for: config)
+                    scheduleMountResolution(for: config, using: mp)
+                } else {
+                    mountResolutionTasks[config.id]?.cancel()
+                    mountResolutionTasks.removeValue(forKey: config.id)
+                    mountStates[config.id] = .unmounted
+                    try? await mp.removeSymlink(for: config)
+                }
+            }
+        } catch {
+            // Sync is best-effort
+        }
+    }
+
+    private func _removeStaleProviderDomain(id: String) async throws {
+        #if canImport(FileProvider)
+        let domains = try await NSFileProviderManager.domains()
+        if let domain = domains.first(where: { $0.identifier.rawValue == id }) {
+            try await NSFileProviderManager.remove(domain)
+        }
+        #endif
+    }
+
+    private func resolveMountPath(
+        for config: ConnectionConfig,
+        using mountProvider: any MountProvider
+    ) async throws -> String {
+        for attempt in 0..<Self.mountURLRetryCount {
+            if let url = try await mountProvider.mountURL(for: config) {
+                guard let symlinkURL = try await mountProvider.createSymlink(for: config) else {
+                    throw MountError.mountFailed("Failed to create symlink for \(config.name)")
+                }
+                _ = symlinkURL
+                return url.path
+            }
+
+            if attempt < Self.mountURLRetryCount - 1 {
+                try? await Task.sleep(nanoseconds: Self.mountURLRetryDelay)
+            }
+        }
+
+        throw MountError.mountFailed("Mount path is not ready yet for \(config.name)")
+    }
+
+    private func scheduleMountResolution(
+        for config: ConnectionConfig,
+        using mountProvider: any MountProvider
+    ) {
+        mountResolutionTasks[config.id]?.cancel()
+        mountResolutionTasks[config.id] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let path = try await self.resolveMountPath(for: config, using: mountProvider)
+                if Task.isCancelled { return }
+                self.mountStates[config.id] = .mounted(path: path)
+            } catch {
+                if Task.isCancelled { return }
+                let desc = self.describe(error)
+                if self.isMissingFileProviderExtensionError(error) {
+                    self.needsExtensionSetup = true
+                }
+                self.mountStates[config.id] = .error(desc)
+            }
+            self.mountResolutionTasks.removeValue(forKey: config.id)
+        }
+    }
+
+    private func isMissingFileProviderExtensionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        #if canImport(FileProvider)
+        if nsError.domain == NSFileProviderErrorDomain,
+           nsError.code == NSFileProviderError.Code.providerNotFound.rawValue {
+            return true
+        }
+        #endif
+        return MountError.matchesExtensionNotEnabledMessage(describe(error))
+    }
+
+    private func describe(_ error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !description.isEmpty,
+           !description.hasPrefix("The operation couldn’t be completed.") {
+            return description
+        }
+
+        let described = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !described.isEmpty, !described.hasPrefix("Error Domain=") {
+            return described
+        }
+
+        let localized = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return localized.isEmpty ? String(reflecting: error) : localized
+    }
+
+    private func cleanupOrphanedSymlinks(for connections: [ConnectionConfig]) async throws {
+        let fm = FileManager.default
+        let baseDir = FileProviderMountProvider.symlinkBaseURL
+
+        guard fm.fileExists(atPath: baseDir.path),
+              let contents = try? fm.contentsOfDirectory(atPath: baseDir.path) else {
+            return
+        }
+
+        let knownNames = Set(connections.map { FileProviderMountProvider.sanitizeName($0.name) })
+        for name in contents where !knownNames.contains(name) {
+            try? fm.removeItem(at: baseDir.appendingPathComponent(name))
+        }
+    }
+}
