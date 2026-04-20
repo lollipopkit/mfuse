@@ -1,9 +1,15 @@
 import Foundation
 import FileProvider
+import os.log
 
 /// MountProvider backed by macOS File Provider (NSFileProviderDomain).
 /// Mounts appear under ~/Library/CloudStorage/. Symlinks created at ~/MFuse/<name>.
 public final class FileProviderMountProvider: MountProvider {
+
+    private static let logger = Logger(
+        subsystem: "com.lollipopkit.mfuse.core",
+        category: "FileProviderMountProvider"
+    )
 
     /// Base directory for convenience symlinks.
     public static var symlinkBaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -80,7 +86,17 @@ public final class FileProviderMountProvider: MountProvider {
 
         let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
 
-        try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
+        if try isSymbolicLink(at: symlinkURL) {
+            try fm.removeItem(at: symlinkURL)
+        } else {
+            try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
+        }
+        guard !fm.fileExists(atPath: symlinkURL.path) else {
+            Self.logger.warning(
+                "Skipping symlink creation because target path is occupied by a non-managed item: \(symlinkURL.path, privacy: .public)"
+            )
+            return nil
+        }
 
         try fm.createSymbolicLink(at: symlinkURL, withDestinationURL: mountURL)
         return symlinkURL
@@ -114,6 +130,11 @@ public final class FileProviderMountProvider: MountProvider {
 
     public static func symlinkURL(for config: ConnectionConfig, baseDir: URL) -> URL {
         baseDir.appendingPathComponent(symlinkFilename(for: config))
+    }
+
+    private func isSymbolicLink(at url: URL) throws -> Bool {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes[.type] as? FileAttributeType == .typeSymbolicLink
     }
 
     private func removeManagedSymlinkIfNeeded(at symlinkURL: URL, expectedDestinationURL: URL?) throws {

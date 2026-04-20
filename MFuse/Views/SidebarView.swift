@@ -1,9 +1,11 @@
 import SwiftUI
 import AppKit
 import MFuseCore
+import os.log
 
 struct SidebarView: View {
 
+    private let logger = Logger(subsystem: "com.lollipopkit.mfuse", category: "SidebarView")
     @EnvironmentObject var connectionManager: ConnectionManager
     @Binding var selectedConnection: ConnectionConfig?
     var onAdd: () -> Void
@@ -123,6 +125,10 @@ struct SidebarView: View {
                     if selectedConnection?.id == config.id {
                         selectedConnection = nil
                     }
+                } catch {
+                    logger.error(
+                        "Failed to remove connection \(config.id.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
                 }
             }
         }

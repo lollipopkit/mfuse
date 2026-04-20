@@ -135,10 +135,10 @@ struct ExtensionGuideView: View {
 
     private func verifyExtension() async -> Bool {
         do {
-            guard let domains = try await connectionManager.mountProvider?.mountedDomains(),
-                  !domains.isEmpty else {
+            guard let mountProvider = connectionManager.mountProvider else {
                 return false
             }
+            _ = try await mountProvider.mountedDomains()
             UserDefaults.standard.set(true, forKey: "extensionOnboarded")
             return true
         } catch {

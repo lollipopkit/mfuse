@@ -89,7 +89,7 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("LIST failed: \(response.text)")
         }
 
-        let rawData = try await dataHandler.collectData()
+        let rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
         try validateTransferCompletion(
             try await conn.readResponse(),
             failurePrefix: "LIST completion failed"
@@ -156,7 +156,7 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("RETR failed: \(response.text)")
         }
 
-        let data = try await dataHandler.collectData()
+        let data = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
         try validateTransferCompletion(
             try await conn.readResponse(),
             failurePrefix: "RETR completion failed"
@@ -298,7 +298,7 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("LIST failed: \(response.text)")
         }
 
-        let rawData = try await dataHandler.collectData()
+        let rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
         try validateTransferCompletion(
             try await conn.readResponse(),
             failurePrefix: "LIST completion failed"

@@ -59,8 +59,7 @@ public final class SharedStorage: Sendable {
     // MARK: - Connections
 
     public func loadConnections() -> [ConnectionConfig] {
-        if let data = try? Data(contentsOf: connectionsFileURL),
-           let connections = try? JSONDecoder().decode([ConnectionConfig].self, from: data) {
+        if let connections = readConnectionsFromDisk(at: connectionsFileURL) {
             return connections
         }
 
@@ -138,7 +137,7 @@ public final class SharedStorage: Sendable {
             let coordinator = NSFileCoordinator()
             coordinator.coordinate(writingItemAt: connectionsFileURL, options: .forReplacing, error: &coordinationError) { coordinatedURL in
                 do {
-                    let latestConnections = self.readConnectionsFromDisk(at: coordinatedURL)
+                    let latestConnections = try self.decodeConnectionsFromDisk(at: coordinatedURL) ?? []
                     let mergedConnections = self.mergeConnections(latest: latestConnections, incoming: connections)
                     let data = try JSONEncoder().encode(mergedConnections)
                     try data.write(to: coordinatedURL, options: .atomic)
@@ -164,12 +163,42 @@ public final class SharedStorage: Sendable {
         }
     }
 
-    private func readConnectionsFromDisk(at url: URL) -> [ConnectionConfig] {
-        guard let data = try? Data(contentsOf: url),
-              let connections = try? JSONDecoder().decode([ConnectionConfig].self, from: data) else {
-            return []
+    private func readConnectionsFromDisk(at url: URL) -> [ConnectionConfig]? {
+        var coordinationError: NSError?
+        var readError: Error?
+        var connections: [ConnectionConfig]?
+        let coordinator = NSFileCoordinator()
+
+        coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { coordinatedURL in
+            do {
+                connections = try self.decodeConnectionsFromDisk(at: coordinatedURL)
+            } catch {
+                readError = error
+            }
         }
+
+        if let coordinationError {
+            Self.logger.error(
+                "Failed to coordinate reading connections from \(url.path, privacy: .public): \(String(describing: coordinationError), privacy: .public)"
+            )
+            return nil
+        }
+
+        if let readError {
+            Self.logger.error(
+                "Failed to read connections from \(url.path, privacy: .public): \(String(describing: readError), privacy: .public)"
+            )
+            return nil
+        }
+
         return connections
+    }
+
+    private func decodeConnectionsFromDisk(at url: URL) throws -> [ConnectionConfig]? {
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return try JSONDecoder().decode([ConnectionConfig].self, from: data)
     }
 
     private func mergeConnections(

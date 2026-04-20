@@ -125,7 +125,7 @@ actor MockMountProvider: MountProvider {
         createSymlinkInvocations.append(config.domainIdentifier)
         guard let mountURL = mountURLs[config.domainIdentifier] else { return nil }
         let symlinkURL = FileProviderMountProvider.symlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         try? FileManager.default.removeItem(at: symlinkURL)
         try FileManager.default.createDirectory(
             at: FileProviderMountProvider.symlinkBaseURL,
@@ -138,7 +138,7 @@ actor MockMountProvider: MountProvider {
     func removeSymlink(for config: ConnectionConfig) async throws {
         removeSymlinkInvocations.append(config.domainIdentifier)
         let symlinkURL = FileProviderMountProvider.symlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         try? FileManager.default.removeItem(at: symlinkURL)
     }
 }
@@ -342,7 +342,8 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(manager.state(for: config.id), .connected)
         let mountedState = await waitForMountState(config.id)
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
-        let symlinkURL = testSymlinkBaseURL.appendingPathComponent("tb")
+        let symlinkURL = testSymlinkBaseURL
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
     }
 
@@ -364,10 +365,12 @@ final class ConnectionManagerTests: XCTestCase {
 
         await manager.syncMounts()
 
-        XCTAssertEqual(manager.state(for: config.id), .connected)
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        XCTAssertNil(manager.fileSystem(for: config.id))
         let mountedState = await waitForMountState(config.id)
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
-        let symlinkURL = testSymlinkBaseURL.appendingPathComponent("tb")
+        let symlinkURL = testSymlinkBaseURL
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
     }
 

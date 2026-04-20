@@ -199,14 +199,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
 
     public func delete(at path: RemotePath) async throws {
         do {
-            let sftp = try requireSFTP()
-            let remotePath = resolvedPath(path)
-            let info = try await itemInfo(at: path)
-            if info.isDirectory {
-                try await sftp.rmdir(at: remotePath)
-            } else {
-                try await sftp.remove(at: remotePath)
-            }
+            try await deleteRecursively(at: path)
         } catch {
             throw mapOperationError(error, path: path)
         }
@@ -226,6 +219,16 @@ public actor SFTPFileSystem: RemoteFileSystem {
             let sftp = try requireSFTP()
             let sourcePath = resolvedPath(source)
             let destinationPath = resolvedPath(destination)
+            let sourceInfo = try await itemInfo(at: source)
+
+            if sourceInfo.isDirectory {
+                try await sftp.createDirectory(atPath: destinationPath)
+                let children = try await enumerate(at: source)
+                for child in children {
+                    try await copy(from: child.path, to: destination.appending(child.path.name))
+                }
+                return
+            }
 
             try await sftp.withFile(filePath: sourcePath, flags: .read) { sourceFile in
                 try await sftp.withFile(filePath: destinationPath, flags: [.write, .create, .truncate]) { destinationFile in
@@ -247,6 +250,21 @@ public actor SFTPFileSystem: RemoteFileSystem {
             }
         } catch {
             throw mapOperationError(error, path: source)
+        }
+    }
+
+    private func deleteRecursively(at path: RemotePath) async throws {
+        let sftp = try requireSFTP()
+        let remotePath = resolvedPath(path)
+        let info = try await itemInfo(at: path)
+        if info.isDirectory {
+            let children = try await enumerate(at: path)
+            for child in children {
+                try await deleteRecursively(at: child.path)
+            }
+            try await sftp.rmdir(at: remotePath)
+        } else {
+            try await sftp.remove(at: remotePath)
         }
     }
 

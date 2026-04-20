@@ -14,7 +14,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
     private let clientID: String
     private let redirectURI: String
     private let scopes: [String]
-    @MainActor private var pendingState: String?
+    @MainActor private var isAuthorizing = false
     @MainActor private var authSession: ASWebAuthenticationSession?
 
     private static let authURL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -43,10 +43,18 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
     /// Perform the OAuth authorization code flow.
     @MainActor
     public func authorize() async throws -> TokenResponse {
-        let codeVerifier = generateCodeVerifier()
+        guard !isAuthorizing else {
+            throw GoogleDriveError.oauthFailed("Authorization is already in progress")
+        }
+        isAuthorizing = true
+        defer {
+            isAuthorizing = false
+            authSession = nil
+        }
+
+        let codeVerifier = try generateCodeVerifier()
         let codeChallenge = generateCodeChallenge(from: codeVerifier)
         let state = generateState()
-        pendingState = state
 
         var components = URLComponents(string: Self.authURL)!
         components.queryItems = [
@@ -58,7 +66,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "access_type", value: "offline"),
             URLQueryItem(name: "prompt", value: "consent"),
-            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "state", value: state)
         ]
 
         let authURL = components.url!
@@ -87,11 +95,9 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             }
         }
 
-        defer { pendingState = nil }
-
         let callbackComponents = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
         let callbackState = callbackComponents?.queryItems?.first(where: { $0.name == "state" })?.value
-        guard callbackState == pendingState else {
+        guard callbackState == state else {
             throw GoogleDriveError.oauthFailed("Invalid OAuth state in callback")
         }
 
@@ -112,7 +118,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
         request.httpBody = formEncodedBody([
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
+            URLQueryItem(name: "grant_type", value: "refresh_token")
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -134,7 +140,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             URLQueryItem(name: "code", value: code),
             URLQueryItem(name: "code_verifier", value: codeVerifier),
             URLQueryItem(name: "grant_type", value: "authorization_code"),
-            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "redirect_uri", value: redirectURI)
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -150,9 +156,12 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
         return components.percentEncodedQuery?.data(using: .utf8)
     }
 
-    private func generateCodeVerifier() -> String {
+    private func generateCodeVerifier() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard status == errSecSuccess else {
+            throw GoogleDriveError.oauthFailed("Failed to generate secure random code verifier: \(status)")
+        }
         return Data(bytes).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")

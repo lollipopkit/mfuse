@@ -133,6 +133,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
             try? await context.fileSystem.disconnect()
             await context.cache.close()
+            await context.contentCache.close()
             await context.anchorStore.close()
             context.stateStore.close()
         }
@@ -282,7 +283,12 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 await context.cache.put(item: remoteItem)
                 await context.cache.invalidateChildren(of: parentPath)
                 if let createdData, !remoteItem.isDirectory {
-                    _ = try await context.contentCache.store(data: createdData, for: remoteItem)
+                    do {
+                        _ = try await context.contentCache.store(data: createdData, for: remoteItem)
+                    } catch {
+                        logger.error("createItem content cache store failed: \(error.localizedDescription)")
+                        await context.contentCache.invalidate(path: remoteItem.path)
+                    }
                 }
                 let newItem = FileProviderItem(
                     remoteItem: remoteItem,
@@ -349,7 +355,12 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 let parentID = parentIdentifier(for: currentPath)
                 await context.cache.put(item: remoteItem)
                 if let updatedData {
-                    _ = try await context.contentCache.store(data: updatedData, for: remoteItem)
+                    do {
+                        _ = try await context.contentCache.store(data: updatedData, for: remoteItem)
+                    } catch {
+                        logger.error("modifyItem content cache store failed: \(error.localizedDescription)")
+                        await context.contentCache.invalidate(path: remoteItem.path)
+                    }
                 } else {
                     await context.contentCache.invalidate(path: currentPath)
                 }

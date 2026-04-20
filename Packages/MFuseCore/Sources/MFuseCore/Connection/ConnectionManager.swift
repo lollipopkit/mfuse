@@ -121,10 +121,13 @@ public final class ConnectionManager: ObservableObject {
                     scheduleMountResolution(for: config, using: mp)
                 } catch {
                     let desc = describe(error)
+                    let errorState = ConnectionState.error(desc)
                     if isMissingFileProviderExtensionError(error) {
                         needsExtensionSetup = true
                     }
+                    states[id] = errorState
                     mountStates[id] = .error(desc)
+                    onStateChange?(config, errorState)
                 }
             }
         } catch {
@@ -238,7 +241,8 @@ public final class ConnectionManager: ObservableObject {
                     mountStates[config.id] = .mounting
                     do {
                         try await mp.signalEnumerator(for: config)
-                        states[config.id] = .connected
+                        fileSystems.removeValue(forKey: config.id)
+                        states[config.id] = .disconnected
                         scheduleMountResolution(for: config, using: mp)
                     } catch {
                         states[config.id] = .connecting
@@ -352,7 +356,47 @@ public final class ConnectionManager: ObservableObject {
 
         let knownNames = Set(connections.map(FileProviderMountProvider.symlinkFilename(for:)))
         for name in contents where !knownNames.contains(name) {
-            try? fm.removeItem(at: baseDir.appendingPathComponent(name))
+            let candidateURL = baseDir.appendingPathComponent(name)
+            guard shouldRemoveManagedSymlink(at: candidateURL, fileManager: fm) else {
+                continue
+            }
+            try? fm.removeItem(at: candidateURL)
         }
+    }
+
+    private func shouldRemoveManagedSymlink(at url: URL, fileManager: FileManager) -> Bool {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeSymbolicLink,
+              matchesManagedSymlinkFilename(url.lastPathComponent),
+              let destinationPath = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
+            return false
+        }
+
+        let resolvedDestinationURL = URL(
+            fileURLWithPath: destinationPath,
+            relativeTo: url.deletingLastPathComponent()
+        ).standardizedFileURL
+
+        return isManagedMountDestination(resolvedDestinationURL)
+    }
+
+    private func matchesManagedSymlinkFilename(_ name: String) -> Bool {
+        guard let separatorIndex = name.lastIndex(of: "-") else {
+            return false
+        }
+        let prefix = name[..<separatorIndex]
+        let suffix = name[name.index(after: separatorIndex)...]
+        return !prefix.isEmpty && UUID(uuidString: String(suffix)) != nil
+    }
+
+    private func isManagedMountDestination(_ url: URL) -> Bool {
+        let cloudStorageRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("CloudStorage", isDirectory: true)
+            .standardizedFileURL
+
+        let destinationPath = url.path
+        let rootPath = cloudStorageRoot.path
+        return destinationPath == rootPath || destinationPath.hasPrefix(rootPath + "/")
     }
 }

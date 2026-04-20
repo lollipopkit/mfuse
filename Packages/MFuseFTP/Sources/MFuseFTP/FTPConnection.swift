@@ -8,12 +8,13 @@ import NIOSSL
 /// Handles control connection commands and passive data connections.
 final class FTPConnection: @unchecked Sendable {
 
-    private static let connectionTimeout: TimeAmount = .seconds(10)
+    static let operationTimeout: TimeAmount = .seconds(10)
 
     private let host: String
     private let port: Int
     private let useTLS: Bool
     private let group: EventLoopGroup
+    private let commandGate = CommandGate()
     private let channelLock = NSLock()
     private var channel: Channel?
 
@@ -52,13 +53,20 @@ final class FTPConnection: @unchecked Sendable {
         let connectedChannel = try await waitForFuture(
             bootstrap.connect(host: host, port: port)
         )
-        setChannel(connectedChannel)
 
-        // Read welcome banner
-        let welcome = try await handler.readResponse()
-        guard welcome.code >= 200 && welcome.code < 400 else {
-            throw FTPError.connectionFailed("Server rejected connection: \(welcome.text)")
+        do {
+            // Read welcome banner
+            let welcome = try await handler.readResponse(timeout: Self.operationTimeout)
+            guard welcome.code >= 200 && welcome.code < 400 else {
+                throw FTPError.connectionFailed("Server rejected connection: \(welcome.text)")
+            }
+        } catch {
+            try? await connectedChannel.close()
+            setChannel(nil)
+            throw error
         }
+
+        setChannel(connectedChannel)
     }
 
     func close() async throws {
@@ -69,17 +77,25 @@ final class FTPConnection: @unchecked Sendable {
     // MARK: - Command Execution
 
     func sendCommand(_ command: String) async throws -> FTPResponse {
-        guard let channel = currentChannel() else { throw FTPError.notConnected }
-        var buffer = channel.allocator.buffer(capacity: command.utf8.count + 2)
-        buffer.writeString(command + "\r\n")
-        try await channel.writeAndFlush(buffer)
-        return try await readResponse()
+        try await commandGate.withLock {
+            guard let channel = currentChannel() else { throw FTPError.notConnected }
+            var buffer = channel.allocator.buffer(capacity: command.utf8.count + 2)
+            buffer.writeString(command + "\r\n")
+            try await channel.writeAndFlush(buffer)
+            return try await readResponseUnlocked()
+        }
     }
 
     func readResponse() async throws -> FTPResponse {
+        try await commandGate.withLock {
+            try await readResponseUnlocked()
+        }
+    }
+
+    private func readResponseUnlocked() async throws -> FTPResponse {
         guard let channel = currentChannel() else { throw FTPError.notConnected }
         let handler = try await channel.pipeline.handler(type: FTPResponseHandler.self).get()
-        return try await handler.readResponse()
+        return try await handler.readResponse(timeout: Self.operationTimeout)
     }
 
     // MARK: - Data Connection (Passive Mode)
@@ -135,7 +151,7 @@ final class FTPConnection: @unchecked Sendable {
     private func waitForFuture<T>(_ future: EventLoopFuture<T>) async throws -> T {
         let timeoutPromise = future.eventLoop.makePromise(of: T.self)
         var didTimeOut = false
-        let timeoutTask = future.eventLoop.scheduleTask(in: Self.connectionTimeout) {
+        let timeoutTask = future.eventLoop.scheduleTask(in: Self.operationTimeout) {
             didTimeOut = true
             timeoutPromise.fail(FTPError.connectionTimedOut)
         }
@@ -174,8 +190,14 @@ final class FTPConnection: @unchecked Sendable {
         guard parts.count == 6 else {
             throw FTPError.protocolError("Invalid PASV numbers: \(text)")
         }
+        guard parts.allSatisfy({ (0...255).contains($0) }) else {
+            throw FTPError.protocolError("Invalid PASV numbers or port out of range: \(text)")
+        }
         let host = "\(parts[0]).\(parts[1]).\(parts[2]).\(parts[3])"
         let port = parts[4] * 256 + parts[5]
+        guard (1...65535).contains(port) else {
+            throw FTPError.protocolError("Invalid PASV numbers or port out of range: \(text)")
+        }
         return (host, port)
     }
 
@@ -234,7 +256,7 @@ final class FTPConnection: @unchecked Sendable {
         if first == 172 && (16...31).contains(second) { return true }
         if first == 192 && second == 168 { return true }
         if first == 100 && (64...127).contains(second) { return true } // CGNAT
-        if first == 198 && [18, 19, 51].contains(second) { return true }
+        if first == 198 && (second == 18 || second == 19) { return true }
         if first == 192 && second == 0 && octets[2] == 2 { return true } // TEST-NET-1
         if first == 198 && second == 51 && octets[2] == 100 { return true } // TEST-NET-2
         if first == 203 && second == 0 && octets[2] == 113 { return true } // TEST-NET-3
@@ -276,6 +298,37 @@ final class FTPConnection: @unchecked Sendable {
     }
 }
 
+private actor CommandGate {
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func withLock<T>(_ operation: () async throws -> T) async throws -> T {
+        await lock()
+        defer { unlock() }
+        return try await operation()
+    }
+
+    private func lock() async {
+        guard isLocked else {
+            isLocked = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func unlock() {
+        if let waiter = waiters.first {
+            waiters.removeFirst()
+            waiter.resume()
+        } else {
+            isLocked = false
+        }
+    }
+}
+
 // MARK: - FTP Response
 
 struct FTPResponse {
@@ -307,9 +360,14 @@ final class FTPLineDecoder: ByteToMessageDecoder {
 final class FTPResponseHandler: ChannelInboundHandler {
     typealias InboundIn = ByteBuffer
 
+    private struct PendingContinuation {
+        let id: UUID
+        let continuation: CheckedContinuation<FTPResponse, Error>
+    }
+
     private let lock = NSLock()
     private var pendingResponses: [FTPResponse] = []
-    private var continuations: [CheckedContinuation<FTPResponse, Error>] = []
+    private var continuations: [PendingContinuation] = []
     private var terminalError: Error?
     private var multilineCode: Int?
     private var multilineText = ""
@@ -359,7 +417,7 @@ final class FTPResponseHandler: ChannelInboundHandler {
 
         lock.lock()
         terminalError = error
-        continuations = self.continuations
+        continuations = self.continuations.map(\.continuation)
         self.continuations.removeAll()
         lock.unlock()
 
@@ -372,16 +430,18 @@ final class FTPResponseHandler: ChannelInboundHandler {
 
         lock.lock()
         terminalError = error
-        continuations = self.continuations
+        continuations = self.continuations.map(\.continuation)
         self.continuations.removeAll()
         lock.unlock()
 
         continuations.forEach { $0.resume(throwing: error) }
     }
 
-    func readResponse() async throws -> FTPResponse {
+    func readResponse(timeout: TimeAmount? = nil) async throws -> FTPResponse {
         try await withCheckedThrowingContinuation { cont in
             let result: Result<FTPResponse, Error>?
+            let waiterID = UUID()
+            var shouldScheduleTimeout = false
 
             lock.lock()
             if let response = pendingResponses.first {
@@ -390,11 +450,15 @@ final class FTPResponseHandler: ChannelInboundHandler {
             } else if let error = terminalError {
                 result = .failure(error)
             } else {
-                continuations.append(cont)
+                continuations.append(PendingContinuation(id: waiterID, continuation: cont))
+                shouldScheduleTimeout = timeout != nil
                 result = nil
             }
             lock.unlock()
 
+            if shouldScheduleTimeout, let timeout {
+                scheduleTimeout(for: waiterID, timeout: timeout)
+            }
             if let result {
                 cont.resume(with: result)
             }
@@ -406,7 +470,7 @@ final class FTPResponseHandler: ChannelInboundHandler {
 
         lock.lock()
         if !self.continuations.isEmpty {
-            continuation = self.continuations.removeFirst()
+            continuation = self.continuations.removeFirst().continuation
         } else {
             pendingResponses.append(response)
             continuation = nil
@@ -414,6 +478,28 @@ final class FTPResponseHandler: ChannelInboundHandler {
         lock.unlock()
 
         continuation?.resume(returning: response)
+    }
+
+    private func scheduleTimeout(for waiterID: UUID, timeout: TimeAmount) {
+        let nanoseconds = max(timeout.nanoseconds, 0)
+        let deadline = DispatchTime.now() + .nanoseconds(Int(nanoseconds))
+        DispatchQueue.global().asyncAfter(deadline: deadline) { [weak self] in
+            self?.failContinuationIfPending(id: waiterID, error: FTPError.connectionTimedOut)
+        }
+    }
+
+    private func failContinuationIfPending(id: UUID, error: Error) {
+        let continuation: CheckedContinuation<FTPResponse, Error>?
+
+        lock.lock()
+        if let index = continuations.firstIndex(where: { $0.id == id }) {
+            continuation = continuations.remove(at: index).continuation
+        } else {
+            continuation = nil
+        }
+        lock.unlock()
+
+        continuation?.resume(throwing: error)
     }
 }
 
@@ -423,9 +509,14 @@ final class FTPResponseHandler: ChannelInboundHandler {
 final class FTPDataHandler: ChannelInboundHandler {
     typealias InboundIn = ByteBuffer
 
+    private struct PendingContinuation {
+        let id: UUID
+        let continuation: CheckedContinuation<Data, Error>
+    }
+
     private let lock = NSLock()
     private var buffer = Data()
-    private var continuations: [CheckedContinuation<Data, Error>] = []
+    private var continuations: [PendingContinuation] = []
     private var completed = false
     private var terminalError: Error?
 
@@ -444,7 +535,7 @@ final class FTPDataHandler: ChannelInboundHandler {
 
         lock.lock()
         completed = true
-        continuations = self.continuations
+        continuations = self.continuations.map(\.continuation)
         self.continuations.removeAll()
         if let error = terminalError {
             result = .failure(error)
@@ -463,16 +554,18 @@ final class FTPDataHandler: ChannelInboundHandler {
         lock.lock()
         terminalError = error
         completed = true
-        continuations = self.continuations
+        continuations = self.continuations.map(\.continuation)
         self.continuations.removeAll()
         lock.unlock()
 
         continuations.forEach { $0.resume(throwing: error) }
     }
 
-    func collectData() async throws -> Data {
+    func collectData(timeout: TimeAmount? = nil) async throws -> Data {
         return try await withCheckedThrowingContinuation { cont in
             let result: Result<Data, Error>?
+            let waiterID = UUID()
+            var shouldScheduleTimeout = false
 
             lock.lock()
             if completed {
@@ -482,15 +575,41 @@ final class FTPDataHandler: ChannelInboundHandler {
                     result = .success(buffer)
                 }
             } else {
-                continuations.append(cont)
+                continuations.append(PendingContinuation(id: waiterID, continuation: cont))
+                shouldScheduleTimeout = timeout != nil
                 result = nil
             }
             lock.unlock()
 
+            if shouldScheduleTimeout, let timeout {
+                scheduleTimeout(for: waiterID, timeout: timeout)
+            }
             if let result {
                 cont.resume(with: result)
             }
         }
+    }
+
+    private func scheduleTimeout(for waiterID: UUID, timeout: TimeAmount) {
+        let nanoseconds = max(timeout.nanoseconds, 0)
+        let deadline = DispatchTime.now() + .nanoseconds(Int(nanoseconds))
+        DispatchQueue.global().asyncAfter(deadline: deadline) { [weak self] in
+            self?.failContinuationIfPending(id: waiterID, error: FTPError.connectionTimedOut)
+        }
+    }
+
+    private func failContinuationIfPending(id: UUID, error: Error) {
+        let continuation: CheckedContinuation<Data, Error>?
+
+        lock.lock()
+        if let index = continuations.firstIndex(where: { $0.id == id }) {
+            continuation = continuations.remove(at: index).continuation
+        } else {
+            continuation = nil
+        }
+        lock.unlock()
+
+        continuation?.resume(throwing: error)
     }
 }
 
