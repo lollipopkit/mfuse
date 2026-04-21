@@ -2,3 +2,34 @@ settings:
   base:
     # Copy this file to project.local.yml and replace with your local Apple team ID.
     DEVELOPMENT_TEAM: YOUR_TEAM_ID
+
+# If your local setup uses explicit provisioning profiles, keep the per-target
+# overrides below in project.local.yml and replace the placeholder profile names.
+targets:
+  MFuse:
+    settings:
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Manual
+          "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Development
+          "DEVELOPMENT_TEAM[sdk=macosx*]": YOUR_TEAM_ID
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": MFuse App Dev Profile
+        Release:
+          CODE_SIGN_STYLE: Manual
+          "CODE_SIGN_IDENTITY[sdk=macosx*]": Developer ID Application
+          "DEVELOPMENT_TEAM[sdk=macosx*]": YOUR_TEAM_ID
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": MFuse App Release Profile
+
+  MFuseProvider:
+    settings:
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Manual
+          "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Development
+          "DEVELOPMENT_TEAM[sdk=macosx*]": YOUR_TEAM_ID
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": MFuse Provider Dev Profile
+        Release:
+          CODE_SIGN_STYLE: Manual
+          "CODE_SIGN_IDENTITY[sdk=macosx*]": Developer ID Application
+          "DEVELOPMENT_TEAM[sdk=macosx*]": YOUR_TEAM_ID
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": MFuse Provider Release Profile

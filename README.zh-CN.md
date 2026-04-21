@@ -97,7 +97,12 @@ make build
 
 不要依赖直接修改生成后的 Xcode 工程。`MFuse.xcodeproj` 是从 `project.yml` 重新生成的，所以你在 Xcode 里手动改的签名设置，下一次执行 `make generate` 时可能会丢失。
 
-如果你要稳定保留本机签名配置，复制 `project.local.example.yml` 为 `project.local.yml`，填入你本机的 `DEVELOPMENT_TEAM`，然后重新生成工程。`project.local.yml` 已被 Git 忽略，`make generate` 会自动把它合并进去。
+如果你要稳定保留本机签名配置，复制 `project.local.example.yml` 为 `project.local.yml`，按你的本机情况填写签名参数后重新生成工程。`project.local.yml` 已被 Git 忽略，`make generate` 会自动把它合并进去。
+
+`project.local.example.yml` 现在同时包含两类本地覆盖方式：
+
+- 只注入 `DEVELOPMENT_TEAM`，继续使用 Automatic signing
+- 为 app 和 File Provider extension 分别指定 Debug/Release 的 `CODE_SIGN_STYLE`、`CODE_SIGN_IDENTITY` 和 `PROVISIONING_PROFILE_SPECIFIER`，稳定复现本机显式 provisioning profile 配置
 
 未签名或 ad hoc 签名的构建虽然可以启动，但 macOS 可能会在运行时忽略 File Provider extension，因为 App Group entitlement 不会被系统接受。出现这种情况时，mount 会失败，Finder 还可能对自动生成的便捷链接报“文件不存在”。
 
@@ -113,11 +118,11 @@ make release-install-app   # 构建已签名 Release 并安装到 /Applications/
 make clean      # 清理构建产物
 ```
 
-`make release-install-app` 会执行 `scripts/release/build-and-install-app.sh`：先以 `Release` 配置归档 `MFuse` scheme，再用显式 provisioning profile 重新签名导出，校验 embedded profile 已授权共享 App Group，最后才安装到 `/Applications/MFuse.app`。
+`make release-install-app` 会执行 `scripts/release/build-and-install-app.sh`：按当前 `MFuse.xcodeproj` 已配置好的签名设置，以 `Release` 配置归档 `MFuse` scheme，校验归档里的主应用和扩展都嵌入了已授权共享 App Group 的 profile，然后把归档产物安装到 `/Applications/MFuse.app`。
 
-这个本地安装流程要求主应用 `com.lollipopkit.mfuse` 和扩展 `com.lollipopkit.mfuse.provider` 都有显式 provisioning profile，并且它们的 `com.apple.security.application-groups` 里都包含 `group.com.lollipopkit.mfuse.shared`。
+这个本地安装流程现在直接遵循你在 Xcode 工程里已经配置好的签名方式。如果当前 target 走的是显式 provisioning profile，那么这些 profile 仍然需要在 `com.apple.security.application-groups` 里包含 `group.com.lollipopkit.mfuse.shared`。
 
-通用的 `Mac Team Provisioning Profile: *` 不够用。它不包含 App Group entitlement，在 macOS Sequoia 上会导致 “would like to access data from other apps” 启动弹窗、系统设置里看不到 File Provider 扩展，以及 Finder 挂载为空或被带到共享容器。安装脚本现在会直接失败，而不是继续把这种损坏签名的构建复制到 `/Applications`。
+通用的 `Mac Team Provisioning Profile: *` 仍然不够用。它不包含 App Group entitlement，在 macOS Sequoia 上会导致 “would like to access data from other apps” 启动弹窗、系统设置里看不到 File Provider 扩展，以及 Finder 挂载为空或被带到共享容器。安装脚本依然会拒绝把这种损坏签名的构建复制到 `/Applications`。
 
 如果你只是想本地验证而不覆盖系统 Applications，可以改写安装目标：
 
