@@ -25,7 +25,6 @@ public final class FileProviderMountProvider: MountProvider {
 
     public func mount(config: ConnectionConfig) async throws {
         let domainID = NSFileProviderDomainIdentifier(rawValue: config.domainIdentifier)
-        try persistBootstrapConfig(for: config)
 
         // Remove stale domain with the same identifier before adding
         let existing = try await NSFileProviderManager.domains()
@@ -55,6 +54,8 @@ public final class FileProviderMountProvider: MountProvider {
                 throw error
             }
         }
+
+        try persistBootstrapConfig(for: config)
     }
 
     public func unmount(config: ConnectionConfig) async throws {
@@ -73,19 +74,16 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func signalEnumerator(for config: ConnectionConfig) async throws {
-        try persistBootstrapConfig(for: config)
         guard let domain = try await refreshExistingDomain(for: config) else {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
+        try persistBootstrapConfig(for: config)
         let manager = NSFileProviderManager(for: domain)
         try await manager?.signalEnumerator(for: .rootContainer)
     }
 
     public func mountURL(for config: ConnectionConfig) async throws -> URL? {
-        try persistBootstrapConfig(for: config)
-        guard let domain = try await refreshExistingDomain(for: config) else { return nil }
-        guard let manager = NSFileProviderManager(for: domain) else { return nil }
-        return try await manager.getUserVisibleURL(for: .rootContainer)
+        try await resolveMountURL(for: config)
     }
 
     @discardableResult
@@ -115,7 +113,7 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func removeSymlink(for config: ConnectionConfig) async throws {
-        let expectedDestinationURL = (try? await mountURL(for: config)) ?? nil
+        let expectedDestinationURL = try? await resolveMountURL(for: config)
         let symlinkURL = Self.symlinkURL(for: config, baseDir: symlinkBaseURL)
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
     }
@@ -192,26 +190,15 @@ public final class FileProviderMountProvider: MountProvider {
 
     private func removeManagedSymlinkIfNeeded(at symlinkURL: URL, expectedDestinationURL: URL?) throws {
         let fm = FileManager.default
-        let path = symlinkURL.path
         guard let itemType = try itemType(at: symlinkURL) else {
             return
         }
         guard itemType == .typeSymbolicLink else {
             return
         }
-        if let expectedDestinationURL {
-            let destinationPath = try fm.destinationOfSymbolicLink(atPath: path)
-            let resolvedDestinationURL = URL(
-                fileURLWithPath: destinationPath,
-                relativeTo: symlinkURL.deletingLastPathComponent()
-            ).standardizedFileURL
-            guard resolvedDestinationURL == expectedDestinationURL.standardizedFileURL else {
-                return
-            }
-        } else {
-            guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
-                return
-            }
+        _ = expectedDestinationURL
+        guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
+            return
         }
         try fm.removeItem(at: symlinkURL)
     }
@@ -244,6 +231,12 @@ public final class FileProviderMountProvider: MountProvider {
 
     private func refreshExistingDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain? {
         try await findDomain(for: config)
+    }
+
+    private func resolveMountURL(for config: ConnectionConfig) async throws -> URL? {
+        guard let domain = try await refreshExistingDomain(for: config) else { return nil }
+        guard let manager = NSFileProviderManager(for: domain) else { return nil }
+        return try await manager.getUserVisibleURL(for: .rootContainer)
     }
 
     private func domainOrThrow(for config: ConnectionConfig) async throws -> NSFileProviderDomain {

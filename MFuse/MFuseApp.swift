@@ -23,32 +23,34 @@ struct MFuseApp: App {
         self.keychain = KeychainService()
         self.mountProvider = FileProviderMountProvider()
         let registry = BackendRegistry.shared
-        registry.register(.sftp) { config, credential in
-            SFTPFileSystem(config: config, credential: credential)
-        }
-        registry.register(.s3) { config, credential in
-            S3FileSystem(config: config, credential: credential)
-        }
-        registry.register(.webdav) { config, credential in
-            WebDAVFileSystem(config: config, credential: credential)
-        }
-        registry.register(.smb) { config, credential in
-            SMBFileSystem(config: config, credential: credential)
-        }
-        registry.register(.ftp) { config, credential in
-            FTPFileSystem(config: config, credential: credential)
-        }
-        registry.register(.nfs) { config, credential in
-            NFSFileSystem(config: config, credential: credential)
-        }
-        registry.register(.googleDrive) { config, credential in
-            GoogleDriveFileSystem(
-                config: config,
-                credential: credential
-            ) { updatedCredential in
-                try await self.keychain.store(updatedCredential, for: config.id)
+        registry.registerAllBuiltIns(
+            sftpFactory: { config, credential in
+                SFTPFileSystem(config: config, credential: credential)
+            },
+            s3Factory: { config, credential in
+                S3FileSystem(config: config, credential: credential)
+            },
+            webdavFactory: { config, credential in
+                WebDAVFileSystem(config: config, credential: credential)
+            },
+            smbFactory: { config, credential in
+                SMBFileSystem(config: config, credential: credential)
+            },
+            ftpFactory: { config, credential in
+                FTPFileSystem(config: config, credential: credential)
+            },
+            nfsFactory: { config, credential in
+                NFSFileSystem(config: config, credential: credential)
+            },
+            googleDriveFactory: { config, credential in
+                GoogleDriveFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try await self.keychain.store(updatedCredential, for: config.id)
+                }
             }
-        }
+        )
         let manager = ConnectionManager(
             storage: self.storage,
             credentialProvider: self.keychain,

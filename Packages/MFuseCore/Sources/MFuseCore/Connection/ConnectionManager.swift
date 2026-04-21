@@ -74,7 +74,11 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func remove(_ config: ConnectionConfig) async throws {
-        if states[config.id]?.isConnected == true {
+        let shouldCleanupMount = states[config.id]?.isConnected == true
+            || mountState(for: config.id).isMounted
+            || mountState(for: config.id) == .mounting
+            || mountResolutionTasks[config.id] != nil
+        if shouldCleanupMount {
             await disconnect(config.id)
         }
         let previousConnections = connections
@@ -107,7 +111,9 @@ public final class ConnectionManager: ObservableObject {
         do {
             let credential = try await credentialProvider.credential(for: id) ?? Credential()
             guard let fs = registry.createFileSystem(config: config, credential: credential) else {
-                states[id] = .error("Unsupported backend: \(config.backendType.displayName)")
+                let errorState = ConnectionState.error("Unsupported backend: \(config.backendType.displayName)")
+                states[id] = errorState
+                onStateChange?(config, errorState)
                 return
             }
             try await fs.connect()

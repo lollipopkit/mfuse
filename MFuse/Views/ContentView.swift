@@ -62,9 +62,13 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .refreshConnections)) { _ in
             // Trigger re-enumerate for selected connection
-            if let config = selectedConnection, connectionManager.state(for: config.id).isConnected {
+            if let config = selectedConnection {
+                let state = connectionManager.state(for: config.id)
+                let mountState = connectionManager.mountState(for: config.id)
+                if connectionManager.mountProvider != nil && (state.isConnected || mountState.isMounted) {
                 Task {
                     try? await connectionManager.mountProvider?.signalEnumerator(for: config)
+                }
                 }
             }
         }

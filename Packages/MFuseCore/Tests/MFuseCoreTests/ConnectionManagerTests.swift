@@ -66,10 +66,6 @@ actor MockFileSystem: RemoteFileSystem {
     func move(from source: RemotePath, to destination: RemotePath) async throws {}
 }
 
-enum MockFileSystemFactory {
-    static var lastCreated: MockFileSystem?
-}
-
 // MARK: - Mock MountProvider
 
 actor MockMountProvider: MountProvider {
@@ -169,6 +165,7 @@ final class ConnectionManagerTests: XCTestCase {
     private var testSymlinkBaseURL: URL!
     private var testContainerURL: URL!
     private var registry: BackendRegistry!
+    private var lastCreatedFileSystem: MockFileSystem?
 
     override func setUp() {
         super.setUp()
@@ -187,9 +184,9 @@ final class ConnectionManagerTests: XCTestCase {
             .appendingPathComponent("MFuseCoreTests-\(UUID().uuidString)", isDirectory: true)
 
         registry = BackendRegistry()
-        registry.register(.sftp) { _, _ in
+        registry.register(.sftp) { [weak self] _, _ in
             let fs = MockFileSystem()
-            MockFileSystemFactory.lastCreated = fs
+            self?.lastCreatedFileSystem = fs
             return fs
         }
 
@@ -202,7 +199,7 @@ final class ConnectionManagerTests: XCTestCase {
 
     override func tearDown() {
         try? storage.saveConnections([])
-        MockFileSystemFactory.lastCreated = nil
+        lastCreatedFileSystem = nil
         registry = nil
         if let legacyDefaultsSuiteName {
             legacyDefaults?.removePersistentDomain(forName: legacyDefaultsSuiteName)
@@ -323,8 +320,8 @@ final class ConnectionManagerTests: XCTestCase {
             XCTFail("Expected success, got \(error)")
         }
 
-        guard let fs = MockFileSystemFactory.lastCreated else {
-            XCTFail("MockFileSystemFactory.lastCreated is nil")
+        guard let fs = lastCreatedFileSystem else {
+            XCTFail("lastCreatedFileSystem is nil")
             return
         }
         let paths = await fs.enumeratedPaths
@@ -342,9 +339,8 @@ final class ConnectionManagerTests: XCTestCase {
 
         let fileSystem = MockFileSystem()
         await fileSystem.setEnumerateShouldFail(true)
-        MockFileSystemFactory.lastCreated = fileSystem
+        lastCreatedFileSystem = fileSystem
         registry.register(.sftp) { _, _ in
-            MockFileSystemFactory.lastCreated = fileSystem
             return fileSystem
         }
 

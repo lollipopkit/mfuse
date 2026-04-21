@@ -106,33 +106,35 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     private static let bootstrapTimeoutSeconds = 15.0
     private static let contentCacheStoreRetryCount = 2
     private static let registerBackendsOnce: Void = {
-        BackendRegistry.shared.register(.sftp) { config, credential in
-            SFTPFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.s3) { config, credential in
-            S3FileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.webdav) { config, credential in
-            WebDAVFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.smb) { config, credential in
-            SMBFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.ftp) { config, credential in
-            FTPFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.nfs) { config, credential in
-            NFSFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.googleDrive) { config, credential in
-            let keychain = KeychainService()
-            return GoogleDriveFileSystem(
-                config: config,
-                credential: credential
-            ) { updatedCredential in
-                try await keychain.store(updatedCredential, for: config.id)
+        BackendRegistry.shared.registerAllBuiltIns(
+            sftpFactory: { config, credential in
+                SFTPFileSystem(config: config, credential: credential)
+            },
+            s3Factory: { config, credential in
+                S3FileSystem(config: config, credential: credential)
+            },
+            webdavFactory: { config, credential in
+                WebDAVFileSystem(config: config, credential: credential)
+            },
+            smbFactory: { config, credential in
+                SMBFileSystem(config: config, credential: credential)
+            },
+            ftpFactory: { config, credential in
+                FTPFileSystem(config: config, credential: credential)
+            },
+            nfsFactory: { config, credential in
+                NFSFileSystem(config: config, credential: credential)
+            },
+            googleDriveFactory: { config, credential in
+                let keychain = KeychainService()
+                return GoogleDriveFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try await keychain.store(updatedCredential, for: config.id)
+                }
             }
-        }
+        )
     }()
     private let domain: NSFileProviderDomain
     private let storage = SharedStorage()

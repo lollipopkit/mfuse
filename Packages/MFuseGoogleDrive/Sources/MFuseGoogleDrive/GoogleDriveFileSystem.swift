@@ -217,7 +217,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let boundary = UUID().uuidString
         let metadata: [String: Any] = [
             "name": name,
-            "parents": [parentID],
+            "parents": [parentID]
         ]
         let metadataJSON = try JSONSerialization.data(withJSONObject: metadata)
 
@@ -248,13 +248,21 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
 
     public func createDirectory(at path: RemotePath) async throws {
         guard let parentPath = path.parent else { throw RemoteFileSystemError.operationFailed("Cannot create directory at root") }
+        do {
+            _ = try await resolveFileID(for: path, expectFolder: true)
+            throw RemoteFileSystemError.alreadyExists(path)
+        } catch RemoteFileSystemError.notFound {
+            // Expected path for create-only semantics.
+        } catch {
+            throw error
+        }
         let parentID = try await resolveFileID(for: parentPath, expectFolder: true)
         let name = path.name
 
         let metadata: [String: Any] = [
             "name": name,
             "mimeType": Self.folderMime,
-            "parents": [parentID],
+            "parents": [parentID]
         ]
         let metadataJSON = try JSONSerialization.data(withJSONObject: metadata)
 
@@ -328,7 +336,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = [
             "name": newName,
-            "parents": [destParentID],
+            "parents": [destParentID]
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 

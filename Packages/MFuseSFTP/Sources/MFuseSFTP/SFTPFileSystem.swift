@@ -4,6 +4,7 @@ import Citadel
 import CCryptoBoringSSL
 import CCitadelBcrypt
 import NIO
+import NIOFoundationCompat
 import NIOSSH
 import Crypto
 import os.log
@@ -45,6 +46,10 @@ public actor SFTPFileSystem: RemoteFileSystem {
     // MARK: - Lifecycle
 
     public func connect() async throws {
+        if client != nil, sftp != nil {
+            return
+        }
+
         let authMethod: SSHAuthenticationMethod
         switch config.authMethod {
         case .password:
@@ -70,14 +75,15 @@ public actor SFTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
 
-        do {
-            // Build TOFU (Trust-On-First-Use) host key validator
-            let tofuValidator = TOFUHostKeyValidator(
-                host: config.host,
-                port: Int(config.port),
-                store: hostKeyStore
-            )
+        // Build TOFU (Trust-On-First-Use) host key validator
+        let tofuValidator = TOFUHostKeyValidator(
+            host: config.host,
+            port: Int(config.port),
+            store: hostKeyStore
+        )
 
+        var pendingSSHClient: SSHClient?
+        do {
             let sshClient = try await SSHClient.connect(
                 host: config.host,
                 port: Int(config.port),
@@ -85,14 +91,15 @@ public actor SFTPFileSystem: RemoteFileSystem {
                 hostKeyValidator: .custom(tofuValidator),
                 reconnect: .never
             )
+            pendingSSHClient = sshClient
+
+            let sftpClient = try await sshClient.openSFTP()
             self.client = sshClient
-            self.sftp = try await sshClient.openSFTP()
+            self.sftp = sftpClient
         } catch {
-            if let sshClient = self.client {
-                try? await sshClient.close()
+            if let pendingSSHClient {
+                try? await pendingSSHClient.close()
             }
-            self.client = nil
-            self.sftp = nil
             throw mapConnectionError(error)
         }
     }

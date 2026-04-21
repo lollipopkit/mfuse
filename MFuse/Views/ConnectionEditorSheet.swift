@@ -102,7 +102,9 @@ struct ConnectionEditorSheet: View {
                 // Hide host/port for Google Drive (cloud-only)
                 if backendType != .googleDrive {
                     Section("Server") {
-                        TextField("Host", text: $host, prompt: Text("example.com"))
+                        if backendType != .s3 {
+                            TextField("Host", text: $host, prompt: Text("example.com"))
+                        }
                         TextField("Port", text: $port, prompt: Text("\(backendType.defaultPort)"))
                         if backendType != .s3 {
                             TextField("Username", text: $username, prompt: Text("user"))
@@ -243,6 +245,8 @@ struct ConnectionEditorSheet: View {
         !name.isEmpty && (
             if backendType == .googleDrive {
                 true
+            } else if backendType == .s3 {
+                UInt16(port) != nil || port.isEmpty
             } else {
                 !host.isEmpty && (UInt16(port) != nil || port.isEmpty)
             }

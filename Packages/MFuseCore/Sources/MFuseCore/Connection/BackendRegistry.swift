@@ -40,4 +40,31 @@ public final class BackendRegistry: @unchecked Sendable {
         defer { lock.unlock() }
         return Array(factories.keys)
     }
+
+    // MARK: - Built-in Registration
+
+    /// Register all built-in backend factories.
+    ///
+    /// Call this once at startup from both the main app and the File Provider extension.
+    /// Each backend's package must be imported by the caller so the concrete types are
+    /// available for the factory closures.
+    public func registerAllBuiltIns(
+        sftpFactory: Factory? = nil,
+        s3Factory: Factory? = nil,
+        webdavFactory: Factory? = nil,
+        smbFactory: Factory? = nil,
+        ftpFactory: Factory? = nil,
+        nfsFactory: Factory? = nil,
+        googleDriveFactory: Factory? = nil
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let f = sftpFactory { factories[.sftp] = f }
+        if let f = s3Factory { factories[.s3] = f }
+        if let f = webdavFactory { factories[.webdav] = f }
+        if let f = smbFactory { factories[.smb] = f }
+        if let f = ftpFactory { factories[.ftp] = f }
+        if let f = nfsFactory { factories[.nfs] = f }
+        if let f = googleDriveFactory { factories[.googleDrive] = f }
+    }
 }

@@ -17,6 +17,7 @@ let package = Package(
             dependencies: [
                 "MFuseCore",
                 .product(name: "Citadel", package: "Citadel"),
+                .product(name: "NIOFoundationCompat", package: "swift-nio"),
             ]
         ),
         .testTarget(
