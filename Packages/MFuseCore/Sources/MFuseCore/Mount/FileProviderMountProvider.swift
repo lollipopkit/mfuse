@@ -29,8 +29,14 @@ public final class FileProviderMountProvider: MountProvider {
         // Remove stale domain with the same identifier before adding
         let existing = try await NSFileProviderManager.domains()
         if let stale = existing.first(where: { $0.identifier == domainID }) {
-            try? await NSFileProviderManager.remove(stale)
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            do {
+                try await NSFileProviderManager.remove(stale)
+                try await Task.sleep(nanoseconds: 500_000_000)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw error
+            }
         }
 
         let domain = try makeDomain(for: config)
@@ -83,8 +89,10 @@ public final class FileProviderMountProvider: MountProvider {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
         try persistBootstrapConfig(for: config)
-        let manager = NSFileProviderManager(for: domain)
-        try await manager?.signalEnumerator(for: .rootContainer)
+        guard let manager = NSFileProviderManager(for: domain) else {
+            throw MountError.managerNotFound(config.domainIdentifier)
+        }
+        try await manager.signalEnumerator(for: .rootContainer)
     }
 
     public func mountURL(for config: ConnectionConfig) async throws -> URL? {
@@ -276,7 +284,9 @@ public final class FileProviderMountProvider: MountProvider {
 
     private func resolveMountURL(for config: ConnectionConfig) async throws -> URL? {
         guard let domain = try await refreshExistingDomain(for: config) else { return nil }
-        guard let manager = NSFileProviderManager(for: domain) else { return nil }
+        guard let manager = NSFileProviderManager(for: domain) else {
+            throw MountError.managerNotFound(config.domainIdentifier)
+        }
         return try await manager.getUserVisibleURL(for: .rootContainer)
     }
 

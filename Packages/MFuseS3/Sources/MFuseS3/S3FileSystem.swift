@@ -107,8 +107,8 @@ public actor S3FileSystem: RemoteFileSystem {
 
             // Directories (common prefixes)
             if let prefixes = response.commonPrefixes {
-                for p in prefixes {
-                    guard let fullPrefix = p.prefix else { continue }
+                for commonPrefix in prefixes {
+                    guard let fullPrefix = commonPrefix.prefix else { continue }
                     let name = directoryName(from: fullPrefix, parentPrefix: prefix)
                     guard !name.isEmpty else { continue }
                     let childPath = path.appending(name)
@@ -235,7 +235,8 @@ public actor S3FileSystem: RemoteFileSystem {
         do {
             _ = try await s3.putObject(request)
         } catch let error as AWSErrorType {
-            if let responseCode = error.context?.responseCode.code, responseCode == 409 || responseCode == 412 {
+            // S3 signals an If-None-Match precondition failure with HTTP 412.
+            if let responseCode = error.context?.responseCode.code, responseCode == 412 {
                 throw RemoteFileSystemError.alreadyExists(path)
             }
             throw error

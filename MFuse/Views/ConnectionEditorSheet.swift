@@ -253,7 +253,15 @@ struct ConnectionEditorSheet: View {
             if backendType == .googleDrive {
                 !gdClientID.isEmpty && !gdRedirectURI.isEmpty
             } else if backendType == .s3 {
-                !s3Bucket.isEmpty && (UInt16(port) != nil || port.isEmpty)
+                !s3Bucket.isEmpty &&
+                (UInt16(port) != nil || port.isEmpty) &&
+                (
+                    if authMethod == .accessKey {
+                        !s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty
+                    } else {
+                        true
+                    }
+                )
             } else {
                 !host.isEmpty && (UInt16(port) != nil || port.isEmpty)
             }
@@ -404,6 +412,7 @@ struct ConnectionEditorSheet: View {
     private func clearCredentialState(except method: AuthMethod) {
         switch method {
         case .password:
+            password = ""
             oauthToken = ""
             privateKeyPath = ""
             s3AccessKeyID = ""

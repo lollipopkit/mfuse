@@ -5,7 +5,7 @@ let package = Package(
     name: "MFuseSFTP",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseSFTP", targets: ["MFuseSFTP"]),
+        .library(name: "MFuseSFTP", targets: ["MFuseSFTP"])
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
@@ -24,6 +24,6 @@ let package = Package(
         .testTarget(
             name: "MFuseSFTPTests",
             dependencies: ["MFuseSFTP"]
-        ),
+        )
     ]
 )

@@ -622,7 +622,7 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        let result: Result<Data, Error>?
+        let result: Result<Data, Error>
         let continuations: [CheckedContinuation<Data, Error>]
 
         lock.lock()
@@ -636,7 +636,6 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
         }
         lock.unlock()
 
-        guard let result else { return }
         continuations.forEach { $0.resume(with: result) }
     }
 

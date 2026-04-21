@@ -180,6 +180,9 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         var request = URLRequest(url: url)
         request.httpMethod = "MKCOL"
         let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 405 {
+            throw RemoteFileSystemError.alreadyExists(path)
+        }
         try checkHTTPResponse(response, path: path, acceptCodes: 200...299)
     }
 

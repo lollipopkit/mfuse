@@ -4,6 +4,7 @@ import Foundation
 public enum MountError: Error, Sendable, LocalizedError {
     case domainAlreadyExists(String)
     case domainNotFound(String)
+    case managerNotFound(String)
     case mountFailed(String)
     case unmountFailed(String)
     case extensionNotEnabled
@@ -12,6 +13,7 @@ public enum MountError: Error, Sendable, LocalizedError {
         switch self {
         case .domainAlreadyExists(let id): return "Domain already exists: \(id)"
         case .domainNotFound(let id):      return "Domain not found: \(id)"
+        case .managerNotFound(let id):     return "File Provider manager not found: \(id)"
         case .mountFailed(let msg):        return "Mount failed: \(msg)"
         case .unmountFailed(let msg):      return "Unmount failed: \(msg)"
         case .extensionNotEnabled:         return "File Provider extension is not enabled"
