@@ -55,7 +55,12 @@ public final class FileProviderMountProvider: MountProvider {
             }
         }
 
-        try persistBootstrapConfig(for: config)
+        do {
+            try persistBootstrapConfig(for: config)
+        } catch {
+            try? await NSFileProviderManager.remove(domain)
+            throw error
+        }
     }
 
     public func unmount(config: ConnectionConfig) async throws {
@@ -219,9 +224,8 @@ public final class FileProviderMountProvider: MountProvider {
                 fileURLWithPath: destinationPath,
                 relativeTo: symlinkURL.deletingLastPathComponent()
             ).standardizedFileURL
-
-            guard resolvedDestinationURL == expectedDestinationURL.standardizedFileURL else {
-                return
+            if resolvedDestinationURL != expectedDestinationURL.standardizedFileURL {
+                // Fall through so stale managed symlinks get removed and recreated.
             }
         } else {
             guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {

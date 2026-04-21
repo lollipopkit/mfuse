@@ -246,7 +246,7 @@ struct ConnectionEditorSheet: View {
     private var isValid: Bool {
         !name.isEmpty && (
             if backendType == .googleDrive {
-                true
+                !gdClientID.isEmpty && !gdRedirectURI.isEmpty
             } else if backendType == .s3 {
                 UInt16(port) != nil || port.isEmpty
             } else {
@@ -269,7 +269,7 @@ struct ConnectionEditorSheet: View {
                 username: username,
                 authMethod: authMethod,
                 remotePath: remotePath.isEmpty ? "/" : remotePath,
-                parameters: buildParameters()
+                parameters: try buildParameters()
             )
             onSave(config, credential)
         } catch {
@@ -281,45 +281,46 @@ struct ConnectionEditorSheet: View {
     private func testConnection() {
         isTesting = true
         testResult = nil
-        let config = ConnectionConfig(
-            name: name,
-            backendType: backendType,
-            host: host,
-            port: UInt16(port) ?? backendType.defaultPort,
-            username: username,
-            authMethod: authMethod,
-            remotePath: remotePath.isEmpty ? "/" : remotePath,
-            parameters: buildParameters()
-        )
         let credential: Credential
         do {
+            let parameters = try buildParameters()
+            let config = ConnectionConfig(
+                name: name,
+                backendType: backendType,
+                host: host,
+                port: UInt16(port) ?? backendType.defaultPort,
+                username: username,
+                authMethod: authMethod,
+                remotePath: remotePath.isEmpty ? "/" : remotePath,
+                parameters: parameters
+            )
             credential = try buildCredential()
+
+            Task {
+                let storage = SharedStorage.withLegacyMigration()
+                let keychain = KeychainService()
+                let manager = await ConnectionManager(
+                    storage: storage,
+                    credentialProvider: keychain
+                )
+                let result = await manager.testConnection(config, credential: credential)
+                await MainActor.run {
+                    switch result {
+                    case .success:
+                        testResult = "Connection successful!"
+                        testSuccess = true
+                    case .failure(let error):
+                        testResult = error.localizedDescription
+                        testSuccess = false
+                    }
+                    isTesting = false
+                }
+            }
         } catch {
             testResult = error.localizedDescription
             testSuccess = false
             isTesting = false
             return
-        }
-
-        Task {
-            let storage = SharedStorage.withLegacyMigration()
-            let keychain = KeychainService()
-            let manager = await ConnectionManager(
-                storage: storage,
-                credentialProvider: keychain
-            )
-            let result = await manager.testConnection(config, credential: credential)
-            await MainActor.run {
-                switch result {
-                case .success:
-                    testResult = "Connection successful!"
-                    testSuccess = true
-                case .failure(let error):
-                    testResult = error.localizedDescription
-                    testSuccess = false
-                }
-                isTesting = false
-            }
         }
     }
 
@@ -394,13 +395,11 @@ struct ConnectionEditorSheet: View {
     private func clearCredentialState(except method: AuthMethod) {
         switch method {
         case .password:
-            password = ""
             oauthToken = ""
             privateKeyPath = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .publicKey:
-            password = ""
             oauthToken = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
@@ -422,7 +421,7 @@ struct ConnectionEditorSheet: View {
         }
     }
 
-    private func buildParameters() -> [String: String] {
+    private func buildParameters() throws -> [String: String] {
         var params: [String: String] = [:]
         switch backendType {
         case .s3:
@@ -439,6 +438,11 @@ struct ConnectionEditorSheet: View {
             if ftpTLS { params["tls"] = "true" }
             if !ftpPassive { params["passive"] = "false" }
         case .googleDrive:
+            guard !gdClientID.isEmpty, !gdRedirectURI.isEmpty else {
+                throw RemoteFileSystemError.operationFailed(
+                    "Google Drive requires both OAuth Client ID and Redirect URI"
+                )
+            }
             if !gdClientID.isEmpty { params["clientID"] = gdClientID }
             if !gdRedirectURI.isEmpty { params["redirectURI"] = gdRedirectURI }
         default:

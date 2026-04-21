@@ -5,6 +5,7 @@ import NIOFoundationCompat
 
 /// FTP/FTPS implementation of `RemoteFileSystem` using SwiftNIO.
 public actor FTPFileSystem: RemoteFileSystem {
+    private static let uploadChunkSize = 1_048_576
 
     private let config: ConnectionConfig
     private let credential: Credential
@@ -189,6 +190,34 @@ public actor FTPFileSystem: RemoteFileSystem {
         }
     }
 
+    public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let conn = try requireConnection()
+        let remotePath = resolvedPath(path)
+
+        let (dataChannel, _) = try await conn.openDataConnection()
+        let response = try await conn.sendCommand("STOR \(remotePath)")
+        guard response.code == 150 || response.code == 125 else {
+            try await dataChannel.close()
+            throw RemoteFileSystemError.operationFailed("STOR failed: \(response.text)")
+        }
+
+        let handle = try FileHandle(forReadingFrom: localFileURL)
+        defer { try? handle.close() }
+
+        while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
+            var buffer = dataChannel.allocator.buffer(capacity: chunk.count)
+            buffer.writeBytes(chunk)
+            try await dataChannel.writeAndFlush(buffer)
+        }
+
+        try await dataChannel.close()
+
+        let doneResp = try await conn.readResponse()
+        if doneResp.code != 226 && doneResp.code != 250 {
+            throw RemoteFileSystemError.operationFailed("Upload failed: \(doneResp.text)")
+        }
+    }
+
     public func createFile(at path: RemotePath, data: Data) async throws {
         do {
             _ = try await itemInfo(at: path)
@@ -197,6 +226,20 @@ public actor FTPFileSystem: RemoteFileSystem {
             switch error {
             case .notFound:
                 try await writeFile(at: path, data: data)
+            default:
+                throw error
+            }
+        }
+    }
+
+    public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
+        do {
+            _ = try await itemInfo(at: path)
+            throw RemoteFileSystemError.alreadyExists(path)
+        } catch let error as RemoteFileSystemError {
+            switch error {
+            case .notFound:
+                try await writeFile(at: path, from: localFileURL)
             default:
                 throw error
             }

@@ -200,6 +200,17 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         try checkHTTPResponse(response, path: path)
     }
 
+    public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let fileID = try await resolveFileID(for: path)
+        let urlStr = "\(Self.uploadBase)/files/\(fileID)?uploadType=media"
+        var req = try authorizedRequest(url: urlStr)
+        req.httpMethod = "PATCH"
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+
+        let (_, response) = try await executeAuthorizedUpload(req, from: localFileURL, path: path)
+        try checkHTTPResponse(response, path: path)
+    }
+
     public func createFile(at path: RemotePath, data: Data) async throws {
         guard let parentPath = path.parent else { throw RemoteFileSystemError.operationFailed("Cannot create file at root") }
         do {
@@ -236,6 +247,45 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         req.httpBody = body
 
         let (responseData, response) = try await executeAuthorizedRequest(req, path: path)
+        try checkHTTPResponse(response, path: path)
+        if let fileID = try parseFileID(from: responseData) {
+            cacheResolvedID(fileID, for: path)
+        } else {
+            invalidateCachedPath(path)
+        }
+    }
+
+    public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
+        guard let parentPath = path.parent else { throw RemoteFileSystemError.operationFailed("Cannot create file at root") }
+        do {
+            _ = try await resolveFileID(for: path, expectFolder: false)
+            throw RemoteFileSystemError.alreadyExists(path)
+        } catch RemoteFileSystemError.notFound {
+            // Expected path for create-only semantics.
+        } catch {
+            throw error
+        }
+        let parentID = try await resolveFileID(for: parentPath, expectFolder: true)
+        let name = path.name
+
+        let boundary = UUID().uuidString
+        let metadata: [String: Any] = [
+            "name": name,
+            "parents": [parentID]
+        ]
+        let metadataJSON = try JSONSerialization.data(withJSONObject: metadata)
+        let multipartURL = try makeMultipartUploadFile(
+            metadataJSON: metadataJSON,
+            sourceFileURL: localFileURL,
+            boundary: boundary
+        )
+        defer { try? FileManager.default.removeItem(at: multipartURL) }
+
+        var req = try authorizedRequest(url: "\(Self.uploadBase)/files?uploadType=multipart")
+        req.httpMethod = "POST"
+        req.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        let (responseData, response) = try await executeAuthorizedUpload(req, from: multipartURL, path: path)
         try checkHTTPResponse(response, path: path)
         if let fileID = try parseFileID(from: responseData) {
             cacheResolvedID(fileID, for: path)
@@ -494,6 +544,35 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         return retriedResult
     }
 
+    private func executeAuthorizedUpload(
+        _ request: URLRequest,
+        from localFileURL: URL,
+        path _: RemotePath
+    ) async throws -> (Data, URLResponse) {
+        let initialResult = try await session.upload(for: request, fromFile: localFileURL)
+        guard let http = initialResult.1 as? HTTPURLResponse, http.statusCode == 401 else {
+            return initialResult
+        }
+
+        do {
+            try await refreshAccessToken()
+        } catch {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+
+        var retriedRequest = request
+        guard let token = accessToken else {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        retriedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let retriedResult = try await session.upload(for: retriedRequest, fromFile: localFileURL)
+        if let retriedHTTP = retriedResult.1 as? HTTPURLResponse, retriedHTTP.statusCode == 401 {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        return retriedResult
+    }
+
     private func refreshAccessToken() async throws {
         guard let refreshToken = credential.password else {
             throw RemoteFileSystemError.authenticationFailed
@@ -524,6 +603,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         guard let http = response as? HTTPURLResponse else { return }
         switch http.statusCode {
         case 200...299: return
+        case 403: throw RemoteFileSystemError.permissionDenied(path)
         case 404: throw RemoteFileSystemError.notFound(path)
         default:
             throw RemoteFileSystemError.operationFailed("HTTP \(http.statusCode)")
@@ -534,6 +614,43 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         guard let str = str else { return nil }
         return Self.isoFormatterWithFractionalSeconds.date(from: str)
             ?? Self.isoFormatterFallback.date(from: str)
+    }
+
+    private func makeMultipartUploadFile(
+        metadataJSON: Data,
+        sourceFileURL: URL,
+        boundary: String
+    ) throws -> URL {
+        let multipartURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        FileManager.default.createFile(atPath: multipartURL.path, contents: nil)
+
+        let outputHandle = try FileHandle(forWritingTo: multipartURL)
+        let inputHandle = try FileHandle(forReadingFrom: sourceFileURL)
+
+        do {
+            defer {
+                try? outputHandle.close()
+                try? inputHandle.close()
+            }
+
+            try outputHandle.write(contentsOf: Data("--\(boundary)\r\n".utf8))
+            try outputHandle.write(contentsOf: Data("Content-Type: application/json; charset=UTF-8\r\n\r\n".utf8))
+            try outputHandle.write(contentsOf: metadataJSON)
+            try outputHandle.write(contentsOf: Data("\r\n--\(boundary)\r\n".utf8))
+            try outputHandle.write(contentsOf: Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
+
+            while let chunk = try inputHandle.read(upToCount: 1_048_576), !chunk.isEmpty {
+                try outputHandle.write(contentsOf: chunk)
+            }
+
+            try outputHandle.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
+        } catch {
+            try? FileManager.default.removeItem(at: multipartURL)
+            throw error
+        }
+
+        return multipartURL
     }
 
     private func cacheResolvedID(_ fileID: String, for path: RemotePath) {

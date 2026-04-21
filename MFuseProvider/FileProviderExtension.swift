@@ -308,17 +308,15 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     try await context.fileSystem.createDirectory(at: newPath)
                     createdFileURL = nil
                 } else if let url = url {
-                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                    try await context.fileSystem.createFile(at: newPath, data: data)
+                    try await context.fileSystem.createFile(at: newPath, from: url)
                     createdFileURL = url
                 } else {
-                    let data = Data()
-                    try await context.fileSystem.createFile(at: newPath, data: data)
                     let temporaryURL = try context.stateStore.temporaryFileURL(
                         for: UUID().uuidString,
                         extension: itemTemplate.filename.pathExtension.isEmpty ? "tmp" : itemTemplate.filename.pathExtension
                     )
-                    try data.write(to: temporaryURL, options: .atomic)
+                    FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
+                    try await context.fileSystem.createFile(at: newPath, from: temporaryURL)
                     createdFileURL = temporaryURL
                 }
 
@@ -392,8 +390,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 }
 
                 if changedFields.contains(.contents), let url = newContents {
-                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                    try await context.fileSystem.writeFile(at: currentPath, data: data)
+                    try await context.fileSystem.writeFile(at: currentPath, from: url)
                     updatedFileURL = url
                 }
 
@@ -715,7 +712,8 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                                userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
             case .permissionDenied:
                 return NSError(domain: NSFileProviderErrorDomain,
-                               code: NSFileProviderError.permissionDenied.rawValue)
+                               code: NSFileProviderError.serverUnreachable.rawValue,
+                               userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
             case .authenticationFailed:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.notAuthenticated.rawValue)

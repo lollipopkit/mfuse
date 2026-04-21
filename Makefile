@@ -1,7 +1,9 @@
-.PHONY: build test test-stable test-all generate clean lint release-install-signing release-clean-signing release-dmg
+.PHONY: all build test test-stable test-all generate clean lint release-install-signing release-clean-signing release-dmg
 
 SCHEME = MFuse
 CODESIGN_FLAGS = CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+
+all: build test-stable
 
 build:
 	xcodebuild -scheme $(SCHEME) build $(CODESIGN_FLAGS)

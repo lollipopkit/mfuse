@@ -24,6 +24,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
     private static let enumerationTimeoutSeconds = 3.0
     private static let execResponseLimit = 4 * 1024 * 1024
     private static let copyChunkSize: UInt32 = 64 * 1024
+    private static let uploadChunkSize = 1_048_576
     private static let logger = Logger(
         subsystem: "com.lollipopkit.mfuse.sftp",
         category: "SFTPFileSystem"
@@ -191,6 +192,10 @@ public actor SFTPFileSystem: RemoteFileSystem {
         }
     }
 
+    public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
+        try await uploadFile(at: path, from: localFileURL, flags: [.write, .create, .truncate])
+    }
+
     public func createFile(at path: RemotePath, data: Data) async throws {
         do {
             let sftp = try requireSFTP()
@@ -202,6 +207,10 @@ public actor SFTPFileSystem: RemoteFileSystem {
         } catch {
             throw mapOperationError(error, path: path)
         }
+    }
+
+    public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
+        try await uploadFile(at: path, from: localFileURL, flags: [.write, .forceCreate])
     }
 
     // MARK: - Mutations
@@ -308,6 +317,30 @@ public actor SFTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.notConnected
         }
         return sftp
+    }
+
+    private func uploadFile(
+        at path: RemotePath,
+        from localFileURL: URL,
+        flags: SFTPFile.OpenFlags
+    ) async throws {
+        do {
+            let sftp = try requireSFTP()
+            let remotePath = resolvedPath(path)
+            let handle = try FileHandle(forReadingFrom: localFileURL)
+            defer { try? handle.close() }
+
+            try await sftp.withFile(filePath: remotePath, flags: flags) { file in
+                var offset: UInt64 = 0
+
+                while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
+                    try await file.write(ByteBuffer(data: chunk), at: offset)
+                    offset += UInt64(chunk.count)
+                }
+            }
+        } catch {
+            throw mapOperationError(error, path: path)
+        }
     }
 
     private func requireClient() throws -> SSHClient {

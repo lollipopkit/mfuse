@@ -75,8 +75,14 @@ public protocol RemoteFileSystem: Actor {
     /// Write (overwrite) an entire file.
     func writeFile(at path: RemotePath, data: Data) async throws
 
+    /// Write (overwrite) a file from a local file URL without requiring callers to materialize full Data.
+    func writeFile(at path: RemotePath, from localFileURL: URL) async throws
+
     /// Create a new file (fails if exists).
     func createFile(at path: RemotePath, data: Data) async throws
+
+    /// Create a new file from a local file URL without requiring callers to materialize full Data.
+    func createFile(at path: RemotePath, from localFileURL: URL) async throws
 
     // MARK: Mutations
 
@@ -109,6 +115,16 @@ public extension RemoteFileSystem {
         }
         let data = try await readFile(at: source)
         try await writeFile(at: destination, data: data)
+    }
+
+    func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
+        try await writeFile(at: path, data: data)
+    }
+
+    func createFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
+        try await createFile(at: path, data: data)
     }
 
     func setPermissions(_ permissions: UInt16, at path: RemotePath) async throws {

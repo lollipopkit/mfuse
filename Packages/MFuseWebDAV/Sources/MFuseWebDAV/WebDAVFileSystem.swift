@@ -133,6 +133,16 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         try checkHTTPResponse(response, path: path, acceptCodes: 200...299)
     }
 
+    public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let url = try resourceURL(for: path)
+        let session = try requireSession()
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (_, response) = try await session.upload(for: request, fromFile: localFileURL)
+        try checkHTTPResponse(response, path: path, acceptCodes: 200...299)
+    }
+
     public func createFile(at path: RemotePath, data: Data) async throws {
         let url = try resourceURL(for: path)
         let session = try requireSession()
@@ -142,6 +152,20 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.setValue("*", forHTTPHeaderField: "If-None-Match")
         let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 412 {
+            throw RemoteFileSystemError.alreadyExists(path)
+        }
+        try checkHTTPResponse(response, path: path, acceptCodes: 200...299)
+    }
+
+    public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let url = try resourceURL(for: path)
+        let session = try requireSession()
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("*", forHTTPHeaderField: "If-None-Match")
+        let (_, response) = try await session.upload(for: request, fromFile: localFileURL)
         if let http = response as? HTTPURLResponse, http.statusCode == 412 {
             throw RemoteFileSystemError.alreadyExists(path)
         }

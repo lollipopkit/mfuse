@@ -93,6 +93,9 @@ make generate
 make test
 ```
 
+`make test` currently maps to `test-stable` and runs the stable local package subset.
+Use `make test-all` when you want the full package test matrix.
+
 ### Lint
 
 ```bash
@@ -109,7 +112,8 @@ make build
 
 ```bash
 make generate   # regenerate MFuse.xcodeproj from project.yml
-make test       # run package tests
+make test       # run the stable package test subset (alias of test-stable)
+make test-all   # run the full package test matrix
 make lint       # run SwiftLint
 make build      # build the app scheme
 make clean      # remove build outputs

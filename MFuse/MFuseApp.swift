@@ -23,6 +23,7 @@ struct MFuseApp: App {
         self.storage = SharedStorage.withLegacyMigration()
         self.keychain = KeychainService()
         self.mountProvider = FileProviderMountProvider()
+        let keychain = self.keychain
         let registry = BackendRegistry.shared
         registry.registerAllBuiltIns(
             sftpFactory: { config, credential in
@@ -48,7 +49,7 @@ struct MFuseApp: App {
                     config: config,
                     credential: credential
                 ) { updatedCredential in
-                    try await self.keychain.store(updatedCredential, for: config.id)
+                    try await keychain.store(updatedCredential, for: config.id)
                 }
             }
         )

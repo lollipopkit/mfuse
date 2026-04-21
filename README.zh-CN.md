@@ -93,6 +93,9 @@ make generate
 make test
 ```
 
+当前 `make test` 实际映射到 `test-stable`，只运行本地稳定的 package 测试子集。
+如果需要执行完整测试矩阵，请使用 `make test-all`。
+
 ### 运行 lint
 
 ```bash
@@ -109,7 +112,8 @@ make build
 
 ```bash
 make generate   # 根据 project.yml 重新生成 MFuse.xcodeproj
-make test       # 运行 package 测试
+make test       # 运行稳定的 package 测试子集（test-stable 别名）
+make test-all   # 运行完整 package 测试矩阵
 make lint       # 运行 SwiftLint
 make build      # 构建应用 scheme
 make clean      # 清理构建产物
