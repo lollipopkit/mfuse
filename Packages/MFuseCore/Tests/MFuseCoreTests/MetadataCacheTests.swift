@@ -39,7 +39,7 @@ final class MetadataCacheTests: XCTestCase {
         XCTAssertNil(retrieved)
     }
 
-    func testChildren() async {
+    func testChildren() async throws {
         let parent = RemotePath("/home/user")
         let items = [
             RemoteItem(path: parent.appending("a.txt"), type: .file, size: 100),
@@ -116,7 +116,7 @@ final class MetadataCacheTests: XCTestCase {
         await reopenedCache.close()
     }
 
-    func testPutAllReplacesOldChildren() async {
+    func testPutAllReplacesOldChildren() async throws {
         let parent = RemotePath("/dir")
         let oldItems = [
             RemoteItem(path: parent.appending("old.txt"), type: .file),

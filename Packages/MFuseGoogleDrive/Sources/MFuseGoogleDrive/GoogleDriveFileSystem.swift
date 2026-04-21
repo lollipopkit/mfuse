@@ -58,6 +58,11 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             if let refreshToken = credential.password {
                 let clientID = config.parameters["clientID"] ?? ""
                 let redirectURI = config.parameters["redirectURI"] ?? ""
+                guard !clientID.isEmpty, !redirectURI.isEmpty else {
+                    throw RemoteFileSystemError.connectionFailed(
+                        "Google Drive OAuth refresh requires non-empty clientID and redirectURI"
+                    )
+                }
                 let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
                 let newToken = try await provider.refresh(refreshToken: refreshToken)
                 let updatedCredential = Credential(

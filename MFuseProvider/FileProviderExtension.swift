@@ -105,6 +105,35 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
     private static let bootstrapTimeoutSeconds = 15.0
     private static let contentCacheStoreRetryCount = 2
+    private static let registerBackendsOnce: Void = {
+        BackendRegistry.shared.register(.sftp) { config, credential in
+            SFTPFileSystem(config: config, credential: credential)
+        }
+        BackendRegistry.shared.register(.s3) { config, credential in
+            S3FileSystem(config: config, credential: credential)
+        }
+        BackendRegistry.shared.register(.webdav) { config, credential in
+            WebDAVFileSystem(config: config, credential: credential)
+        }
+        BackendRegistry.shared.register(.smb) { config, credential in
+            SMBFileSystem(config: config, credential: credential)
+        }
+        BackendRegistry.shared.register(.ftp) { config, credential in
+            FTPFileSystem(config: config, credential: credential)
+        }
+        BackendRegistry.shared.register(.nfs) { config, credential in
+            NFSFileSystem(config: config, credential: credential)
+        }
+        BackendRegistry.shared.register(.googleDrive) { config, credential in
+            let keychain = KeychainService()
+            return GoogleDriveFileSystem(
+                config: config,
+                credential: credential
+            ) { updatedCredential in
+                try await keychain.store(updatedCredential, for: config.id)
+            }
+        }
+    }()
     private let domain: NSFileProviderDomain
     private let storage = SharedStorage()
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse.provider", category: "Extension")
@@ -114,7 +143,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     public required init(domain: NSFileProviderDomain) {
         self.domain = domain
         super.init()
-        registerBackends()
+        Self.registerBackends()
     }
 
     public func invalidate() {
@@ -429,34 +458,8 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
     // MARK: - Private Setup
 
-    private func registerBackends() {
-        BackendRegistry.shared.register(.sftp) { config, credential in
-            SFTPFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.s3) { config, credential in
-            S3FileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.webdav) { config, credential in
-            WebDAVFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.smb) { config, credential in
-            SMBFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.ftp) { config, credential in
-            FTPFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.nfs) { config, credential in
-            NFSFileSystem(config: config, credential: credential)
-        }
-        BackendRegistry.shared.register(.googleDrive) { config, credential in
-            let keychain = KeychainService()
-            return GoogleDriveFileSystem(
-                config: config,
-                credential: credential
-            ) { updatedCredential in
-                try await keychain.store(updatedCredential, for: config.id)
-            }
-        }
+    private static func registerBackends() {
+        _ = registerBackendsOnce
     }
 
     private func bootstrapRuntimeContext(for domain: NSFileProviderDomain) async throws -> FileProviderRuntimeContext {

@@ -205,7 +205,19 @@ public final class SharedStorage: Sendable {
         latest: [ConnectionConfig],
         incoming: [ConnectionConfig]
     ) -> [ConnectionConfig] {
-        _ = latest
-        return incoming
+        var mergedByID: [UUID: ConnectionConfig] = [:]
+
+        for connection in latest {
+            mergedByID[connection.id] = connection
+        }
+
+        for connection in incoming {
+            mergedByID[connection.id] = connection
+        }
+
+        var merged = incoming
+        let incomingIDs = Set(incoming.map(\.id))
+        merged.append(contentsOf: latest.filter { !incomingIDs.contains($0.id) })
+        return merged.filter { mergedByID.removeValue(forKey: $0.id) != nil }
     }
 }

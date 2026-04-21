@@ -37,7 +37,12 @@ public actor ContentCache {
                 throw error
             }
 
-            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+            do {
+                _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+            } catch {
+                try? fileManager.removeItem(at: temporaryURL)
+                throw error
+            }
         }
         pruneVersions(in: pathDirectory, keeping: destinationURL.lastPathComponent)
         return destinationURL

@@ -166,12 +166,17 @@ public final class ConnectionManager: ObservableObject {
             task.cancel()
         }
         reconnectTasks.removeAll()
+        let pendingMountResolutionIDs = Set(mountResolutionTasks.keys)
         for task in mountResolutionTasks.values {
             task.cancel()
         }
         mountResolutionTasks.removeAll()
 
-        for config in connections where states[config.id]?.isConnected == true || mountState(for: config.id).isMounted {
+        for config in connections where
+            states[config.id]?.isConnected == true ||
+            mountState(for: config.id).isMounted ||
+            mountState(for: config.id) == .mounting ||
+            pendingMountResolutionIDs.contains(config.id) {
             await disconnect(config.id)
         }
     }

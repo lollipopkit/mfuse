@@ -8,6 +8,15 @@ import FileProvider
 @MainActor
 public final class DomainManager: ObservableObject {
 
+    struct SyncDomainsError: LocalizedError {
+        let errors: [(id: String, error: Error)]
+
+        var errorDescription: String? {
+            let details = errors.map { "\($0.id): \($0.error.localizedDescription)" }.joined(separator: "; ")
+            return "Failed to remove one or more stale File Provider domains: \(details)"
+        }
+    }
+
     private let connectionManager: ConnectionManager
     private let mountProvider: FileProviderMountProvider
 
@@ -21,10 +30,15 @@ public final class DomainManager: ObservableObject {
     public func syncDomains() async throws {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
         let domains = try await NSFileProviderManager.domains()
+        var errors: [(id: String, error: Error)] = []
 
         // Remove stale domains
         for domain in domains where !knownIDs.contains(domain.identifier.rawValue) {
-            try await NSFileProviderManager.remove(domain)
+            do {
+                try await NSFileProviderManager.remove(domain)
+            } catch {
+                errors.append((id: domain.identifier.rawValue, error: error))
+            }
         }
 
         // Remove orphaned symlinks
@@ -40,6 +54,10 @@ public final class DomainManager: ObservableObject {
                 }
                 try? fm.removeItem(at: candidateURL)
             }
+        }
+
+        if !errors.isEmpty {
+            throw SyncDomainsError(errors: errors)
         }
     }
 }

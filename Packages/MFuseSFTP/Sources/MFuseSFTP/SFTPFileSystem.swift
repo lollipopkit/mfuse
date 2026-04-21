@@ -364,7 +364,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
 
         if let remoteError = error as? RemoteFileSystemError {
             if case .notConnected = remoteError {
-                return true
+                return false
             }
         }
 

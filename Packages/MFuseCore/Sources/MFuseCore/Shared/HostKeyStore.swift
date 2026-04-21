@@ -61,9 +61,17 @@ public final class HostKeyStore: Sendable {
     }
 
     private func loadStore() -> [String: String] {
-        if let data = try? Data(contentsOf: fileURL),
-           let store = try? JSONDecoder().decode([String: String].self, from: data) {
-            return store
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: fileURL.path) {
+            do {
+                let data = try Data(contentsOf: fileURL)
+                return try JSONDecoder().decode([String: String].self, from: data)
+            } catch {
+                Self.logger.error(
+                    "Failed to decode host key store at \(self.fileURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+                backupCorruptStoreIfNeeded(using: fileManager)
+            }
         }
 
         let store = legacyDefaults?.dictionary(forKey: Self.storeKey) as? [String: String] ?? [:]
@@ -82,6 +90,22 @@ public final class HostKeyStore: Sendable {
         } catch {
             Self.logger.error(
                 "Failed to persist host key store at \(self.fileURL.path, privacy: .public) via directory \(directoryURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    private func backupCorruptStoreIfNeeded(using fileManager: FileManager) {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = formatter.string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let backupURL = fileURL.appendingPathExtension("corrupt.\(timestamp)")
+
+        do {
+            try fileManager.moveItem(at: fileURL, to: backupURL)
+        } catch {
+            Self.logger.error(
+                "Failed to move corrupt host key store from \(self.fileURL.path, privacy: .public) to \(backupURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
         }
     }

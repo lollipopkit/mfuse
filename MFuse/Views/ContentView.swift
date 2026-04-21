@@ -33,7 +33,9 @@ struct ContentView: View {
             )
             .frame(minWidth: 480, minHeight: 400)
         }
-        .sheet(isPresented: $showingExtensionGuide) {
+        .sheet(isPresented: $showingExtensionGuide, onDismiss: {
+            connectionManager.needsExtensionSetup = false
+        }) {
             ExtensionGuideView()
         }
         .alert("Unable to Save Connection", isPresented: saveErrorIsPresented) {
@@ -46,7 +48,6 @@ struct ContentView: View {
         .onReceive(connectionManager.$needsExtensionSetup) { needs in
             if needs {
                 showingExtensionGuide = true
-                connectionManager.needsExtensionSetup = false
             }
         }
         .toolbar {
