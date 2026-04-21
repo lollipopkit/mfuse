@@ -10,7 +10,7 @@ public final class BackendRegistry: @unchecked Sendable {
     private var factories: [BackendType: Factory] = [:]
     private let lock = NSLock()
 
-    private init() {}
+    public init() {}
 
     /// Register a factory for a backend type. Call once at app/extension launch.
     public func register(_ type: BackendType, factory: @escaping Factory) {

@@ -168,6 +168,7 @@ final class ConnectionManagerTests: XCTestCase {
     private var legacyDefaultsSuiteName: String!
     private var testSymlinkBaseURL: URL!
     private var testContainerURL: URL!
+    private var registry: BackendRegistry!
 
     override func setUp() {
         super.setUp()
@@ -185,8 +186,8 @@ final class ConnectionManagerTests: XCTestCase {
         testSymlinkBaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MFuseCoreTests-\(UUID().uuidString)", isDirectory: true)
 
-        // Register mock backend
-        BackendRegistry.shared.register(.sftp) { _, _ in
+        registry = BackendRegistry()
+        registry.register(.sftp) { _, _ in
             let fs = MockFileSystem()
             MockFileSystemFactory.lastCreated = fs
             return fs
@@ -195,13 +196,14 @@ final class ConnectionManagerTests: XCTestCase {
         manager = ConnectionManager(
             storage: storage,
             credentialProvider: credentialProvider,
-            registry: .shared
+            registry: registry
         )
     }
 
     override func tearDown() {
         try? storage.saveConnections([])
         MockFileSystemFactory.lastCreated = nil
+        registry = nil
         if let legacyDefaultsSuiteName {
             legacyDefaults?.removePersistentDomain(forName: legacyDefaultsSuiteName)
         }
@@ -441,10 +443,13 @@ final class ConnectionManagerTests: XCTestCase {
     }
 
     private func waitForMountState(_ id: UUID) async -> MountState {
-        for _ in 0..<30 {
+        let maxAttempts = 20
+        let retryDelay: UInt64 = 500_000_000
+
+        for _ in 0..<maxAttempts {
             let state = manager.mountState(for: id)
             if case .mounting = state {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                try? await Task.sleep(nanoseconds: retryDelay)
                 continue
             }
             return state

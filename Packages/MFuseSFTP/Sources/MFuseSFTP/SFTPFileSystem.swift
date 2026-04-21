@@ -124,6 +124,9 @@ public actor SFTPFileSystem: RemoteFileSystem {
                 return try await enumerateViaExec(at: path, remotePath: remotePath)
             }
         } catch {
+            if error is CancellationError {
+                throw error
+            }
             throw mapOperationError(error, path: path)
         }
     }
@@ -359,7 +362,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
 
     private func shouldFallbackEnumeration(after error: Error) -> Bool {
         if error is CancellationError {
-            return true
+            return false
         }
 
         if let remoteError = error as? RemoteFileSystemError {
@@ -380,7 +383,6 @@ public actor SFTPFileSystem: RemoteFileSystem {
 
         let description = String(reflecting: error).lowercased()
         return description.contains("timed out")
-            || description.contains("cancel")
             || description.contains("connection closed")
             || description.contains("missing response")
     }

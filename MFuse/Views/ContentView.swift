@@ -98,13 +98,24 @@ struct ContentView: View {
         Task {
             do {
                 let keychain = KeychainService()
+                let previousCredential = try await keychain.retrieve(for: config.id)
                 try await keychain.store(credential, for: config.id)
-                if connectionManager.connections.contains(where: { $0.id == config.id }) {
-                    try connectionManager.update(config)
-                } else {
-                    try connectionManager.add(config)
+                do {
+                    if connectionManager.connections.contains(where: { $0.id == config.id }) {
+                        try connectionManager.update(config)
+                    } else {
+                        try connectionManager.add(config)
+                    }
+                } catch {
+                    if let previousCredential {
+                        try? await keychain.store(previousCredential, for: config.id)
+                    } else {
+                        try? await keychain.delete(for: config.id)
+                    }
+                    throw error
                 }
                 await MainActor.run {
+                    selectedConnection = config
                     editorPresentation = nil
                 }
             } catch {

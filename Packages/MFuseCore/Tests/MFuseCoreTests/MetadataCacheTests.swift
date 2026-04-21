@@ -20,6 +20,13 @@ final class MetadataCacheTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: dbPath)
     }
 
+    private func makeIsolatedDatabasePath(_ name: String) throws -> String {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MFuseTest_\(name)_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return directoryURL.appendingPathComponent("test_cache.sqlite").path
+    }
+
     func testPutAndGet() async {
         let item = RemoteItem(
             path: RemotePath("/home/user/file.txt"),
@@ -86,16 +93,18 @@ final class MetadataCacheTests: XCTestCase {
         for item in items { await cache.put(item: item) }
 
         await cache.invalidateAll()
-        let a = await cache.get(path: RemotePath("/a"))
-        let b = await cache.get(path: RemotePath("/b"))
-        XCTAssertNil(a)
-        XCTAssertNil(b)
+        let entryA = await cache.get(path: RemotePath("/a"))
+        let entryB = await cache.get(path: RemotePath("/b"))
+        XCTAssertNil(entryA)
+        XCTAssertNil(entryB)
     }
 
-    func testExpiredEntries() async {
+    func testExpiredEntries() async throws {
+        let expiredDBPath = try makeIsolatedDatabasePath("expired")
+
         // Create cache with 0 TTL (immediate expiration)
-        let expiredCache = MetadataCache(path: dbPath, ttl: 0)
-        try? await expiredCache.open()
+        let expiredCache = MetadataCache(path: expiredDBPath, ttl: 0)
+        try await expiredCache.open()
 
         let item = RemoteItem(
             path: RemotePath("/expired"),
@@ -109,11 +118,13 @@ final class MetadataCacheTests: XCTestCase {
 
         await expiredCache.close()
 
-        let reopenedCache = MetadataCache(path: dbPath, ttl: 0)
-        try? await reopenedCache.open()
+        let reopenedCache = MetadataCache(path: expiredDBPath, ttl: 0)
+        try await reopenedCache.open()
         let expiredAfterReopen = await reopenedCache.get(path: item.path)
         XCTAssertNil(expiredAfterReopen)
         await reopenedCache.close()
+
+        try? FileManager.default.removeItem(atPath: expiredDBPath)
     }
 
     func testPutAllReplacesOldChildren() async throws {

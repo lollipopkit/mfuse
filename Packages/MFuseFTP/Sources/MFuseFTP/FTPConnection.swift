@@ -28,50 +28,61 @@ final class FTPConnection: @unchecked Sendable {
     // MARK: - Connect / Disconnect
 
     func connect() async throws {
-        let handler = FTPResponseHandler()
-        let bootstrap = ClientBootstrap(group: group)
-            .channelOption(.socketOption(.so_reuseaddr), value: 1)
-            .channelInitializer { channel in
-                if self.useTLS {
-                    do {
-                        let sslHandler = try self.makeTLSHandler(serverHostname: self.host)
-                        return channel.pipeline.addHandlers([
-                            sslHandler,
-                            ByteToMessageHandler(FTPLineDecoder()),
-                            handler
-                        ])
-                    } catch {
-                        return channel.eventLoop.makeFailedFuture(error)
+        try await commandGate.withLock {
+            if let existingChannel = currentChannel(), existingChannel.isActive {
+                return
+            }
+
+            let staleChannel = takeChannel()
+            try await staleChannel?.close()
+
+            let handler = FTPResponseHandler()
+            let bootstrap = ClientBootstrap(group: group)
+                .channelOption(.socketOption(.so_reuseaddr), value: 1)
+                .channelInitializer { channel in
+                    if self.useTLS {
+                        do {
+                            let sslHandler = try self.makeTLSHandler(serverHostname: self.host)
+                            return channel.pipeline.addHandlers([
+                                sslHandler,
+                                ByteToMessageHandler(FTPLineDecoder()),
+                                handler
+                            ])
+                        } catch {
+                            return channel.eventLoop.makeFailedFuture(error)
+                        }
                     }
+                    return channel.pipeline.addHandlers([
+                        ByteToMessageHandler(FTPLineDecoder()),
+                        handler
+                    ])
                 }
-                return channel.pipeline.addHandlers([
-                    ByteToMessageHandler(FTPLineDecoder()),
-                    handler
-                ])
+
+            let connectedChannel = try await waitForFuture(
+                bootstrap.connect(host: host, port: port)
+            )
+
+            do {
+                // Read welcome banner
+                let welcome = try await handler.readResponse(timeout: Self.operationTimeout)
+                guard welcome.code >= 200 && welcome.code < 400 else {
+                    throw FTPError.connectionFailed("Server rejected connection: \(welcome.text)")
+                }
+            } catch {
+                try? await connectedChannel.close()
+                throw error
             }
 
-        let connectedChannel = try await waitForFuture(
-            bootstrap.connect(host: host, port: port)
-        )
-
-        do {
-            // Read welcome banner
-            let welcome = try await handler.readResponse(timeout: Self.operationTimeout)
-            guard welcome.code >= 200 && welcome.code < 400 else {
-                throw FTPError.connectionFailed("Server rejected connection: \(welcome.text)")
-            }
-        } catch {
-            try? await connectedChannel.close()
-            setChannel(nil)
-            throw error
+            let previousChannel = replaceChannel(connectedChannel)
+            try await previousChannel?.close()
         }
-
-        setChannel(connectedChannel)
     }
 
     func close() async throws {
-        let channel = takeChannel()
-        try await channel?.close()
+        try await commandGate.withLock {
+            let channel = takeChannel()
+            try await channel?.close()
+        }
     }
 
     // MARK: - Command Execution
@@ -182,7 +193,7 @@ final class FTPConnection: @unchecked Sendable {
     private func parsePASV(_ text: String) throws -> (String, Int) {
         // Format: "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)"
         guard let start = text.firstIndex(of: "("),
-              let end = text.firstIndex(of: ")") else {
+              let end = text[text.index(after: start)...].firstIndex(of: ")") else {
             throw FTPError.protocolError("Cannot parse PASV response: \(text)")
         }
         let inner = text[text.index(after: start)..<end]
@@ -283,10 +294,12 @@ final class FTPConnection: @unchecked Sendable {
         return channel
     }
 
-    private func setChannel(_ channel: Channel?) {
+    private func replaceChannel(_ channel: Channel?) -> Channel? {
         channelLock.lock()
+        let previousChannel = self.channel
         self.channel = channel
         channelLock.unlock()
+        return previousChannel
     }
 
     private func takeChannel() -> Channel? {
@@ -524,7 +537,11 @@ final class FTPResponseHandler: ChannelInboundHandler {
         lock.unlock()
 
         continuations.forEach { $0.resume(throwing: error) }
-        context?.close(promise: nil)
+        if let context {
+            context.eventLoop.execute {
+                context.close(promise: nil)
+            }
+        }
     }
 }
 
@@ -650,7 +667,11 @@ final class FTPDataHandler: ChannelInboundHandler {
         lock.unlock()
 
         continuationsToResume.forEach { $0.resume(throwing: error) }
-        context?.close(promise: nil)
+        if let context {
+            context.eventLoop.execute {
+                context.close(promise: nil)
+            }
+        }
     }
 }
 

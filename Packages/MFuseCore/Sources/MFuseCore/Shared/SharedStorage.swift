@@ -59,8 +59,12 @@ public final class SharedStorage: Sendable {
     // MARK: - Connections
 
     public func loadConnections() -> [ConnectionConfig] {
+        let connectionsFileExists = FileManager.default.fileExists(atPath: connectionsFileURL.path)
         if let connections = readConnectionsFromDisk(at: connectionsFileURL) {
             return connections
+        }
+        guard !connectionsFileExists else {
+            return []
         }
 
         guard let data = legacyDefaults?.data(forKey: AppGroupConstants.connectionsKey),

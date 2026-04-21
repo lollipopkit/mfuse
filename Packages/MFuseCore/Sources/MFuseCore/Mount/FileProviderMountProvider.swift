@@ -63,8 +63,8 @@ public final class FileProviderMountProvider: MountProvider {
         guard let domain = domains.first(where: { $0.identifier == domainID }) else {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
-        try? removeBootstrapConfig(for: config)
         try await NSFileProviderManager.remove(domain)
+        try removeBootstrapConfig(for: config)
     }
 
     public func mountedDomains() async throws -> [String] {

@@ -120,17 +120,7 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
             return url
         }
 
-        let baseURL: URL
-        if let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
-        ) {
-            baseURL = containerURL
-        } else {
-            Self.logger.warning(
-                "FileProviderDomainStateStore app group container unavailable for \(AppGroupConstants.groupIdentifier, privacy: .public); using temporaryDirectory fallback"
-            )
-            baseURL = FileManager.default.temporaryDirectory
-        }
+        let baseURL = try Self.requiredAppGroupContainerURL()
         let fallbackURL = baseURL
             .appendingPathComponent("File Provider State", isDirectory: true)
             .appendingPathComponent(domain.identifier.rawValue, isDirectory: true)
@@ -165,6 +155,7 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         guard securityScopedAccessTracker.trackIfNotExists(path: cacheKey, {
             url.stopAccessingSecurityScopedResource()
         }) else {
+            url.stopAccessingSecurityScopedResource()
             return url
         }
 
@@ -219,9 +210,7 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
     }
 
     private static func bootstrapStorageURL(for domainIdentifier: String) throws -> URL {
-        let baseURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
-        ) ?? FileManager.default.temporaryDirectory
+        let baseURL = try requiredAppGroupContainerURL()
 
         let directoryURL = baseURL
             .appendingPathComponent("Library", isDirectory: true)
@@ -232,6 +221,21 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
 
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return directoryURL
+    }
+
+    private static func requiredAppGroupContainerURL() throws -> URL {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
+        ) else {
+            logger.error(
+                "FileProviderDomainStateStore app group container unavailable for \(AppGroupConstants.groupIdentifier, privacy: .public)"
+            )
+            throw RemoteFileSystemError.operationFailed(
+                "App Group container unavailable for \(AppGroupConstants.groupIdentifier)"
+            )
+        }
+
+        return containerURL
     }
 }
 #endif

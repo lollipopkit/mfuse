@@ -113,7 +113,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             }
 
             let req = try authorizedRequest(url: urlStr)
-            let (data, response) = try await session.data(for: req)
+            let (data, response) = try await executeAuthorizedRequest(req, path: path)
             try checkHTTPResponse(response, path: path)
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let files = json["files"] as? [[String: Any]] ?? []
@@ -149,7 +149,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let fileID = try await resolveFileID(for: path)
         let urlStr = "\(Self.apiBase)/files/\(fileID)?fields=id,name,mimeType,size,modifiedTime,createdTime"
         let req = try authorizedRequest(url: urlStr)
-        let (data, response) = try await session.data(for: req)
+        let (data, response) = try await executeAuthorizedRequest(req, path: path)
         try checkHTTPResponse(response, path: path)
         let file = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
 
@@ -174,7 +174,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let fileID = try await resolveFileID(for: path)
         let urlStr = "\(Self.apiBase)/files/\(fileID)?alt=media"
         let req = try authorizedRequest(url: urlStr)
-        let (data, response) = try await session.data(for: req)
+        let (data, response) = try await executeAuthorizedRequest(req, path: path)
         try checkHTTPResponse(response, path: path)
         return data
     }
@@ -189,7 +189,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         req.httpBody = data
 
-        let (_, response) = try await session.data(for: req)
+        let (_, response) = try await executeAuthorizedRequest(req, path: path)
         try checkHTTPResponse(response, path: path)
     }
 
@@ -220,7 +220,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         req.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
 
-        let (responseData, response) = try await session.data(for: req)
+        let (responseData, response) = try await executeAuthorizedRequest(req, path: path)
         try checkHTTPResponse(response, path: path)
         if let fileID = try parseFileID(from: responseData) {
             cacheResolvedID(fileID, for: path)
@@ -248,7 +248,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = metadataJSON
 
-        let (responseData, response) = try await session.data(for: req)
+        let (responseData, response) = try await executeAuthorizedRequest(req, path: path)
         try checkHTTPResponse(response, path: path)
         if let fileID = try parseFileID(from: responseData) {
             cacheResolvedID(fileID, for: path)
@@ -262,7 +262,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         var req = try authorizedRequest(url: "\(Self.apiBase)/files/\(fileID)")
         req.httpMethod = "DELETE"
 
-        let (_, response) = try await session.data(for: req)
+        let (_, response) = try await executeAuthorizedRequest(req, path: path)
         if let http = response as? HTTPURLResponse, http.statusCode != 204 && http.statusCode != 200 {
             throw RemoteFileSystemError.operationFailed("Delete failed: HTTP \(http.statusCode)")
         }
@@ -295,7 +295,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let body: [String: Any] = ["name": newName]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (_, response) = try await session.data(for: req)
+        let (_, response) = try await executeAuthorizedRequest(req, path: destination)
         try checkHTTPResponse(response, path: destination)
         invalidateCachedPath(source)
         invalidateCachedPath(destination)
@@ -317,7 +317,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (responseData, response) = try await session.data(for: req)
+        let (responseData, response) = try await executeAuthorizedRequest(req, path: destination)
         try checkHTTPResponse(response, path: destination)
         if let fileID = try parseFileID(from: responseData) {
             cacheResolvedID(fileID, for: destination)
@@ -345,10 +345,20 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             currentPath = currentPath.appending(component)
             let escapedName = component.replacingOccurrences(of: "'", with: "\\'")
             let query = "'\(currentID)' in parents and name='\(escapedName)' and trashed=false"
-            let urlStr = "\(Self.apiBase)/files?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)&fields=files(id,mimeType)&pageSize=2"
+            guard var urlComponents = URLComponents(string: "\(Self.apiBase)/files") else {
+                throw RemoteFileSystemError.operationFailed("Invalid Google Drive files endpoint")
+            }
+            urlComponents.queryItems = [
+                URLQueryItem(name: "q", value: query),
+                URLQueryItem(name: "fields", value: "files(id,mimeType)"),
+                URLQueryItem(name: "pageSize", value: "2")
+            ]
+            guard let urlStr = urlComponents.url?.absoluteString else {
+                throw RemoteFileSystemError.operationFailed("Failed to construct Google Drive path resolution URL")
+            }
 
             let req = try authorizedRequest(url: urlStr)
-            let (data, response) = try await session.data(for: req)
+            let (data, response) = try await executeAuthorizedRequest(req, path: path)
             try checkHTTPResponse(response, path: path)
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let files = json["files"] as? [[String: Any]] ?? []
@@ -394,11 +404,64 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         return req
     }
 
+    private func executeAuthorizedRequest(
+        _ request: URLRequest,
+        path _: RemotePath
+    ) async throws -> (Data, URLResponse) {
+        let initialResult = try await session.data(for: request)
+        guard let http = initialResult.1 as? HTTPURLResponse, http.statusCode == 401 else {
+            return initialResult
+        }
+
+        do {
+            try await refreshAccessToken()
+        } catch {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+
+        var retriedRequest = request
+        guard let token = accessToken else {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        retriedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let retriedResult = try await session.data(for: retriedRequest)
+        if let retriedHTTP = retriedResult.1 as? HTTPURLResponse, retriedHTTP.statusCode == 401 {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        return retriedResult
+    }
+
+    private func refreshAccessToken() async throws {
+        guard let refreshToken = credential.password else {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+
+        let clientID = config.parameters["clientID"] ?? ""
+        let redirectURI = config.parameters["redirectURI"] ?? ""
+        guard !clientID.isEmpty, !redirectURI.isEmpty else {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+
+        let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
+        let newToken = try await provider.refresh(refreshToken: refreshToken)
+        let updatedCredential = Credential(
+            password: newToken.refreshToken ?? credential.password,
+            privateKey: credential.privateKey,
+            passphrase: credential.passphrase,
+            accessKeyID: credential.accessKeyID,
+            secretAccessKey: credential.secretAccessKey,
+            token: newToken.accessToken
+        )
+        try await onCredentialUpdated?(updatedCredential)
+        credential = updatedCredential
+        accessToken = newToken.accessToken
+    }
+
     private func checkHTTPResponse(_ response: URLResponse, path: RemotePath) throws {
         guard let http = response as? HTTPURLResponse else { return }
         switch http.statusCode {
         case 200...299: return
-        case 401: throw RemoteFileSystemError.authenticationFailed
         case 404: throw RemoteFileSystemError.notFound(path)
         default:
             throw RemoteFileSystemError.operationFailed("HTTP \(http.statusCode)")

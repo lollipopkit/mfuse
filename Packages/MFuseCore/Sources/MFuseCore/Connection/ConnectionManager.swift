@@ -271,7 +271,7 @@ public final class ConnectionManager: ObservableObject {
                         states[config.id] = .disconnected
                         scheduleMountResolution(for: config, using: mp)
                     } catch {
-                        states[config.id] = .connecting
+                        states[config.id] = .disconnected
                         mountResolutionTasks[config.id]?.cancel()
                         mountResolutionTasks.removeValue(forKey: config.id)
                         setMountState(.unmounted, for: config)
@@ -303,12 +303,16 @@ public final class ConnectionManager: ObservableObject {
         using mountProvider: any MountProvider
     ) async throws -> String {
         for attempt in 0..<Self.mountURLRetryCount {
+            try Task.checkCancellation()
             if let url = try await mountProvider.mountURL(for: config) {
+                try Task.checkCancellation()
                 return url.path
             }
 
             if attempt < Self.mountURLRetryCount - 1 {
+                try Task.checkCancellation()
                 try? await Task.sleep(nanoseconds: Self.mountURLRetryDelay)
+                try Task.checkCancellation()
             }
         }
 
@@ -324,10 +328,11 @@ public final class ConnectionManager: ObservableObject {
             guard let self else { return }
             do {
                 let path = try await self.resolveMountPath(for: config, using: mountProvider)
+                try Task.checkCancellation()
                 guard try await mountProvider.createSymlink(for: config) != nil else {
                     throw MountError.mountFailed("Failed to create symlink for \(config.name)")
                 }
-                if Task.isCancelled { return }
+                try Task.checkCancellation()
                 self.setMountState(.mounted(path: path), for: config)
             } catch {
                 if Task.isCancelled { return }
