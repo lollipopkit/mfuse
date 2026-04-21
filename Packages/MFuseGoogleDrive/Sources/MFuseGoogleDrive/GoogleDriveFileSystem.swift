@@ -7,6 +7,11 @@ import MFuseCore
 /// `Credential.password` (refresh token). `config.parameters["clientID"]` and
 /// `config.parameters["redirectURI"]` configure the OAuth client.
 public actor GoogleDriveFileSystem: RemoteFileSystem {
+    private struct CachedPathEntry: Sendable {
+        let fileID: String
+        let isFolder: Bool
+    }
+
     private static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -19,7 +24,9 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     private var credential: Credential
     private let onCredentialUpdated: (@Sendable (Credential) async throws -> Void)?
     private var accessToken: String?
-    private var pathToIDCache: [String: String] = ["/": "root"]
+    private var pathToIDCache: [String: CachedPathEntry] = [
+        "/": CachedPathEntry(fileID: "root", isFolder: true)
+    ]
     private let session = URLSession.shared
 
     private static let apiBase = "https://www.googleapis.com/drive/v3"
@@ -93,7 +100,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
 
     public func disconnect() async throws {
         accessToken = nil
-        pathToIDCache = ["/": "root"]
+        pathToIDCache = ["/": CachedPathEntry(fileID: "root", isFolder: true)]
     }
 
     // MARK: - Enumeration
@@ -249,7 +256,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let (responseData, response) = try await executeAuthorizedRequest(req, path: path)
         try checkHTTPResponse(response, path: path)
         if let fileID = try parseFileID(from: responseData) {
-            cacheResolvedID(fileID, for: path)
+            cacheResolvedID(fileID, isFolder: false, for: path)
         } else {
             invalidateCachedPath(path)
         }
@@ -288,7 +295,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let (responseData, response) = try await executeAuthorizedUpload(req, from: multipartURL, path: path)
         try checkHTTPResponse(response, path: path)
         if let fileID = try parseFileID(from: responseData) {
-            cacheResolvedID(fileID, for: path)
+            cacheResolvedID(fileID, isFolder: false, for: path)
         } else {
             invalidateCachedPath(path)
         }
@@ -324,7 +331,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let (responseData, response) = try await executeAuthorizedRequest(req, path: path)
         try checkHTTPResponse(response, path: path)
         if let fileID = try parseFileID(from: responseData) {
-            cacheResolvedID(fileID, for: path)
+            cacheResolvedID(fileID, isFolder: true, for: path)
         } else {
             invalidateCachedPath(path)
         }
@@ -336,9 +343,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         req.httpMethod = "DELETE"
 
         let (_, response) = try await executeAuthorizedRequest(req, path: path)
-        if let http = response as? HTTPURLResponse, http.statusCode != 204 && http.statusCode != 200 {
-            throw RemoteFileSystemError.operationFailed("Delete failed: HTTP \(http.statusCode)")
-        }
+        try checkHTTPResponse(response, path: path)
         invalidateCachedPath(path)
     }
 
@@ -385,7 +390,8 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         try checkHTTPResponse(response, path: destination)
         invalidateCachedPath(source)
         invalidateCachedPath(destination)
-        cacheResolvedID(fileID, for: destination)
+        let sourceIsFolder = pathToIDCache[source.absoluteString]?.isFolder ?? false
+        cacheResolvedID(fileID, isFolder: sourceIsFolder, for: destination)
     }
 
     public func copy(from source: RemotePath, to destination: RemotePath) async throws {
@@ -419,7 +425,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let (responseData, response) = try await executeAuthorizedRequest(req, path: destination)
         try checkHTTPResponse(response, path: destination)
         if let fileID = try parseFileID(from: responseData) {
-            cacheResolvedID(fileID, for: destination)
+            cacheResolvedID(fileID, isFolder: false, for: destination)
         } else {
             invalidateCachedPath(destination)
         }
@@ -431,8 +437,11 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     /// Google Drive is ID-based, not path-based, so we must walk from root.
     private func resolveFileID(for path: RemotePath, expectFolder: Bool = false) async throws -> String {
         if path.isRoot { return "root" }
-        if let cachedID = pathToIDCache[path.absoluteString] {
-            return cachedID
+        if let cachedEntry = pathToIDCache[path.absoluteString] {
+            if expectFolder && !cachedEntry.isFolder {
+                throw GoogleDriveError.notAFolder(path.absoluteString)
+            }
+            return cachedEntry.fileID
         }
 
         var currentID = "root"
@@ -491,10 +500,13 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             }
 
             currentID = fileID
-            cacheResolvedID(currentID, for: currentPath)
+            let mime = first["mimeType"] as? String ?? ""
+            cacheResolvedID(currentID, isFolder: mime == Self.folderMime, for: currentPath)
         }
 
-        cacheResolvedID(currentID, for: path)
+        if let cachedEntry = pathToIDCache[path.absoluteString] {
+            cacheResolvedID(currentID, isFolder: cachedEntry.isFolder, for: path)
+        }
         return currentID
     }
 
@@ -653,8 +665,8 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         return multipartURL
     }
 
-    private func cacheResolvedID(_ fileID: String, for path: RemotePath) {
-        pathToIDCache[path.absoluteString] = fileID
+    private func cacheResolvedID(_ fileID: String, isFolder: Bool, for path: RemotePath) {
+        pathToIDCache[path.absoluteString] = CachedPathEntry(fileID: fileID, isFolder: isFolder)
     }
 
     private func invalidateCachedPath(_ path: RemotePath) {
@@ -662,7 +674,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         pathToIDCache = pathToIDCache.filter { key, _ in
             key != path.absoluteString && !key.hasPrefix(prefix)
         }
-        pathToIDCache["/"] = "root"
+        pathToIDCache["/"] = CachedPathEntry(fileID: "root", isFolder: true)
     }
 
     private func parseFileID(from data: Data) throws -> String? {

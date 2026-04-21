@@ -106,9 +106,10 @@ public actor SFTPFileSystem: RemoteFileSystem {
     }
 
     public func disconnect() async throws {
-        sftp = nil
-        try await client?.close()
+        let oldClient = client
         client = nil
+        sftp = nil
+        try await oldClient?.close()
     }
 
     // MARK: - Enumeration

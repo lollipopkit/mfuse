@@ -274,8 +274,11 @@ public actor WebDAVFileSystem: RemoteFileSystem {
                 if http.statusCode == 404 {
                     throw RemoteFileSystemError.notFound(RemotePath(url.path))
                 }
-                if http.statusCode == 401 || http.statusCode == 403 {
+                if http.statusCode == 401 {
                     throw RemoteFileSystemError.authenticationFailed
+                }
+                if http.statusCode == 403 {
+                    throw RemoteFileSystemError.permissionDenied(RemotePath(url.path))
                 }
                 throw RemoteFileSystemError.connectionFailed("HTTP \(http.statusCode)")
             }
@@ -291,7 +294,8 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         guard acceptCodes.contains(http.statusCode) || http.statusCode == 207 else {
             switch http.statusCode {
             case 404: throw RemoteFileSystemError.notFound(path)
-            case 401, 403: throw RemoteFileSystemError.authenticationFailed
+            case 401: throw RemoteFileSystemError.authenticationFailed
+            case 403: throw RemoteFileSystemError.permissionDenied(path)
             case 405: throw RemoteFileSystemError.unsupported("Method not allowed")
             case 409: throw RemoteFileSystemError.operationFailed("Conflict (parent may not exist)")
             default:

@@ -101,11 +101,8 @@ public protocol RemoteFileSystem: Actor {
 public extension RemoteFileSystem {
 
     func readFile(at path: RemotePath, offset: UInt64, length: UInt32) async throws -> Data {
-        let fullData = try await readFile(at: path)
-        let start = min(Int(offset), fullData.count)
-        let end = min(start + Int(length), fullData.count)
-        guard start < fullData.count else { return Data() }
-        return fullData[start..<end]
+        _ = (path, offset, length)
+        throw RemoteFileSystemError.unsupported("Range reads must be implemented by the backend")
     }
 
     func copy(from source: RemotePath, to destination: RemotePath) async throws {
@@ -118,13 +115,13 @@ public extension RemoteFileSystem {
     }
 
     func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
-        let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
-        try await writeFile(at: path, data: data)
+        _ = (path, localFileURL)
+        throw RemoteFileSystemError.unsupported("Streaming writes from local files must be implemented by the backend")
     }
 
     func createFile(at path: RemotePath, from localFileURL: URL) async throws {
-        let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
-        try await createFile(at: path, data: data)
+        _ = (path, localFileURL)
+        throw RemoteFileSystemError.unsupported("Streaming creates from local files must be implemented by the backend")
     }
 
     func setPermissions(_ permissions: UInt16, at path: RemotePath) async throws {

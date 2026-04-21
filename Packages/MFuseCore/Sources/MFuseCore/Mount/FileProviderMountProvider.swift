@@ -224,8 +224,9 @@ public final class FileProviderMountProvider: MountProvider {
                 fileURLWithPath: destinationPath,
                 relativeTo: symlinkURL.deletingLastPathComponent()
             ).standardizedFileURL
-            if resolvedDestinationURL != expectedDestinationURL.standardizedFileURL {
-                // Fall through so stale managed symlinks get removed and recreated.
+            guard resolvedDestinationURL == expectedDestinationURL.standardizedFileURL
+                    || Self.isManagedMountDestination(resolvedDestinationURL) else {
+                return
             }
         } else {
             guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {

@@ -393,6 +393,7 @@ struct ConnectionEditorSheet: View {
     }
 
     private func clearCredentialState(except method: AuthMethod) {
+        password = ""
         switch method {
         case .password:
             oauthToken = ""
@@ -404,7 +405,6 @@ struct ConnectionEditorSheet: View {
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .agent, .anonymous:
-            password = ""
             oauthToken = ""
             privateKeyPath = ""
             s3AccessKeyID = ""

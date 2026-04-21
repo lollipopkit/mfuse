@@ -112,19 +112,25 @@ struct MFuseApp: App {
     @MainActor
     private func performInitialSetupIfNeeded() async {
         guard !didPerformInitialSetup else { return }
-        didPerformInitialSetup = true
 
         await connectionManager.syncMounts()
+        guard !Task.isCancelled else { return }
 
         let sharedDefaults = UserDefaults(suiteName: AppGroupConstants.groupIdentifier)
         if !(sharedDefaults?.bool(forKey: AppGroupConstants.extensionOnboardedKey) ?? false) {
             do {
                 _ = try await connectionManager.mountProvider?.mountedDomains()
+                guard !Task.isCancelled else { return }
                 sharedDefaults?.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
             } catch {
+                guard !Task.isCancelled else { return }
                 connectionManager.needsExtensionSetup = true
+                return
             }
         }
+
+        guard !Task.isCancelled else { return }
+        didPerformInitialSetup = true
     }
 }
 
