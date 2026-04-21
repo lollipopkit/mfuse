@@ -388,9 +388,9 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
 
         let (_, response) = try await executeAuthorizedRequest(req, path: destination)
         try checkHTTPResponse(response, path: destination)
+        let sourceIsFolder = pathToIDCache[source.absoluteString]?.isFolder ?? false
         invalidateCachedPath(source)
         invalidateCachedPath(destination)
-        let sourceIsFolder = pathToIDCache[source.absoluteString]?.isFolder ?? false
         cacheResolvedID(fileID, isFolder: sourceIsFolder, for: destination)
     }
 
@@ -412,6 +412,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         guard let dstParent = destination.parent else { throw RemoteFileSystemError.operationFailed("Cannot copy to root") }
         let destParentID = try await resolveFileID(for: dstParent, expectFolder: true)
         let newName = destination.name
+        let sourceIsFolder = pathToIDCache[source.absoluteString]?.isFolder ?? false
 
         var req = try authorizedRequest(url: "\(Self.apiBase)/files/\(fileID)/copy")
         req.httpMethod = "POST"
@@ -425,7 +426,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let (responseData, response) = try await executeAuthorizedRequest(req, path: destination)
         try checkHTTPResponse(response, path: destination)
         if let fileID = try parseFileID(from: responseData) {
-            cacheResolvedID(fileID, isFolder: false, for: destination)
+            cacheResolvedID(fileID, isFolder: sourceIsFolder, for: destination)
         } else {
             invalidateCachedPath(destination)
         }

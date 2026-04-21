@@ -168,7 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Environment Keys
 
 private struct KeychainServiceKey: EnvironmentKey {
-    static let defaultValue: KeychainService = KeychainService()
+    static var defaultValue: KeychainService {
+        fatalError("KeychainService was not injected. Use .environment(\\.keychainService, ...) to provide a KeychainService instance.")
+    }
 }
 
 extension EnvironmentValues {

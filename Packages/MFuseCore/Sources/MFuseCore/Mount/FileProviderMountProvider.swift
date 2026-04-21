@@ -125,11 +125,18 @@ public final class FileProviderMountProvider: MountProvider {
 
     /// Sanitize a connection name for use as a filesystem directory name.
     public static func sanitizeName(_ name: String) -> String {
-        var result = name
-        // Replace characters unsafe for filesystem paths
-        for ch: Character in ["/", ":", "\0"] {
-            result = result.map { $0 == ch ? "-" : $0 }.map(String.init).joined()
+        var result = String()
+        result.reserveCapacity(name.count)
+
+        for character in name {
+            switch character {
+            case "/", ":", "\0":
+                result.append("-")
+            default:
+                result.append(character)
+            }
         }
+
         // Collapse multiple dashes and trim
         while result.contains("--") {
             result = result.replacingOccurrences(of: "--", with: "-")

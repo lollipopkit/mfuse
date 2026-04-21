@@ -37,6 +37,7 @@ struct ConnectionEditorSheet: View {
     @State private var testResult: String?
     @State private var testSuccess = false
     @State private var didLoadStoredCredential = false
+    @State private var currentTestTask: Task<Void, Never>?
 
     private let existingID: UUID?
     private let draftID: UUID
@@ -239,6 +240,10 @@ struct ConnectionEditorSheet: View {
         .onChange(of: authMethod) { newMethod in
             clearCredentialState(except: newMethod)
         }
+        .onDisappear {
+            currentTestTask?.cancel()
+            currentTestTask = nil
+        }
     }
 
     // MARK: - Validation
@@ -248,7 +253,7 @@ struct ConnectionEditorSheet: View {
             if backendType == .googleDrive {
                 !gdClientID.isEmpty && !gdRedirectURI.isEmpty
             } else if backendType == .s3 {
-                UInt16(port) != nil || port.isEmpty
+                !s3Bucket.isEmpty && (UInt16(port) != nil || port.isEmpty)
             } else {
                 !host.isEmpty && (UInt16(port) != nil || port.isEmpty)
             }
@@ -296,7 +301,8 @@ struct ConnectionEditorSheet: View {
             )
             credential = try buildCredential()
 
-            Task {
+            currentTestTask?.cancel()
+            currentTestTask = Task {
                 let storage = SharedStorage.withLegacyMigration()
                 let keychain = KeychainService()
                 let manager = await ConnectionManager(
@@ -304,7 +310,9 @@ struct ConnectionEditorSheet: View {
                     credentialProvider: keychain
                 )
                 let result = await manager.testConnection(config, credential: credential)
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    guard !Task.isCancelled else { return }
                     switch result {
                     case .success:
                         testResult = "Connection successful!"
@@ -314,6 +322,7 @@ struct ConnectionEditorSheet: View {
                         testSuccess = false
                     }
                     isTesting = false
+                    currentTestTask = nil
                 }
             }
         } catch {
@@ -393,7 +402,6 @@ struct ConnectionEditorSheet: View {
     }
 
     private func clearCredentialState(except method: AuthMethod) {
-        password = ""
         switch method {
         case .password:
             oauthToken = ""
@@ -443,8 +451,8 @@ struct ConnectionEditorSheet: View {
                     "Google Drive requires both OAuth Client ID and Redirect URI"
                 )
             }
-            if !gdClientID.isEmpty { params["clientID"] = gdClientID }
-            if !gdRedirectURI.isEmpty { params["redirectURI"] = gdRedirectURI }
+            params["clientID"] = gdClientID
+            params["redirectURI"] = gdRedirectURI
         default:
             break
         }

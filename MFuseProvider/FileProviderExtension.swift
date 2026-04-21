@@ -106,6 +106,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     private static let bootstrapTimeoutSeconds = 15.0
     private static let contentCacheStoreRetryCount = 2
     private static let streamedReadChunkSize: UInt32 = 1_048_576
+    private static let sharedKeychain = KeychainService()
     private static let registerBackendsOnce: Void = {
         BackendRegistry.shared.registerAllBuiltIns(
             sftpFactory: { config, credential in
@@ -127,12 +128,11 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 NFSFileSystem(config: config, credential: credential)
             },
             googleDriveFactory: { config, credential in
-                let keychain = KeychainService()
                 return GoogleDriveFileSystem(
                     config: config,
                     credential: credential
                 ) { updatedCredential in
-                    try await keychain.store(updatedCredential, for: config.id)
+                    try await Self.sharedKeychain.store(updatedCredential, for: config.id)
                 }
             }
         )

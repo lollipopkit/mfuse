@@ -314,10 +314,10 @@ public actor WebDAVFileSystem: RemoteFileSystem {
     }
 
     private func extractName(from href: String, isCollection: Bool) -> String {
-        var h = href
-        if h.hasSuffix("/") { h = String(h.dropLast()) }
-        h = h.removingPercentEncoding ?? h
-        return (h as NSString).lastPathComponent
+        var cleanedHref = href
+        if cleanedHref.hasSuffix("/") { cleanedHref = String(cleanedHref.dropLast()) }
+        cleanedHref = cleanedHref.removingPercentEncoding ?? cleanedHref
+        return (cleanedHref as NSString).lastPathComponent
     }
 
     private func normalizeHref(_ href: String, relativeTo baseURL: URL) -> String {
