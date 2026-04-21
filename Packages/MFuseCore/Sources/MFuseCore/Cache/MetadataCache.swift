@@ -100,6 +100,47 @@ public actor MetadataCache {
         return cachedEmptyDirectoryState(for: parent, now: now) ? [] : nil
     }
 
+    /// Get all cached descendants of a directory.
+    public func descendants(of parent: RemotePath) -> [RemoteItem] {
+        guard let db = db else { return [] }
+
+        let now = Date().timeIntervalSince1970
+        let sql: String
+        let pattern: String?
+
+        if parent.isRoot {
+            sql = "SELECT data FROM items WHERE expires > ?1"
+            pattern = nil
+        } else {
+            sql = "SELECT data FROM items WHERE path LIKE ?1 AND expires > ?2"
+            pattern = parent.absoluteString + "/%"
+        }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        if let pattern {
+            sqlite3_bind_text(stmt, 1, pattern, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_double(stmt, 2, now)
+        } else {
+            sqlite3_bind_double(stmt, 1, now)
+        }
+
+        let decoder = JSONDecoder()
+        var items: [RemoteItem] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let blob = sqlite3_column_blob(stmt, 0) else { continue }
+            let len = sqlite3_column_bytes(stmt, 0)
+            let data = Data(bytes: blob, count: Int(len))
+            if let item = try? decoder.decode(RemoteItem.self, from: data) {
+                items.append(item)
+            }
+        }
+
+        return items
+    }
+
     // MARK: - Put
 
     public func put(item: RemoteItem) {

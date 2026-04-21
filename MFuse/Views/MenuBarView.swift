@@ -70,8 +70,8 @@ struct MenuBarView: View {
 
             HStack {
                 Button("Open MFuse") {
+                    AppDelegate.activateMainInterface()
                     openWindow(id: MFuseApp.mainWindowID)
-                    NSApp.activate(ignoringOtherApps: true)
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
@@ -84,7 +84,7 @@ struct MenuBarView: View {
                 Spacer()
                 Button("Quit") {
                     isQuitting = true
-                    NSApplication.shared.terminate(nil)
+                    AppDelegate.requestFullTermination()
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)

@@ -670,10 +670,32 @@ public actor SFTPFileSystem: RemoteFileSystem {
         return (perms & 0o170000) == 0o040000
     }
 
+    private func isSymlink(_ attrs: SFTPFileAttributes) -> Bool {
+        guard let perms = attrs.permissions else { return false }
+        return (perms & 0o170000) == 0o120000
+    }
+
+    private func symlinkTarget(from component: SFTPPathComponent) -> String? {
+        guard isSymlink(component.attributes),
+              let range = component.longname.range(of: " -> ", options: .backwards) else {
+            return nil
+        }
+
+        let target = String(component.longname[range.upperBound...])
+        return target.isEmpty ? nil : target
+    }
+
     private func remoteItem(from component: SFTPPathComponent, parentPath: RemotePath) -> RemoteItem {
         let childPath = parentPath.appending(component.filename)
         let attrs = component.attributes
-        let type: RemoteItemType = isDirectory(attrs) ? .directory : .file
+        let type: RemoteItemType
+        if isDirectory(attrs) {
+            type = .directory
+        } else if isSymlink(attrs) {
+            type = .symlink(target: symlinkTarget(from: component) ?? "")
+        } else {
+            type = .file
+        }
         return RemoteItem(
             path: childPath,
             type: type,
@@ -685,7 +707,14 @@ public actor SFTPFileSystem: RemoteFileSystem {
     }
 
     private func remoteItem(from attrs: SFTPFileAttributes, path: RemotePath) -> RemoteItem {
-        let type: RemoteItemType = isDirectory(attrs) ? .directory : .file
+        let type: RemoteItemType
+        if isDirectory(attrs) {
+            type = .directory
+        } else if isSymlink(attrs) {
+            type = .symlink(target: "")
+        } else {
+            type = .file
+        }
         return RemoteItem(
             path: path,
             type: type,

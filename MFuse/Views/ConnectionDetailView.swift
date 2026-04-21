@@ -11,11 +11,6 @@ struct ConnectionDetailView: View {
         connectionManager.effectiveMountState(for: config.id)
     }
 
-    private var symlinkBaseURL: URL {
-        connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -43,32 +38,6 @@ struct ConnectionDetailView: View {
                                 .foregroundStyle(iconColor)
                             Text(mount.statusText)
                                 .foregroundStyle(mountStateColor)
-                        }
-                    }
-                    if mount.isMounted {
-                        LabeledContent("Shortcut") {
-                            Text(
-                                FileProviderMountProvider.symlinkDisplayPath(
-                                    for: config,
-                                    baseDir: symlinkBaseURL
-                                )
-                            )
-                                .textSelection(.enabled)
-                        }
-                        if let path = mount.mountPath {
-                            LabeledContent("Mount Path") {
-                                Text(path)
-                                    .textSelection(.enabled)
-                                    .font(.caption)
-                            }
-                        }
-                    }
-                }
-
-                if !config.parameters.isEmpty {
-                    Section("Parameters") {
-                        ForEach(config.parameters.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
-                            LabeledContent(key, value: value)
                         }
                     }
                 }

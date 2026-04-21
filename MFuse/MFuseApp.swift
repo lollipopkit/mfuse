@@ -162,7 +162,28 @@ struct MFuseApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var allowsTermination = false
     static var isTerminationInProgress = false
+    static var requestsFullTermination = false
     static var shutdownHandler: (@MainActor () async -> Void)?
+
+    @MainActor
+    static func requestFullTermination() {
+        requestsFullTermination = true
+        NSApp.terminate(nil)
+    }
+
+    @MainActor
+    static func activateMainInterface() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @MainActor
+    private static func keepRunningInMenuBar(_ application: NSApplication) {
+        application.windows.forEach { window in
+            window.orderOut(nil)
+        }
+        application.setActivationPolicy(.accessory)
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !Self.allowsTermination else {
@@ -176,11 +197,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateLater
         }
 
+        guard Self.requestsFullTermination else {
+            Self.keepRunningInMenuBar(sender)
+            return .terminateCancel
+        }
+
         Self.isTerminationInProgress = true
 
         Task { @MainActor in
             await Self.shutdownHandler?()
             Self.allowsTermination = true
+            Self.requestsFullTermination = false
             Self.isTerminationInProgress = false
             sender.reply(toApplicationShouldTerminate: true)
         }
@@ -189,13 +216,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        sender.setActivationPolicy(.regular)
+        Self.activateMainInterface()
         if !flag {
             sender.windows.forEach { window in
                 window.makeKeyAndOrderFront(nil)
             }
         }
-        sender.activate(ignoringOtherApps: true)
         return true
     }
 }

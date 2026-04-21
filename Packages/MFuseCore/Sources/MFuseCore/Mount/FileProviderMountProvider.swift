@@ -56,8 +56,19 @@ public final class FileProviderMountProvider: MountProvider {
         do {
             try persistBootstrapConfig(for: config)
         } catch {
-            try? await NSFileProviderManager.remove(domain)
-            throw error
+            let persistError = error
+            do {
+                try await NSFileProviderManager.remove(domain)
+            } catch {
+                let rollbackError = error
+                Self.logger.error(
+                    "persistBootstrapConfig(for:) failed for domain \(domain.identifier.rawValue, privacy: .public): \(persistError.localizedDescription, privacy: .public); rollback via NSFileProviderManager.remove(domain) also failed: \(rollbackError.localizedDescription, privacy: .public)"
+                )
+                throw MountError.mountFailed(
+                    "persistBootstrapConfig(for:) failed for \(domain.identifier.rawValue): \(persistError.localizedDescription); rollback via NSFileProviderManager.remove(domain) failed: \(rollbackError.localizedDescription)"
+                )
+            }
+            throw persistError
         }
     }
 
@@ -128,7 +139,7 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func removeSymlink(for config: ConnectionConfig) async throws {
-        let expectedDestinationURL = try? await resolveMountURL(for: config)
+        let expectedDestinationURL = try await resolveMountURL(for: config)
         let symlinkURL = Self.symlinkURL(for: config, baseDir: symlinkBaseURL)
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
         try cleanupLegacyShortcutIfNeeded(for: config)

@@ -114,11 +114,11 @@ make test       # 运行稳定的 package 测试子集（test-stable 别名）
 make test-all   # 运行完整 package 测试矩阵
 make lint       # 运行 SwiftLint
 make build      # 构建应用 scheme
-make release-install-app   # 构建已签名 Release 并安装到 /Applications/MFuse.app
+make debug-install-app     # 构建已签名 Debug 并安装到 /Applications/MFuse.app
 make clean      # 清理构建产物
 ```
 
-`make release-install-app` 会执行 `scripts/release/build-and-install-app.sh`：按当前 `MFuse.xcodeproj` 已配置好的签名设置，以 `Release` 配置归档 `MFuse` scheme，校验归档里的主应用和扩展都嵌入了已授权共享 App Group 的 profile，然后把归档产物安装到 `/Applications/MFuse.app`。
+`make debug-install-app` 会执行 `scripts/release/build-and-install-app.sh`：按当前 `MFuse.xcodeproj` 已配置好的签名设置，以 `Debug` 配置归档 `MFuse` scheme，校验归档里的主应用和扩展都嵌入了已授权共享 App Group 的 profile，然后把归档产物安装到 `/Applications/MFuse.app`。
 
 这个本地安装流程现在直接遵循你在 Xcode 工程里已经配置好的签名方式。如果当前 target 走的是显式 provisioning profile，那么这些 profile 仍然需要在 `com.apple.security.application-groups` 里包含 `group.com.lollipopkit.mfuse.shared`。
 
@@ -127,7 +127,7 @@ make clean      # 清理构建产物
 如果你只是想本地验证而不覆盖系统 Applications，可以改写安装目标：
 
 ```bash
-INSTALL_PATH=/tmp/MFuse.app make release-install-app
+INSTALL_PATH=/tmp/MFuse.app make debug-install-app
 ```
 
 ## 本机构建 DMG

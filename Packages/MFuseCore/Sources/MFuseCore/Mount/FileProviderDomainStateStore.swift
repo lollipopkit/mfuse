@@ -148,7 +148,14 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         else {
             return nil
         }
-        return try JSONDecoder().decode(ConnectionConfig.self, from: payload)
+        do {
+            return try JSONDecoder().decode(ConnectionConfig.self, from: payload)
+        } catch {
+            logger.error(
+                "Failed to decode \(String(describing: ConnectionConfig.self), privacy: .public) bootstrap config from userInfo payload: \(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
     }
 
     public static func removeBootstrapConfig(for domainIdentifier: String) throws {

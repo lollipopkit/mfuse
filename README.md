@@ -114,11 +114,11 @@ make test       # run the stable package test subset (alias of test-stable)
 make test-all   # run the full package test matrix
 make lint       # run SwiftLint
 make build      # build the app scheme
-make release-install-app  # build a signed Release app and install it to /Applications/MFuse.app
+make debug-install-app  # build a signed Debug app and install it to /Applications/MFuse.app
 make clean      # remove build outputs
 ```
 
-`make release-install-app` runs `scripts/release/build-and-install-app.sh`, archives the `MFuse` scheme in `Release` using the signing settings already configured in the current `MFuse.xcodeproj`, validates that the archived app and extension embed profiles authorizing the shared App Group, and then installs the archived app to `/Applications/MFuse.app`.
+`make debug-install-app` runs `scripts/release/build-and-install-app.sh`, archives the `MFuse` scheme in `Debug` using the signing settings already configured in the current `MFuse.xcodeproj`, validates that the archived app and extension embed profiles authorizing the shared App Group, and then installs the archived app to `/Applications/MFuse.app`.
 
 This local install flow now follows the signing configuration that Xcode is already using for the targets. If the current project settings point to explicit provisioning profiles, those profiles still need to authorize `group.com.lollipopkit.mfuse.shared` in `com.apple.security.application-groups`.
 
@@ -127,7 +127,7 @@ The generic `Mac Team Provisioning Profile: *` is not sufficient. It omits the A
 If you want to install somewhere else during local verification, override the target path:
 
 ```bash
-INSTALL_PATH=/tmp/MFuse.app make release-install-app
+INSTALL_PATH=/tmp/MFuse.app make debug-install-app
 ```
 
 ## Local Release DMG

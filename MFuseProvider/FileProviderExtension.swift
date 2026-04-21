@@ -464,9 +464,19 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             do {
                 let context = try await runtimeContext()
                 let path = identifier.remotePath
+                let deletedItem = await cachedOrRemoteItem(at: path, using: context)
+                let descendantItems = await descendantItemsForDeletion(
+                    at: path,
+                    deletedItem: deletedItem,
+                    using: context
+                )
                 try await context.fileSystem.delete(at: path)
+                await invalidateDeletedDescendants(descendantItems, using: context)
                 await context.cache.invalidate(path: path)
                 await context.contentCache.invalidate(path: path)
+                if deletedItem?.isDirectory == true {
+                    await context.cache.invalidateChildren(of: path)
+                }
                 if let parent = path.parent {
                     await context.cache.invalidateChildren(of: parent)
                 }
@@ -753,6 +763,72 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             return true
         default:
             return false
+        }
+    }
+
+    private func cachedOrRemoteItem(
+        at path: RemotePath,
+        using context: FileProviderRuntimeContext
+    ) async -> RemoteItem? {
+        if let remoteItem = try? await context.fileSystem.itemInfo(at: path) {
+            return remoteItem
+        }
+
+        return await context.cache.get(path: path)
+    }
+
+    private func descendantItemsForDeletion(
+        at path: RemotePath,
+        deletedItem: RemoteItem?,
+        using context: FileProviderRuntimeContext
+    ) async -> [RemoteItem] {
+        guard deletedItem?.isDirectory == true else {
+            return []
+        }
+
+        var itemsByPath = Dictionary(
+            uniqueKeysWithValues: await context.cache.descendants(of: path).map { ($0.path, $0) }
+        )
+
+        do {
+            for item in try await remoteDescendantItems(of: path, using: context.fileSystem) {
+                itemsByPath[item.path] = item
+            }
+        } catch {
+            logger.warning(
+                "Failed to enumerate descendants before deleting \(path.absoluteString, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        return itemsByPath.values.sorted { lhs, rhs in
+            lhs.path.components.count > rhs.path.components.count
+        }
+    }
+
+    private func remoteDescendantItems(
+        of path: RemotePath,
+        using fileSystem: any RemoteFileSystem
+    ) async throws -> [RemoteItem] {
+        let children = try await fileSystem.enumerate(at: path)
+        var descendants = children
+
+        for child in children where child.isDirectory {
+            descendants.append(contentsOf: try await remoteDescendantItems(of: child.path, using: fileSystem))
+        }
+
+        return descendants
+    }
+
+    private func invalidateDeletedDescendants(
+        _ descendants: [RemoteItem],
+        using context: FileProviderRuntimeContext
+    ) async {
+        for item in descendants {
+            await context.cache.invalidate(path: item.path)
+            if item.isDirectory {
+                await context.cache.invalidateChildren(of: item.path)
+            }
+            await context.contentCache.invalidate(path: item.path)
         }
     }
 

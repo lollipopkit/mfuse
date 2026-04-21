@@ -1,7 +1,7 @@
 import Foundation
 
-/// Uses Keychain as the app-facing credential store while mirroring a provider-readable
-/// snapshot into the shared App Group container for the File Provider extension.
+/// Uses Keychain as the app-facing credential store while mirroring credentials
+/// into the shared credential store used by the File Provider extension.
 public final class MirroredCredentialProvider: CredentialProvider, @unchecked Sendable {
 
     private let primary: CredentialProvider
@@ -16,22 +16,13 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     }
 
     public func credential(for connectionID: UUID) async throws -> Credential? {
-        let mirroredCredential = try sharedStore.credential(for: connectionID)
         let primaryCredential = try await primary.credential(for: connectionID)
-
-        if let mirroredCredential {
-            if primaryCredential != mirroredCredential {
-                try? await primary.store(mirroredCredential, for: connectionID)
-            }
-            return mirroredCredential
+        if let primaryCredential {
+            try sharedStore.store(primaryCredential, for: connectionID)
+            return primaryCredential
         }
 
-        guard let primaryCredential else {
-            return nil
-        }
-
-        try sharedStore.store(primaryCredential, for: connectionID)
-        return primaryCredential
+        return try sharedStore.credential(for: connectionID)
     }
 
     public func store(_ credential: Credential, for connectionID: UUID) async throws {

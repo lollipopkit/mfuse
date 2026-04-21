@@ -1,4 +1,4 @@
-.PHONY: all build test test-stable test-all generate clean lint release-install-signing release-clean-signing release-install-app release-dmg
+.PHONY: all build test test-stable test-all generate clean lint release-install-signing release-clean-signing debug-install-app release-dmg
 
 SCHEME = MFuse
 CODESIGN_FLAGS = CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
@@ -50,8 +50,8 @@ release-install-signing:
 release-clean-signing:
 	bash scripts/release/cleanup-apple-signing.sh
 
-release-install-app:
-	bash scripts/release/build-and-install-app.sh
+debug-install-app:
+	CONFIGURATION=Debug ARCHIVE_PATH="$(CURDIR)/build/debug-install/MFuse.xcarchive" bash scripts/release/build-and-install-app.sh
 
 release-dmg:
 	bash scripts/release/release-dmg.sh

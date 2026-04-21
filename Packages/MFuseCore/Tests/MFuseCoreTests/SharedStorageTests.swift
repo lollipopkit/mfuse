@@ -123,7 +123,7 @@ final class SharedStorageTests: XCTestCase {
         try store.store(credential, for: connectionID)
 
         XCTAssertEqual(try store.credential(for: connectionID), credential)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: try store.credentialURL(for: connectionID).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try store.credentialURL(for: connectionID).path))
 
         try store.delete(for: connectionID)
 
@@ -143,6 +143,23 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: credentialsDirectory.path))
     }
 
+    func testSharedCredentialStoreMigratesLegacyCredentialFileIntoKeychain() throws {
+        let store = SharedCredentialStore(containerURL: containerURL)
+        let connectionID = UUID()
+        let credential = Credential(password: "legacy-secret", token: "legacy-token")
+        let legacyURL = try store.credentialURL(for: connectionID)
+
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try JSONEncoder().encode(credential).write(to: legacyURL, options: .atomic)
+
+        XCTAssertEqual(try store.credential(for: connectionID), credential)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
     func testMirroredCredentialProviderBackfillsMirrorFromPrimary() async throws {
         let primary = InMemoryCredentialProvider()
         let sharedStore = SharedCredentialStore(containerURL: containerURL)
@@ -157,20 +174,36 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertEqual(try sharedStore.credential(for: connectionID), credential)
     }
 
-    func testMirroredCredentialProviderPrefersMirrorAndRepairsPrimary() async throws {
+    func testMirroredCredentialProviderPrefersPrimaryAndRepairsMirror() async throws {
         let primary = InMemoryCredentialProvider()
         let sharedStore = SharedCredentialStore(containerURL: containerURL)
         let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
         let connectionID = UUID()
-        let mirroredCredential = Credential(token: "fresh-token")
+        let primaryCredential = Credential(token: "fresh-token")
+        let mirroredCredential = Credential(token: "stale-token")
         try sharedStore.store(mirroredCredential, for: connectionID)
-        try await primary.store(Credential(token: "stale-token"), for: connectionID)
+        try await primary.store(primaryCredential, for: connectionID)
 
         let resolved = try await provider.credential(for: connectionID)
-        let repairedPrimary = try await primary.credential(for: connectionID)
+        let repairedMirror = try sharedStore.credential(for: connectionID)
+
+        XCTAssertEqual(resolved, primaryCredential)
+        XCTAssertEqual(repairedMirror, primaryCredential)
+    }
+
+    func testMirroredCredentialProviderFallsBackToMirrorWhenPrimaryMissing() async throws {
+        let primary = InMemoryCredentialProvider()
+        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
+        let connectionID = UUID()
+        let mirroredCredential = Credential(token: "mirror-only")
+        try sharedStore.store(mirroredCredential, for: connectionID)
+
+        let resolved = try await provider.credential(for: connectionID)
+        let primaryCredential = try await primary.credential(for: connectionID)
 
         XCTAssertEqual(resolved, mirroredCredential)
-        XCTAssertEqual(repairedPrimary, mirroredCredential)
+        XCTAssertNil(primaryCredential)
     }
 
     func testHostKeyStorePersistsToFileAndMigratesLegacyDefaults() {
@@ -208,6 +241,14 @@ final class SharedStorageTests: XCTestCase {
             try FileProviderDomainStateStore.loadBootstrapConfig(from: userInfo),
             config
         )
+    }
+
+    func testBootstrapUserInfoCorruptedPayloadReturnsNil() throws {
+        let corruptedUserInfo: [AnyHashable: Any] = [
+            FileProviderDomainStateStore.bootstrapUserInfoKey: Data("not-json".utf8)
+        ]
+
+        XCTAssertNil(try FileProviderDomainStateStore.loadBootstrapConfig(from: corruptedUserInfo))
     }
 
     func testProviderStateStorageURLUsesAppGroupApplicationSupportLayout() throws {

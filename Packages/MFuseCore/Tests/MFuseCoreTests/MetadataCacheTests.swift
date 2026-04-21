@@ -145,4 +145,25 @@ final class MetadataCacheTests: XCTestCase {
         XCTAssertEqual(newChildren?.count, 2)
         XCTAssertTrue(newChildren?.allSatisfy { $0.name.hasPrefix("new") } ?? false)
     }
+
+    func testDescendantsReturnsNestedItemsOnly() async throws {
+        let parent = RemotePath("/dir")
+        let childDirectory = RemoteItem(path: parent.appending("nested"), type: .directory)
+        let directChild = RemoteItem(path: parent.appending("top.txt"), type: .file)
+        let nestedChild = RemoteItem(path: childDirectory.path.appending("deep.txt"), type: .file)
+        let sibling = RemoteItem(path: RemotePath("/other/file.txt"), type: .file)
+
+        try await cache.putAll(items: [directChild, childDirectory], parent: parent)
+        try await cache.putAll(items: [nestedChild], parent: childDirectory.path)
+        await cache.put(item: sibling)
+
+        let descendants = await cache.descendants(of: parent)
+
+        XCTAssertEqual(descendants.map(\.path).sorted { $0.absoluteString < $1.absoluteString }, [
+            childDirectory.path,
+            nestedChild.path,
+            directChild.path,
+        ].sorted { $0.absoluteString < $1.absoluteString })
+        XCTAssertFalse(descendants.contains { $0.path == sibling.path })
+    }
 }
