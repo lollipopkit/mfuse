@@ -1,5 +1,6 @@
 import SwiftUI
 import MFuseCore
+import AppKit
 
 struct ConnectionEditorSheet: View {
 
@@ -20,9 +21,11 @@ struct ConnectionEditorSheet: View {
     @State private var username: String
     @State private var authMethod: AuthMethod
     @State private var remotePath: String
+    @State private var autoMountOnLaunch: Bool
     @State private var password: String = ""
     @State private var oauthToken: String = ""
     @State private var privateKeyPath: String = ""
+    @State private var privateKeyBookmark: String = ""
 
     // Backend-specific parameters
     @State private var s3Bucket: String = ""
@@ -61,9 +64,11 @@ struct ConnectionEditorSheet: View {
         _username = State(initialValue: config?.username ?? "")
         _authMethod = State(initialValue: config?.authMethod ?? .password)
         _remotePath = State(initialValue: config?.remotePath ?? "/")
+        _autoMountOnLaunch = State(initialValue: config?.autoMountOnLaunch ?? false)
         // Backend-specific parameters
         let params = config?.parameters ?? [:]
         _privateKeyPath = State(initialValue: params["privateKeyPath"] ?? "")
+        _privateKeyBookmark = State(initialValue: params["privateKeyBookmark"] ?? "")
         _s3Bucket = State(initialValue: params["bucket"] ?? "")
         _s3Region = State(initialValue: params["region"] ?? "us-east-1")
         _s3Endpoint = State(initialValue: params["endpoint"] ?? "")
@@ -107,6 +112,7 @@ struct ConnectionEditorSheet: View {
                             authMethod = newType.supportedAuthMethods.first ?? .password
                         }
                     }
+                    Toggle("Auto-Mount on App Launch", isOn: $autoMountOnLaunch)
                 }
 
                 // Hide host/port for Google Drive (cloud-only)
@@ -247,6 +253,16 @@ struct ConnectionEditorSheet: View {
         .onChange(of: authMethod) { newMethod in
             clearCredentialState(except: newMethod)
         }
+        .onChange(of: privateKeyPath) { newPath in
+            guard authMethod == .publicKey else { return }
+            if newPath.isEmpty {
+                privateKeyBookmark = ""
+                return
+            }
+            if let bookmarkedPath = bookmarkedPrivateKeyPath(), bookmarkedPath != newPath {
+                privateKeyBookmark = ""
+            }
+        }
         .onDisappear {
             currentTestTask?.cancel()
             currentTestTask = nil
@@ -283,7 +299,8 @@ struct ConnectionEditorSheet: View {
                 username: username,
                 authMethod: authMethod,
                 remotePath: remotePath.isEmpty ? "/" : remotePath,
-                parameters: try buildParameters()
+                parameters: try buildParameters(),
+                autoMountOnLaunch: autoMountOnLaunch
             )
             onSave(config, credential)
         } catch {
@@ -306,7 +323,8 @@ struct ConnectionEditorSheet: View {
                 username: username,
                 authMethod: authMethod,
                 remotePath: remotePath.isEmpty ? "/" : remotePath,
-                parameters: parameters
+                parameters: parameters,
+                autoMountOnLaunch: autoMountOnLaunch
             )
             credential = try buildCredential()
 
@@ -347,9 +365,8 @@ struct ConnectionEditorSheet: View {
             guard !privateKeyPath.isEmpty else {
                 throw RemoteFileSystemError.authenticationFailed
             }
-            let keyURL = URL(fileURLWithPath: privateKeyPath)
             do {
-                let keyData = try Data(contentsOf: keyURL)
+                let keyData = try readPrivateKeyData()
                 return Credential(
                     password: nil,
                     privateKey: keyData,
@@ -466,6 +483,9 @@ struct ConnectionEditorSheet: View {
         }
         if authMethod == .publicKey, !privateKeyPath.isEmpty {
             params["privateKeyPath"] = privateKeyPath
+            if !privateKeyBookmark.isEmpty {
+                params["privateKeyBookmark"] = privateKeyBookmark
+            }
         }
         return params
     }
@@ -481,8 +501,68 @@ struct ConnectionEditorSheet: View {
             if response == .OK, let url = panel.url {
                 DispatchQueue.main.async {
                     self.privateKeyPath = url.path
+                    self.privateKeyBookmark = self.makePrivateKeyBookmark(for: url) ?? ""
                 }
             }
         }
+    }
+
+    private func readPrivateKeyData() throws -> Data {
+        if let bookmarkedURL = resolvedPrivateKeyURLFromBookmark() {
+            let didAccess = bookmarkedURL.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess {
+                    bookmarkedURL.stopAccessingSecurityScopedResource()
+                }
+            }
+            return try Data(contentsOf: bookmarkedURL)
+        }
+
+        return try Data(contentsOf: URL(fileURLWithPath: privateKeyPath))
+    }
+
+    private func resolvedPrivateKeyURLFromBookmark() -> URL? {
+        guard !privateKeyBookmark.isEmpty,
+              let bookmarkData = Data(base64Encoded: privateKeyBookmark) else {
+            return nil
+        }
+
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [.withSecurityScope, .withoutUI],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else {
+            return nil
+        }
+
+        if !privateKeyPath.isEmpty && url.path != privateKeyPath {
+            return nil
+        }
+
+        if isStale, let refreshedBookmark = makePrivateKeyBookmark(for: url) {
+            privateKeyBookmark = refreshedBookmark
+        }
+
+        return url
+    }
+
+    private func bookmarkedPrivateKeyPath() -> String? {
+        guard let url = resolvedPrivateKeyURLFromBookmark() else {
+            return nil
+        }
+        return url.path
+    }
+
+    private func makePrivateKeyBookmark(for url: URL) -> String? {
+        guard let bookmarkData = try? url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) else {
+            return nil
+        }
+        return bookmarkData.base64EncodedString()
     }
 }

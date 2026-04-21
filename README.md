@@ -7,6 +7,8 @@
 
 MFuse is a macOS app that exposes remote storage in Finder through File Provider, with a modular backend layer for multiple protocols.
 
+Saved mounts can optionally enable `Auto-Mount on App Launch`. When combined with `Launch at Login`, those mounts will reconnect automatically after you sign in or restart your Mac.
+
 ## Screenshots
 
 <table>

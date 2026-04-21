@@ -24,6 +24,14 @@ public enum AppGroupConstants {
 
     /// Keychain access group shared between the app and the File Provider extension.
     public static var keychainAccessGroup: String? {
+        guard hasAppGroupEntitlement(groupIdentifier) else {
+            return nil
+        }
+        return groupIdentifier
+    }
+
+    /// Legacy team-prefixed keychain access group used by older MFuse builds.
+    public static var legacyKeychainAccessGroup: String? {
         guard let appIdentifierPrefix = appIDPrefix() else {
             return nil
         }
@@ -53,5 +61,24 @@ public enum AppGroupConstants {
         }
 
         return "\(prefix)."
+    }
+
+    private static func hasAppGroupEntitlement(_ identifier: String) -> Bool {
+        guard let task = SecTaskCreateFromSelf(nil),
+              let value = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.security.application-groups" as CFString,
+                nil
+              ) else {
+            return false
+        }
+
+        if let groups = value as? [String] {
+            return groups.contains(identifier)
+        }
+        if let groups = value as? [NSString] {
+            return groups.contains(identifier as NSString)
+        }
+        return false
     }
 }

@@ -7,6 +7,8 @@
 
 MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Finder 中，并用模块化后端支持多种协议。
 
+已保存的挂载现在可以单独勾选 `Auto-Mount on App Launch`。配合 `Launch at Login` 后，这些挂载会在你登录或重启 Mac 后自动重新连接。
+
 ## 截图
 
 <table>

@@ -574,6 +574,46 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(removedDomains, [orphanDomainID])
     }
 
+    func testAutoMountConfiguredConnectionsMountsOnlyFlaggedConnections() async throws {
+        let autoConfig = ConnectionConfig(
+            name: "auto",
+            backendType: .sftp,
+            host: "auto.example.com",
+            username: "user",
+            autoMountOnLaunch: true
+        )
+        let manualConfig = ConnectionConfig(
+            name: "manual",
+            backendType: .sftp,
+            host: "manual.example.com",
+            username: "user",
+            autoMountOnLaunch: false
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let autoMountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auto-mounted-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: autoMountURL,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        await mountProvider.setMountURL(autoMountURL, for: autoConfig.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[autoConfig.id] = Credential(password: "pass")
+        credentialProvider.credentials[manualConfig.id] = Credential(password: "pass")
+        try manager.add(autoConfig)
+        try manager.add(manualConfig)
+
+        await manager.autoMountConfiguredConnections()
+
+        let mountedState = await waitForMountState(autoConfig.id)
+        XCTAssertEqual(mountedState, .mounted(path: autoMountURL.path))
+        XCTAssertEqual(manager.state(for: manualConfig.id), .disconnected)
+        XCTAssertEqual(manager.mountState(for: manualConfig.id), .unmounted)
+        let mountInvocations = await mountProvider.mountInvocations
+        XCTAssertEqual(mountInvocations, [autoConfig.domainIdentifier])
+    }
+
     private func waitForMountState(_ id: UUID) async -> MountState {
         let maxAttempts = 20
         let retryDelay: UInt64 = 500_000_000

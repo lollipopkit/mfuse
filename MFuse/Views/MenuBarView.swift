@@ -7,6 +7,7 @@ struct MenuBarView: View {
 
     @EnvironmentObject var connectionManager: ConnectionManager
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var isQuitting = false
 
     var body: some View {
@@ -39,6 +40,7 @@ struct MenuBarView: View {
 
                 HStack(spacing: 12) {
                     Button("Mount All") {
+                        dismissMenuBarPanel()
                         Task {
                             for config in connectionManager.connections
                             where !connectionManager.effectiveMountState(for: config.id).isMounted {
@@ -51,6 +53,7 @@ struct MenuBarView: View {
                     .disabled(mountedCount == connectionManager.connections.count)
 
                     Button("Unmount All") {
+                        dismissMenuBarPanel()
                         Task {
                             for config in connectionManager.connections
                             where connectionManager.effectiveMountState(for: config.id).isMounted {
@@ -70,19 +73,22 @@ struct MenuBarView: View {
 
             HStack {
                 Button("Open MFuse") {
+                    dismissMenuBarPanel()
                     AppDelegate.activateMainInterface()
                     openWindow(id: MFuseApp.mainWindowID)
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
                 Spacer()
-                SettingsLink {
-                    Text("Settings")
+                Button("Settings") {
+                    dismissMenuBarPanel()
+                    openSettings()
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
                 Spacer()
                 Button("Quit") {
+                    dismissMenuBarPanel()
                     isQuitting = true
                     AppDelegate.requestFullTermination()
                 }
@@ -130,6 +136,7 @@ struct MenuBarView: View {
             Spacer()
             if mount.isMounted {
                 Button {
+                    dismissMenuBarPanel()
                     revealInFinder(config: config)
                 } label: {
                     Image(systemName: "folder")
@@ -151,6 +158,7 @@ struct MenuBarView: View {
                 .controlSize(.small)
         } else {
             Button(mountState.isMounted ? "Unmount" : "Mount") {
+                dismissMenuBarPanel()
                 Task {
                     if mountState.isMounted {
                         await connectionManager.disconnect(config.id)
@@ -185,5 +193,10 @@ struct MenuBarView: View {
                 }
             }
         }
+    }
+
+    @MainActor
+    private func dismissMenuBarPanel() {
+        NSApp.keyWindow?.orderOut(nil)
     }
 }

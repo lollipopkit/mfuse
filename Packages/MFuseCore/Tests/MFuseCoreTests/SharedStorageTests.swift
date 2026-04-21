@@ -97,6 +97,40 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: storage.connectionsFileURL.path))
     }
 
+    func testLoadConnectionsDefaultsAutoMountOnLaunchToFalseForLegacyData() throws {
+        let rawJSON = """
+        [
+          {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "legacy",
+            "backendType": "sftp",
+            "host": "legacy.example.com",
+            "port": 22,
+            "username": "lk",
+            "authMethod": "password",
+            "remotePath": "/",
+            "parameters": {}
+          }
+        ]
+        """
+
+        let storage = SharedStorage(
+            legacyDefaults: legacyDefaults,
+            containerURL: containerURL
+        )
+        try FileManager.default.createDirectory(
+            at: storage.connectionsFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try Data(rawJSON.utf8).write(to: storage.connectionsFileURL, options: .atomic)
+
+        let configs = storage.loadConnections()
+
+        XCTAssertEqual(configs.count, 1)
+        XCTAssertFalse(configs[0].autoMountOnLaunch)
+    }
+
     func testSharedStorageUsesStandardAppGroupSubdirectories() {
         let storage = SharedStorage(
             legacyDefaults: legacyDefaults,

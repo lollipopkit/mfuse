@@ -9,7 +9,7 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
 
     public init(
         primary: CredentialProvider,
-        sharedStore: SharedCredentialStore = SharedCredentialStore()
+        sharedStore: SharedCredentialStore = SharedCredentialStore(allowLegacyKeychainMigration: true)
     ) {
         self.primary = primary
         self.sharedStore = sharedStore

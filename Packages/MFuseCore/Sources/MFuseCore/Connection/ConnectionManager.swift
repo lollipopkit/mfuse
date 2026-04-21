@@ -424,6 +424,28 @@ public final class ConnectionManager: ObservableObject {
         }
     }
 
+    public func autoMountConfiguredConnections() async {
+        let targets = connections.filter { config in
+            guard config.autoMountOnLaunch else {
+                return false
+            }
+
+            if effectiveMountState(for: config.id).isMounted || mountState(for: config.id) == .mounting {
+                return false
+            }
+
+            if state(for: config.id) == .connecting {
+                return false
+            }
+
+            return true
+        }
+
+        for config in targets {
+            await connect(config.id)
+        }
+    }
+
     private func _removeStaleProviderDomain(id: String) async throws {
         #if canImport(FileProvider)
         let domains = try await NSFileProviderManager.domains()

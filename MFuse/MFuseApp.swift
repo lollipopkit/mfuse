@@ -144,6 +144,7 @@ struct MFuseApp: App {
                 NSLog("MFuse domain sync failed during launch: %@", String(describing: error))
             }
             await connectionManager.syncMounts()
+            await connectionManager.autoMountConfiguredConnections()
             NotificationService.shared.isEnabled = true
             return
         }
