@@ -9,9 +9,9 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.83.0"),
-        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.29.0"),
-        .package(url: "https://github.com/apple/swift-nio-transport-services.git", from: "1.21.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.98.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.0"),
+        .package(url: "https://github.com/apple/swift-nio-transport-services.git", from: "1.27.0"),
     ],
     targets: [
         .target(

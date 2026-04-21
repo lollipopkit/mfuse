@@ -323,7 +323,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
     private func uploadFile(
         at path: RemotePath,
         from localFileURL: URL,
-        flags: SFTPFile.OpenFlags
+        flags: SFTPOpenFileFlags
     ) async throws {
         do {
             let sftp = try requireSFTP()
@@ -973,7 +973,7 @@ private struct OpenSSHPrivateKeyReader {
                 else {
                     return -1
                 }
-                citadel_bcrypt_pbkdf(
+                return Int(citadel_bcrypt_pbkdf(
                     passBaseAddress,
                     passBytes.count,
                     saltBaseAddress,
@@ -981,7 +981,7 @@ private struct OpenSSHPrivateKeyReader {
                     &derived,
                     derived.count,
                     rounds
-                )
+                ))
             }
         }
         guard status == 0 else {

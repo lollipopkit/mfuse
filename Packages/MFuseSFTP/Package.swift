@@ -10,7 +10,7 @@ let package = Package(
     dependencies: [
         .package(path: "../MFuseCore"),
         .package(url: "https://github.com/orlandos-nl/Citadel.git", from: "0.12.1"),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.83.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.98.0"),
     ],
     targets: [
         .target(

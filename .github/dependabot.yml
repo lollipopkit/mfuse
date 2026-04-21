@@ -1,0 +1,65 @@
+version: 2
+updates:
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseCore"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseFTP"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseGoogleDrive"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseNFS"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseS3"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseSFTP"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseSMB"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "swift"
+    directory: "/Packages/MFuseWebDAV"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"

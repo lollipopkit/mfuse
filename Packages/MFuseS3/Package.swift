@@ -9,7 +9,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
-        .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
+        .package(url: "https://github.com/soto-project/soto.git", from: "7.14.0"),
     ],
     targets: [
         .target(

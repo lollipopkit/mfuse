@@ -28,10 +28,6 @@ public actor S3FileSystem: RemoteFileSystem {
     private var pathStyle: Bool { config.parameters["pathStyle"] == "true" }
 
     private func isNotFoundError(_ error: Error) -> Bool {
-        if let s3Error = error as? S3ErrorType {
-            return s3Error.error == .noSuchKey || s3Error.error == .notFound
-        }
-
         if let awsError = error as? AWSErrorType {
             let normalizedCode = awsError.errorCode.lowercased()
             return normalizedCode == "nosuchkey"
