@@ -28,7 +28,7 @@ private final class SecurityScopedAccessTracker: @unchecked Sendable {
 
     func close() {
         lock.lock()
-        let handlers = trackedPaths.values
+        let handlers = Array(trackedPaths.values)
         trackedPaths.removeAll()
         lock.unlock()
 
@@ -165,7 +165,6 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         guard securityScopedAccessTracker.trackIfNotExists(path: cacheKey, {
             url.stopAccessingSecurityScopedResource()
         }) else {
-            url.stopAccessingSecurityScopedResource()
             return url
         }
 

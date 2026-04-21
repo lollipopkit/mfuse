@@ -94,7 +94,7 @@ struct ConnectionDetailView: View {
             if mount.isMounted {
                 Button {
                     Task {
-                        let targetURL = await resolveFinderURL() ?? FileProviderMountProvider.symlinkBaseURL
+                        let targetURL = await resolveFinderURL() ?? FileProviderMountProvider.defaultSymlinkBaseURL
                         await MainActor.run {
                             NSWorkspace.shared.activateFileViewerSelecting([targetURL])
                         }
@@ -168,7 +168,7 @@ struct ConnectionDetailView: View {
     private func resolveFinderURL() async -> URL? {
         let symlinkURL = FileProviderMountProvider.symlinkURL(
             for: config,
-            baseDir: FileProviderMountProvider.symlinkBaseURL
+            baseDir: FileProviderMountProvider.defaultSymlinkBaseURL
         )
         if linkExists(at: symlinkURL) {
             return symlinkURL

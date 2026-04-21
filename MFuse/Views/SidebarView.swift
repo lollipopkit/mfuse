@@ -108,7 +108,7 @@ struct SidebarView: View {
         if mount.isMounted {
             Button("Reveal in Finder") {
                 Task {
-                    let targetURL = await resolveFinderURL(for: config) ?? FileProviderMountProvider.symlinkBaseURL
+                    let targetURL = await resolveFinderURL(for: config) ?? FileProviderMountProvider.defaultSymlinkBaseURL
                     await MainActor.run {
                         NSWorkspace.shared.activateFileViewerSelecting([targetURL])
                     }
@@ -146,7 +146,7 @@ struct SidebarView: View {
     private func resolveFinderURL(for config: ConnectionConfig) async -> URL? {
         let symlinkURL = FileProviderMountProvider.symlinkURL(
             for: config,
-            baseDir: FileProviderMountProvider.symlinkBaseURL
+            baseDir: FileProviderMountProvider.defaultSymlinkBaseURL
         )
         if linkExists(at: symlinkURL) {
             return symlinkURL

@@ -11,11 +11,17 @@ public final class FileProviderMountProvider: MountProvider {
         category: "FileProviderMountProvider"
     )
 
-    /// Base directory for convenience symlinks.
-    public static var symlinkBaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    public static let defaultSymlinkBaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("MFuse")
 
-    public init() {}
+    /// Base directory for convenience symlinks.
+    public let symlinkBaseURL: URL
+
+    public init(
+        symlinkBaseURL: URL = defaultSymlinkBaseURL
+    ) {
+        self.symlinkBaseURL = symlinkBaseURL
+    }
 
     public func mount(config: ConnectionConfig) async throws {
         let domainID = NSFileProviderDomainIdentifier(rawValue: config.domainIdentifier)
@@ -87,7 +93,7 @@ public final class FileProviderMountProvider: MountProvider {
         guard let mountURL = try await mountURL(for: config) else { return nil }
 
         let fm = FileManager.default
-        let baseDir = Self.symlinkBaseURL
+        let baseDir = symlinkBaseURL
 
         // Ensure ~/MFuse/ exists
         if !fm.fileExists(atPath: baseDir.path) {
@@ -114,7 +120,7 @@ public final class FileProviderMountProvider: MountProvider {
 
     public func removeSymlink(for config: ConnectionConfig) async throws {
         let expectedDestinationURL = (try? await mountURL(for: config)) ?? nil
-        let symlinkURL = Self.symlinkURL(for: config, baseDir: Self.symlinkBaseURL)
+        let symlinkURL = Self.symlinkURL(for: config, baseDir: symlinkBaseURL)
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
     }
 
@@ -140,6 +146,42 @@ public final class FileProviderMountProvider: MountProvider {
 
     public static func symlinkURL(for config: ConnectionConfig, baseDir: URL) -> URL {
         baseDir.appendingPathComponent(symlinkFilename(for: config))
+    }
+
+    public static func shouldRemoveManagedSymlink(at url: URL, fileManager: FileManager) -> Bool {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeSymbolicLink,
+              matchesManagedSymlinkFilename(url.lastPathComponent),
+              let destinationPath = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
+            return false
+        }
+
+        let resolvedDestinationURL = URL(
+            fileURLWithPath: destinationPath,
+            relativeTo: url.deletingLastPathComponent()
+        ).standardizedFileURL
+
+        return isManagedMountDestination(resolvedDestinationURL)
+    }
+
+    public static func matchesManagedSymlinkFilename(_ name: String) -> Bool {
+        guard let separatorIndex = name.lastIndex(of: "-") else {
+            return false
+        }
+        let prefix = name[..<separatorIndex]
+        let suffix = name[name.index(after: separatorIndex)...]
+        return !prefix.isEmpty && UUID(uuidString: String(suffix)) != nil
+    }
+
+    public static func isManagedMountDestination(_ url: URL) -> Bool {
+        let cloudStorageRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("CloudStorage", isDirectory: true)
+            .standardizedFileURL
+
+        let destinationPath = url.path
+        let rootPath = cloudStorageRoot.path
+        return destinationPath == rootPath || destinationPath.hasPrefix(rootPath + "/")
     }
 
     func itemType(at url: URL) throws -> FileAttributeType? {
@@ -168,6 +210,10 @@ public final class FileProviderMountProvider: MountProvider {
                 relativeTo: symlinkURL.deletingLastPathComponent()
             ).standardizedFileURL
             guard resolvedDestinationURL == expectedDestinationURL.standardizedFileURL else {
+                return
+            }
+        } else {
+            guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
                 return
             }
         }

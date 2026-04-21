@@ -631,25 +631,25 @@ final class FTPDataHandler: ChannelInboundHandler {
     }
 
     private func failContinuationIfPending(id: UUID, error: Error) {
-        let continuations: [CheckedContinuation<Data, Error>]
+        let continuationsToResume: [CheckedContinuation<Data, Error>]
         let context: ChannelHandlerContext?
 
         lock.lock()
-        if let index = continuations.firstIndex(where: { $0.id == id }) {
+        if let index = self.continuations.firstIndex(where: { $0.id == id }) {
             terminalError = error
             completed = true
-            var pending = continuations
+            var pending = self.continuations
             let timedOut = pending.remove(at: index)
-            continuations = [timedOut.continuation] + pending.map(\.continuation)
+            continuationsToResume = [timedOut.continuation] + pending.map(\.continuation)
             context = self.context
             self.continuations.removeAll()
         } else {
-            continuations = []
+            continuationsToResume = []
             context = nil
         }
         lock.unlock()
 
-        continuations.forEach { $0.resume(throwing: error) }
+        continuationsToResume.forEach { $0.resume(throwing: error) }
         context?.close(promise: nil)
     }
 }

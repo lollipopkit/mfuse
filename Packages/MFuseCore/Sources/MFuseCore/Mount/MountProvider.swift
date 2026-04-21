@@ -81,6 +81,9 @@ public enum MountState: Sendable, Equatable {
 /// Abstraction over the mounting mechanism.
 public protocol MountProvider: Sendable {
 
+    /// Base directory used for convenience symlinks.
+    var symlinkBaseURL: URL { get }
+
     /// Mount a connection, making it visible in Finder / filesystem.
     func mount(config: ConnectionConfig) async throws
 

@@ -8,6 +8,15 @@ import NIOSSH
 import Crypto
 import os.log
 
+private func computeSSHFingerprint(_ key: NIOSSHPublicKey) -> String {
+    var buffer = ByteBufferAllocator().buffer(capacity: 256)
+    key.write(to: &buffer)
+    let keyBlob = Data(buffer.readableBytesView)
+    let digest = Data(SHA256.hash(data: keyBlob))
+    let base64 = digest.base64EncodedString().replacingOccurrences(of: "=", with: "")
+    return "SHA256:\(base64)"
+}
+
 /// SFTP implementation of `RemoteFileSystem` using Citadel.
 public actor SFTPFileSystem: RemoteFileSystem {
 
@@ -643,12 +652,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
 
     /// Compute a SHA-256 fingerprint of an SSH public key for TOFU storage.
     private static func fingerprint(of key: NIOSSHPublicKey) -> String {
-        var buffer = ByteBufferAllocator().buffer(capacity: 256)
-        key.write(to: &buffer)
-        let keyBlob = Data(buffer.readableBytesView)
-        let digest = Data(SHA256.hash(data: keyBlob))
-        let base64 = digest.base64EncodedString().replacingOccurrences(of: "=", with: "")
-        return "SHA256:\(base64)"
+        computeSSHFingerprint(key)
     }
 
     static func makeExecEnumerationCommand(for remotePath: String) -> String {
@@ -930,6 +934,7 @@ private struct OpenSSHPrivateKeyReader {
         return (Array(derived[..<keyLength]), Array(derived[keyLength...]))
     }
 
+    // swiftlint:disable:next identifier_name
     private func decryptAESCTR(_ data: Data, cipherName: String, key: [UInt8], iv: [UInt8]) throws -> Data {
         guard data.count.isMultiple(of: 16) else {
             throw RemoteFileSystemError.unsupported("The encrypted OpenSSH private key payload is malformed.")
@@ -1062,11 +1067,6 @@ private final class TOFUHostKeyValidator: NIOSSHClientServerAuthenticationDelega
     }
 
     private static func fingerprint(of key: NIOSSHPublicKey) -> String {
-        var buffer = ByteBufferAllocator().buffer(capacity: 256)
-        key.write(to: &buffer)
-        let keyBlob = Data(buffer.readableBytesView)
-        let digest = Data(SHA256.hash(data: keyBlob))
-        let base64 = digest.base64EncodedString().replacingOccurrences(of: "=", with: "")
-        return "SHA256:\(base64)"
+        computeSSHFingerprint(key)
     }
 }

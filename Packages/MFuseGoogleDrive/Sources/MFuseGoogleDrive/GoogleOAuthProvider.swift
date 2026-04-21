@@ -132,8 +132,16 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw GoogleDriveError.oauthFailed("Token refresh failed")
+        guard let http = response as? HTTPURLResponse else {
+            throw GoogleDriveError.oauthFailed("Token refresh failed: invalid HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let bodyDescription = body?.isEmpty == false ? body! : "<empty response body>"
+            throw GoogleDriveError.oauthFailed(
+                "Token refresh failed with HTTP \(http.statusCode): \(bodyDescription)"
+            )
         }
         return try JSONDecoder().decode(TokenResponse.self, from: data)
     }

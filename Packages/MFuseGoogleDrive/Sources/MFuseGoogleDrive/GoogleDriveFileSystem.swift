@@ -202,13 +202,13 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let metadataJSON = try JSONSerialization.data(withJSONObject: metadata)
 
         var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Type: application/json; charset=UTF-8\r\n\r\n".utf8))
         body.append(metadataJSON)
-        body.append("\r\n--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append(Data("\r\n--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
         body.append(data)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
 
         var req = try authorizedRequest(url: "\(Self.uploadBase)/files?uploadType=multipart")
         req.httpMethod = "POST"
@@ -273,8 +273,16 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         let newParentID = try await resolveFileID(for: dstParent, expectFolder: true)
         let newName = destination.name
 
-        var urlStr = "\(Self.apiBase)/files/\(fileID)"
-        urlStr += "?addParents=\(newParentID)&removeParents=\(oldParentID)"
+        guard var components = URLComponents(string: "\(Self.apiBase)/files/\(fileID)") else {
+            throw RemoteFileSystemError.operationFailed("Invalid Google Drive move endpoint")
+        }
+        components.queryItems = [
+            URLQueryItem(name: "addParents", value: newParentID),
+            URLQueryItem(name: "removeParents", value: oldParentID)
+        ]
+        guard let urlStr = components.url?.absoluteString else {
+            throw RemoteFileSystemError.operationFailed("Failed to construct Google Drive move URL")
+        }
 
         var req = try authorizedRequest(url: urlStr)
         req.httpMethod = "PATCH"

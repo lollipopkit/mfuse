@@ -78,13 +78,9 @@ struct ExtensionGuideView: View {
                             await MainActor.run {
                                 checking = false
                                 verifyTask = nil
-                            }
-                            if ok {
-                                await MainActor.run {
+                                if ok {
                                     dismissGuide()
-                                }
-                            } else {
-                                await MainActor.run {
+                                } else {
                                     checkFailed = true
                                 }
                             }

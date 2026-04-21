@@ -28,7 +28,12 @@ actor MockFileSystem: RemoteFileSystem {
     var connectCalled = false
     var disconnectCalled = false
     var shouldFail = false
+    var enumerateShouldFail = false
     var enumeratedPaths: [RemotePath] = []
+
+    func setEnumerateShouldFail(_ shouldFail: Bool) {
+        enumerateShouldFail = shouldFail
+    }
 
     func connect() async throws {
         connectCalled = true
@@ -45,6 +50,9 @@ actor MockFileSystem: RemoteFileSystem {
 
     func enumerate(at path: RemotePath) async throws -> [RemoteItem] {
         enumeratedPaths.append(path)
+        if enumerateShouldFail {
+            throw RemoteFileSystemError.permissionDenied(path)
+        }
         return []
     }
     func itemInfo(at path: RemotePath) async throws -> RemoteItem {
@@ -65,6 +73,7 @@ enum MockFileSystemFactory {
 // MARK: - Mock MountProvider
 
 actor MockMountProvider: MountProvider {
+    let symlinkBaseURL: URL
     var mountedDomainIDs: [String] = []
     var mountInvocations: [String] = []
     var unmountInvocations: [String] = []
@@ -75,6 +84,10 @@ actor MockMountProvider: MountProvider {
     var removedDomains: [String] = []
     var nilMountURLCounts: [String: Int] = [:]
     var staleDomainsRemoved: [String] = []
+
+    init(symlinkBaseURL: URL) {
+        self.symlinkBaseURL = symlinkBaseURL
+    }
 
     func setMountedDomainIDs(_ ids: [String]) {
         mountedDomainIDs = ids
@@ -124,11 +137,11 @@ actor MockMountProvider: MountProvider {
     func createSymlink(for config: ConnectionConfig) async throws -> URL? {
         createSymlinkInvocations.append(config.domainIdentifier)
         guard let mountURL = mountURLs[config.domainIdentifier] else { return nil }
-        let symlinkURL = FileProviderMountProvider.symlinkBaseURL
+        let symlinkURL = symlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         try? FileManager.default.removeItem(at: symlinkURL)
         try FileManager.default.createDirectory(
-            at: FileProviderMountProvider.symlinkBaseURL,
+            at: symlinkBaseURL,
             withIntermediateDirectories: true
         )
         try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: mountURL)
@@ -137,7 +150,7 @@ actor MockMountProvider: MountProvider {
 
     func removeSymlink(for config: ConnectionConfig) async throws {
         removeSymlinkInvocations.append(config.domainIdentifier)
-        let symlinkURL = FileProviderMountProvider.symlinkBaseURL
+        let symlinkURL = symlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         try? FileManager.default.removeItem(at: symlinkURL)
     }
@@ -153,7 +166,6 @@ final class ConnectionManagerTests: XCTestCase {
     private var manager: ConnectionManager!
     private var legacyDefaults: UserDefaults!
     private var legacyDefaultsSuiteName: String!
-    private var originalSymlinkBaseURL: URL!
     private var testSymlinkBaseURL: URL!
     private var testContainerURL: URL!
 
@@ -170,10 +182,8 @@ final class ConnectionManagerTests: XCTestCase {
         )
         try? storage.saveConnections([])
         credentialProvider = MockCredentialProvider()
-        originalSymlinkBaseURL = FileProviderMountProvider.symlinkBaseURL
         testSymlinkBaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MFuseCoreTests-\(UUID().uuidString)", isDirectory: true)
-        FileProviderMountProvider.symlinkBaseURL = testSymlinkBaseURL
 
         // Register mock backend
         BackendRegistry.shared.register(.sftp) { _, _ in
@@ -200,9 +210,6 @@ final class ConnectionManagerTests: XCTestCase {
         }
         if let testSymlinkBaseURL {
             try? FileManager.default.removeItem(at: testSymlinkBaseURL)
-        }
-        if let originalSymlinkBaseURL {
-            FileProviderMountProvider.symlinkBaseURL = originalSymlinkBaseURL
         }
         super.tearDown()
     }
@@ -322,6 +329,32 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(paths, [.root])
     }
 
+    func testTestConnectionDisconnectsWhenEnumerationFails() async {
+        let config = ConnectionConfig(
+            name: "Test",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let credential = Credential(password: "pass")
+
+        let fileSystem = MockFileSystem()
+        await fileSystem.setEnumerateShouldFail(true)
+        MockFileSystemFactory.lastCreated = fileSystem
+        BackendRegistry.shared.register(.sftp) { _, _ in
+            MockFileSystemFactory.lastCreated = fileSystem
+            return fileSystem
+        }
+
+        let result = await manager.testConnection(config, credential: credential)
+
+        if case .success = result {
+            XCTFail("Expected failure when enumeration fails")
+        }
+        let disconnectCalled = await fileSystem.disconnectCalled
+        XCTAssertTrue(disconnectCalled)
+    }
+
     func testConnectDoesNotReportMountedUntilMountURLIsReady() async throws {
         let config = ConnectionConfig(
             name: "tb",
@@ -329,7 +362,7 @@ final class ConnectionManagerTests: XCTestCase {
             host: "example.com",
             username: "user"
         )
-        let mountProvider = MockMountProvider()
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
         let mountURL = FileManager.default.temporaryDirectory.appendingPathComponent("mounted-tb")
         try? Data().write(to: mountURL)
         await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
@@ -355,7 +388,7 @@ final class ConnectionManagerTests: XCTestCase {
             host: "example.com",
             username: "user"
         )
-        let mountProvider = MockMountProvider()
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
         let mountURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mounted-restore-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
@@ -381,7 +414,7 @@ final class ConnectionManagerTests: XCTestCase {
             backendType: .sftp,
             host: "example.com"
         )
-        let mountProvider = MockMountProvider()
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
         let orphanDomainID = UUID().uuidString
         await mountProvider.setMountedDomainIDs([config.domainIdentifier, orphanDomainID])
         let orphanSymlinkURL = testSymlinkBaseURL.appendingPathComponent("orphan-\(UUID().uuidString)")

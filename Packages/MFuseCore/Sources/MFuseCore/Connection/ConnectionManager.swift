@@ -27,6 +27,9 @@ public final class ConnectionManager: ObservableObject {
     /// Optional callback for state change notifications (connect/disconnect/error).
     public var onStateChange: ((ConnectionConfig, ConnectionState) -> Void)?
 
+    /// Optional callback for mount state change notifications.
+    public var onMountStateChange: ((ConnectionConfig, MountState) -> Void)?
+
     private static let maxRetries = 5
     private static let baseDelay: UInt64 = 1_000_000_000 // 1 second in nanoseconds
     private static let mountURLRetryCount = 20
@@ -114,7 +117,7 @@ public final class ConnectionManager: ObservableObject {
 
             // Auto-mount if mount provider is set
             if let mp = mountProvider {
-                mountStates[id] = .mounting
+                setMountState(.mounting, for: config)
                 do {
                     try await mp.mount(config: config)
                     try? await mp.signalEnumerator(for: config)
@@ -124,7 +127,7 @@ public final class ConnectionManager: ObservableObject {
                     if isMissingFileProviderExtensionError(error) {
                         needsExtensionSetup = true
                     }
-                    mountStates[id] = .error(desc)
+                    setMountState(.error(desc), for: config)
                 }
             }
         } catch {
@@ -144,7 +147,7 @@ public final class ConnectionManager: ObservableObject {
         if let config = connections.first(where: { $0.id == id }), let mp = mountProvider {
             try? await mp.removeSymlink(for: config)
             try? await mp.unmount(config: config)
-            mountStates[id] = .unmounted
+            setMountState(.unmounted, for: config)
         }
 
         if let fs = fileSystems[id] {
@@ -203,7 +206,18 @@ public final class ConnectionManager: ObservableObject {
         }
         do {
             try await fs.connect()
+        } catch {
+            return .failure(error)
+        }
+
+        do {
             _ = try await fs.enumerate(at: .root)
+        } catch {
+            try? await fs.disconnect()
+            return .failure(error)
+        }
+
+        do {
             try await fs.disconnect()
             return .success(())
         } catch {
@@ -235,7 +249,7 @@ public final class ConnectionManager: ObservableObject {
             // Rebuild mount states and symlinks for existing mounted configs
             for config in connections {
                 if domainIDs.contains(config.domainIdentifier) {
-                    mountStates[config.id] = .mounting
+                    setMountState(.mounting, for: config)
                     do {
                         try await mp.signalEnumerator(for: config)
                         // `syncMounts()` may discover an already-mounted File Provider domain
@@ -255,13 +269,13 @@ public final class ConnectionManager: ObservableObject {
                         states[config.id] = .connecting
                         mountResolutionTasks[config.id]?.cancel()
                         mountResolutionTasks.removeValue(forKey: config.id)
-                        mountStates[config.id] = .unmounted
+                        setMountState(.unmounted, for: config)
                         try? await mp.removeSymlink(for: config)
                     }
                 } else {
                     mountResolutionTasks[config.id]?.cancel()
                     mountResolutionTasks.removeValue(forKey: config.id)
-                    mountStates[config.id] = .unmounted
+                    setMountState(.unmounted, for: config)
                     try? await mp.removeSymlink(for: config)
                 }
             }
@@ -309,17 +323,22 @@ public final class ConnectionManager: ObservableObject {
                     throw MountError.mountFailed("Failed to create symlink for \(config.name)")
                 }
                 if Task.isCancelled { return }
-                self.mountStates[config.id] = .mounted(path: path)
+                self.setMountState(.mounted(path: path), for: config)
             } catch {
                 if Task.isCancelled { return }
                 let desc = self.describe(error)
                 if self.isMissingFileProviderExtensionError(error) {
                     self.needsExtensionSetup = true
                 }
-                self.mountStates[config.id] = .error(desc)
+                self.setMountState(.error(desc), for: config)
             }
             self.mountResolutionTasks.removeValue(forKey: config.id)
         }
+    }
+
+    private func setMountState(_ state: MountState, for config: ConnectionConfig) {
+        mountStates[config.id] = state
+        onMountStateChange?(config, state)
     }
 
     private func isMissingFileProviderExtensionError(_ error: Error) -> Bool {
@@ -353,7 +372,8 @@ public final class ConnectionManager: ObservableObject {
 
     private func cleanupOrphanedSymlinks(for connections: [ConnectionConfig]) async throws {
         let fm = FileManager.default
-        let baseDir = FileProviderMountProvider.symlinkBaseURL
+        guard let mountProvider else { return }
+        let baseDir = mountProvider.symlinkBaseURL
 
         guard fm.fileExists(atPath: baseDir.path),
               let contents = try? fm.contentsOfDirectory(atPath: baseDir.path) else {
@@ -363,46 +383,10 @@ public final class ConnectionManager: ObservableObject {
         let knownNames = Set(connections.map(FileProviderMountProvider.symlinkFilename(for:)))
         for name in contents where !knownNames.contains(name) {
             let candidateURL = baseDir.appendingPathComponent(name)
-            guard shouldRemoveManagedSymlink(at: candidateURL, fileManager: fm) else {
+            guard FileProviderMountProvider.shouldRemoveManagedSymlink(at: candidateURL, fileManager: fm) else {
                 continue
             }
             try? fm.removeItem(at: candidateURL)
         }
-    }
-
-    private func shouldRemoveManagedSymlink(at url: URL, fileManager: FileManager) -> Bool {
-        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
-              attributes[.type] as? FileAttributeType == .typeSymbolicLink,
-              matchesManagedSymlinkFilename(url.lastPathComponent),
-              let destinationPath = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
-            return false
-        }
-
-        let resolvedDestinationURL = URL(
-            fileURLWithPath: destinationPath,
-            relativeTo: url.deletingLastPathComponent()
-        ).standardizedFileURL
-
-        return isManagedMountDestination(resolvedDestinationURL)
-    }
-
-    private func matchesManagedSymlinkFilename(_ name: String) -> Bool {
-        guard let separatorIndex = name.lastIndex(of: "-") else {
-            return false
-        }
-        let prefix = name[..<separatorIndex]
-        let suffix = name[name.index(after: separatorIndex)...]
-        return !prefix.isEmpty && UUID(uuidString: String(suffix)) != nil
-    }
-
-    private func isManagedMountDestination(_ url: URL) -> Bool {
-        let cloudStorageRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("CloudStorage", isDirectory: true)
-            .standardizedFileURL
-
-        let destinationPath = url.path
-        let rootPath = cloudStorageRoot.path
-        return destinationPath == rootPath || destinationPath.hasPrefix(rootPath + "/")
     }
 }

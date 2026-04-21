@@ -5,11 +5,11 @@ final class FileProviderMountProviderTests: XCTestCase {
 
     private var temporaryDirectoryURL: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
         temporaryDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("FileProviderMountProviderTests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: temporaryDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: temporaryDirectoryURL, withIntermediateDirectories: true)
     }
 
     override func tearDown() {
@@ -20,7 +20,7 @@ final class FileProviderMountProviderTests: XCTestCase {
     }
 
     func testItemTypeReturnsNilForMissingPath() throws {
-        let provider = FileProviderMountProvider()
+        let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
         let missingURL = temporaryDirectoryURL.appendingPathComponent("missing-link")
 
         let itemType = try provider.itemType(at: missingURL)
@@ -29,7 +29,7 @@ final class FileProviderMountProviderTests: XCTestCase {
     }
 
     func testItemTypeRecognizesSymbolicLink() throws {
-        let provider = FileProviderMountProvider()
+        let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
         let destinationURL = temporaryDirectoryURL.appendingPathComponent("destination")
         let symlinkURL = temporaryDirectoryURL.appendingPathComponent("link")
         FileManager.default.createFile(atPath: destinationURL.path, contents: Data())
