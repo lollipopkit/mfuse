@@ -13,7 +13,7 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selectedConnection) {
-            Section("Connections") {
+            Section("Mounts") {
                 ForEach(connectionManager.connections) { config in
                     connectionRow(config)
                         .tag(config)
@@ -33,16 +33,18 @@ struct SidebarView: View {
                 .buttonStyle(.borderless)
                 Spacer()
                 Menu {
-                    Button("Connect All") {
+                    Button("Mount All") {
                         Task {
-                            for config in connectionManager.connections where !connectionManager.state(for: config.id).isConnected {
+                            for config in connectionManager.connections
+                            where !connectionManager.effectiveMountState(for: config.id).isMounted {
                                 await connectionManager.connect(config.id)
                             }
                         }
                     }
-                    Button("Disconnect All") {
+                    Button("Unmount All") {
                         Task {
-                            for config in connectionManager.connections where connectionManager.state(for: config.id).isConnected {
+                            for config in connectionManager.connections
+                            where connectionManager.effectiveMountState(for: config.id).isMounted {
                                 await connectionManager.disconnect(config.id)
                             }
                         }
@@ -58,13 +60,12 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func connectionRow(_ config: ConnectionConfig) -> some View {
-        let state = connectionManager.state(for: config.id)
-        let mount = connectionManager.mountState(for: config.id)
+        let mount = connectionManager.effectiveMountState(for: config.id)
         let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
             ?? FileProviderMountProvider.defaultSymlinkBaseURL
         HStack(spacing: 8) {
             Image(systemName: config.backendType.iconName)
-                .foregroundStyle(state.isConnected ? .green : .secondary)
+                .foregroundStyle(mount.isMounted ? .green : .secondary)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
@@ -88,7 +89,7 @@ struct SidebarView: View {
                     .foregroundStyle(.green.opacity(0.7))
             }
             Circle()
-                .fill(stateColor(state))
+                .fill(stateColor(mount))
                 .frame(width: 8, height: 8)
         }
         .padding(.vertical, 2)
@@ -96,14 +97,16 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func contextMenu(for config: ConnectionConfig) -> some View {
-        let state = connectionManager.state(for: config.id)
-        let mount = connectionManager.mountState(for: config.id)
-        if state.isConnected {
-            Button("Disconnect") {
+        let mount = connectionManager.effectiveMountState(for: config.id)
+        if case .mounting = mount {
+            Button("Mounting…") {}
+                .disabled(true)
+        } else if mount.isMounted {
+            Button("Unmount") {
                 Task { await connectionManager.disconnect(config.id) }
             }
         } else {
-            Button("Connect") {
+            Button("Mount") {
                 Task { await connectionManager.connect(config.id) }
             }
         }
@@ -119,7 +122,7 @@ struct SidebarView: View {
         }
         Divider()
         Button("Edit…") { onEdit(config) }
-        Button("Remove", role: .destructive) {
+        Button("Remove Mount", role: .destructive) {
             Task {
                 do {
                     await connectionManager.disconnect(config.id)
@@ -129,19 +132,19 @@ struct SidebarView: View {
                     }
                 } catch {
                     logger.error(
-                        "Failed to remove connection \(config.id.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
+                        "Failed to remove mount \(config.id.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
                     )
                 }
             }
         }
     }
 
-    private func stateColor(_ state: ConnectionState) -> Color {
+    private func stateColor(_ state: MountState) -> Color {
         switch state {
-        case .disconnected:   return .gray
-        case .connecting:     return .orange
-        case .connected:      return .green
-        case .error:          return .red
+        case .unmounted:  return .gray
+        case .mounting:   return .orange
+        case .mounted:    return .green
+        case .error:      return .red
         }
     }
 
@@ -167,7 +170,7 @@ struct SidebarView: View {
             return mountURL
         }
 
-        if let path = connectionManager.mountState(for: config.id).mountPath {
+        if let path = connectionManager.effectiveMountState(for: config.id).mountPath {
             return URL(fileURLWithPath: path)
         }
 

@@ -38,7 +38,7 @@ struct ContentView: View {
         }) {
             ExtensionGuideView()
         }
-        .alert("Unable to Save Connection", isPresented: saveErrorIsPresented) {
+        .alert("Unable to Save Mount", isPresented: saveErrorIsPresented) {
             Button("OK", role: .cancel) {
                 saveErrorMessage = nil
             }
@@ -53,7 +53,7 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: showNewEditor) {
-                    Label("Add Connection", systemImage: "plus")
+                    Label("Add Mount", systemImage: "plus")
                 }
             }
         }
@@ -61,14 +61,12 @@ struct ContentView: View {
             showNewEditor()
         }
         .onReceive(NotificationCenter.default.publisher(for: .refreshConnections)) { _ in
-            // Trigger re-enumerate for selected connection
             if let config = selectedConnection {
-                let state = connectionManager.state(for: config.id)
-                let mountState = connectionManager.mountState(for: config.id)
-                if connectionManager.mountProvider != nil && (state.isConnected || mountState.isMounted) {
-                Task {
-                    try? await connectionManager.mountProvider?.signalEnumerator(for: config)
-                }
+                let mountState = connectionManager.effectiveMountState(for: config.id)
+                if connectionManager.mountProvider != nil && mountState.isMounted {
+                    Task {
+                        try? await connectionManager.mountProvider?.signalEnumerator(for: config)
+                    }
                 }
             }
         }
@@ -79,12 +77,12 @@ struct ContentView: View {
             Image(systemName: "externaldrive.connected.to.line.below")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("No Connection Selected")
+            Text("No Mount Selected")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("Select a connection from the sidebar or add a new one.")
+            Text("Select a saved mount from the sidebar or add a new one.")
                 .foregroundStyle(.tertiary)
-            Button("Add Connection") { showNewEditor() }
+            Button("Add Mount") { showNewEditor() }
                 .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

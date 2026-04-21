@@ -1,10 +1,11 @@
 import Foundation
 import UserNotifications
 
-/// Posts local notifications for connection lifecycle events.
+/// Posts local notifications for mount lifecycle events.
 final class NotificationService {
 
     static let shared = NotificationService()
+    var isEnabled = false
 
     private init() {
         requestAuthorization()
@@ -14,19 +15,21 @@ final class NotificationService {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func postConnected(name: String) {
-        post(title: "Connected", body: "\(name) is now connected.", identifier: "connected-\(name)")
+    func postMounted(name: String) {
+        post(title: "Mounted", body: "\(name) is now available in Finder.", identifier: "mounted-\(name)")
     }
 
-    func postDisconnected(name: String) {
-        post(title: "Disconnected", body: "\(name) has been disconnected.", identifier: "disconnected-\(name)")
+    func postUnmounted(name: String) {
+        post(title: "Unmounted", body: "\(name) has been removed from Finder.", identifier: "unmounted-\(name)")
     }
 
-    func postError(name: String, error: String) {
-        post(title: "Connection Error", body: "\(name): \(error)", identifier: "error-\(name)")
+    func postMountError(name: String, error: String) {
+        post(title: "Mount Error", body: "\(name): \(error)", identifier: "error-\(name)")
     }
 
     private func post(title: String, body: String, identifier: String) {
+        guard isEnabled else { return }
+
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

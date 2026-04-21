@@ -25,12 +25,6 @@ MFuse is a macOS app that exposes remote storage in Finder through File Provider
   </tr>
 </table>
 
-## What MFuse Is
-
-MFuse combines a macOS app, a File Provider extension, and a set of protocol-specific Swift packages into one remote filesystem client.
-
-The app manages connection definitions, credentials, and user actions. The File Provider extension bridges those connections into Finder-visible domains. Each remote protocol is implemented as an independent backend package behind a shared virtual filesystem interface.
-
 ## Supported Backends
 
 - SFTP
@@ -40,17 +34,6 @@ The app manages connection definitions, credentials, and user actions. The File 
 - FTP
 - NFS
 - Google Drive
-
-## How It Works
-
-MFuse is split into three main layers:
-
-- `MFuse/`: the macOS SwiftUI app for managing connections and user workflows.
-- `MFuseProvider/`: the File Provider extension that exposes remote content to Finder.
-- `Packages/`: reusable Swift packages, including `MFuseCore` plus protocol backends such as `MFuseSFTP`, `MFuseS3`, and `MFuseWebDAV`.
-
-Shared connection metadata is stored through `SharedStorage`, while secrets are handled by `KeychainService`. Mounting is handled through `FileProviderMountProvider`, and mounted domains become visible through macOS File Provider.
-Mounted domains are persistent across app relaunches as long as the connection config still exists. MFuse also recreates a convenience shortcut for active mounts in a writable shortcuts directory. A manual disconnect removes both the File Provider domain and the shortcut, so it will not be restored automatically on the next launch.
 
 ## Project Structure
 

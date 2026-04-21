@@ -15,6 +15,7 @@ struct MFuseApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var connectionManager: ConnectionManager
+    @StateObject private var appSettings: AppSettingsStore
     @State private var didPerformInitialSetup = false
     private let domainManager: DomainManager
     private let mountProvider: FileProviderMountProvider
@@ -67,19 +68,20 @@ struct MFuseApp: App {
             connectionManager: manager,
             mountProvider: self.mountProvider
         )
-        manager.onStateChange = { config, state in
+        manager.onMountStateChange = { config, state in
             switch state {
-            case .connected:
-                NotificationService.shared.postConnected(name: config.name)
-            case .disconnected:
-                NotificationService.shared.postDisconnected(name: config.name)
+            case .mounted:
+                NotificationService.shared.postMounted(name: config.name)
+            case .unmounted:
+                NotificationService.shared.postUnmounted(name: config.name)
             case .error(let msg):
-                NotificationService.shared.postError(name: config.name, error: msg)
-            default:
+                NotificationService.shared.postMountError(name: config.name, error: msg)
+            case .mounting:
                 break
             }
         }
         _connectionManager = StateObject(wrappedValue: manager)
+        _appSettings = StateObject(wrappedValue: AppSettingsStore())
     }
 
     var body: some Scene {
@@ -87,6 +89,7 @@ struct MFuseApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(connectionManager)
+                .environmentObject(appSettings)
                 .environment(\.keychainService, keychain)
                 .frame(minWidth: 700, minHeight: 450)
                 .task {
@@ -97,7 +100,7 @@ struct MFuseApp: App {
         .defaultSize(width: 900, height: 600)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("New Connection") {
+                Button("New Mount") {
                     NotificationCenter.default.post(name: .newConnection, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
@@ -113,9 +116,15 @@ struct MFuseApp: App {
         MenuBarExtra("MFuse", systemImage: "externaldrive.connected.to.line.below") {
             MenuBarView()
                 .environmentObject(connectionManager)
+                .environmentObject(appSettings)
                 .environment(\.keychainService, keychain)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environmentObject(appSettings)
+        }
     }
 
     @MainActor
@@ -125,6 +134,7 @@ struct MFuseApp: App {
 
         guard isCleanupLaunch else {
             await connectionManager.syncMounts()
+            NotificationService.shared.isEnabled = true
             return
         }
 

@@ -186,7 +186,9 @@ final class ConnectionManagerTests: XCTestCase {
         registry = BackendRegistry()
         registry.register(.sftp) { [weak self] _, _ in
             let fs = MockFileSystem()
-            self?.lastCreatedFileSystem = fs
+            MainActor.assumeIsolated {
+                self?.lastCreatedFileSystem = fs
+            }
             return fs
         }
 
@@ -374,6 +376,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(manager.state(for: config.id), .connected)
         let mountedState = await waitForMountState(config.id)
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .mounted(path: mountURL.path))
         let symlinkURL = testSymlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
@@ -401,6 +404,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNil(manager.fileSystem(for: config.id))
         let mountedState = await waitForMountState(config.id)
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .mounted(path: mountURL.path))
         let symlinkURL = testSymlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))

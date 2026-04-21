@@ -25,12 +25,6 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
   </tr>
 </table>
 
-## 项目简介
-
-MFuse 由三部分组成：macOS 主应用、File Provider extension，以及一组按协议拆分的 Swift Package。
-
-主应用负责连接配置、凭证管理和用户操作；File Provider extension 负责把远端内容接入 Finder；各类远端协议则通过统一的虚拟文件系统接口接入，形成一致的使用方式。
-
 ## 当前支持的后端
 
 - SFTP
@@ -40,17 +34,6 @@ MFuse 由三部分组成：macOS 主应用、File Provider extension，以及一
 - FTP
 - NFS
 - Google Drive
-
-## 工作原理
-
-项目主要分为三层：
-
-- `MFuse/`：macOS SwiftUI 主应用，负责连接管理与交互界面。
-- `MFuseProvider/`：File Provider extension，负责把远端内容暴露给 Finder。
-- `Packages/`：可复用 Swift Package，包括 `MFuseCore` 和多个协议后端实现。
-
-连接配置通过 `SharedStorage` 在主应用和扩展之间共享，敏感凭证通过 `KeychainService` 管理。挂载逻辑由 `FileProviderMountProvider` 处理，最终以 macOS File Provider domain 的形式出现在 Finder 中。
-只要连接配置仍然存在，已挂载的 domain 在应用重启后会继续保留，MFuse 也会在可写的快捷入口目录里重建对应的便捷链接。用户手动执行 Disconnect 时，会同时移除 File Provider domain 和该链接，后续启动不会自动恢复。
 
 ## 仓库结构
 

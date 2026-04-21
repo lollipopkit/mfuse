@@ -228,11 +228,19 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     func itemType(at url: URL) throws -> FileAttributeType? {
+        let path = url.path
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: path)
+                || (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil else {
+            return nil
+        }
+
         do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let attributes = try fileManager.attributesOfItem(atPath: path)
             return attributes[.type] as? FileAttributeType
         } catch let error as NSError
-            where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+            where (error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError)
+                || (error.domain == NSPOSIXErrorDomain && error.code == ENOENT) {
             return nil
         }
     }

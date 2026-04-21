@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import MFuseCore
 
-/// Menu bar extra window content showing connection status and quick actions.
+/// Menu bar extra window content showing mount status and quick actions.
 struct MenuBarView: View {
 
     @EnvironmentObject var connectionManager: ConnectionManager
@@ -15,7 +15,7 @@ struct MenuBarView: View {
                 Text("MFuse")
                     .font(.headline)
                 Spacer()
-                Text("\(connectedCount)/\(connectionManager.connections.count)")
+                Text("\(mountedCount)/\(connectionManager.connections.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -25,41 +25,41 @@ struct MenuBarView: View {
             Divider()
 
             if connectionManager.connections.isEmpty {
-                Text("No connections configured.\nOpen MFuse to add one.")
+                Text("No mounts configured.\nOpen MFuse to add one.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(12)
             } else {
-                // Connection list
                 ForEach(connectionManager.connections) { config in
                     menuBarRow(config)
                 }
 
                 Divider()
 
-                // Batch actions
                 HStack(spacing: 12) {
-                    Button("Connect All") {
+                    Button("Mount All") {
                         Task {
-                            for config in connectionManager.connections where !connectionManager.state(for: config.id).isConnected {
+                            for config in connectionManager.connections
+                            where !connectionManager.effectiveMountState(for: config.id).isMounted {
                                 await connectionManager.connect(config.id)
                             }
                         }
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
-                    .disabled(connectedCount == connectionManager.connections.count)
+                    .disabled(mountedCount == connectionManager.connections.count)
 
-                    Button("Disconnect All") {
+                    Button("Unmount All") {
                         Task {
-                            for config in connectionManager.connections where connectionManager.state(for: config.id).isConnected {
+                            for config in connectionManager.connections
+                            where connectionManager.effectiveMountState(for: config.id).isMounted {
                                 await connectionManager.disconnect(config.id)
                             }
                         }
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
-                    .disabled(connectedCount == 0)
+                    .disabled(mountedCount == 0)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
@@ -67,13 +67,18 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Footer actions
             HStack {
                 Button("Open MFuse") {
                     NSApp.activate(ignoringOtherApps: true)
                     if let window = NSApp.windows.first(where: { $0.title.contains("MFuse") || $0.isKeyWindow }) {
                         window.makeKeyAndOrderFront(nil)
                     }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                Spacer()
+                SettingsLink {
+                    Text("Settings")
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
@@ -100,13 +105,12 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private func menuBarRow(_ config: ConnectionConfig) -> some View {
-        let state = connectionManager.state(for: config.id)
-        let mount = connectionManager.mountState(for: config.id)
+        let mount = connectionManager.effectiveMountState(for: config.id)
         let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
             ?? FileProviderMountProvider.defaultSymlinkBaseURL
         HStack(spacing: 8) {
             Circle()
-                .fill(stateColor(state))
+                .fill(stateColor(mount))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
                 Text(config.name)
@@ -123,7 +127,7 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                if case .error(let msg) = state {
+                if case .error(let msg) = mount {
                     Text(msg)
                         .font(.caption2)
                         .foregroundStyle(.red)
@@ -141,21 +145,21 @@ struct MenuBarView: View {
                 .controlSize(.small)
                 .help("Reveal in Finder")
             }
-            toggleButton(config: config, state: state)
+            toggleButton(config: config, mountState: mount)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
 
     @ViewBuilder
-    private func toggleButton(config: ConnectionConfig, state: ConnectionState) -> some View {
-        if case .connecting = state {
+    private func toggleButton(config: ConnectionConfig, mountState: MountState) -> some View {
+        if case .mounting = mountState {
             ProgressView()
                 .controlSize(.small)
         } else {
-            Button(state.isConnected ? "Disconnect" : "Connect") {
+            Button(mountState.isMounted ? "Unmount" : "Mount") {
                 Task {
-                    if state.isConnected {
+                    if mountState.isMounted {
                         await connectionManager.disconnect(config.id)
                     } else {
                         await connectionManager.connect(config.id)
@@ -167,16 +171,16 @@ struct MenuBarView: View {
         }
     }
 
-    private var connectedCount: Int {
-        connectionManager.connections.filter { connectionManager.state(for: $0.id).isConnected }.count
+    private var mountedCount: Int {
+        connectionManager.connections.filter { connectionManager.effectiveMountState(for: $0.id).isMounted }.count
     }
 
-    private func stateColor(_ state: ConnectionState) -> Color {
+    private func stateColor(_ state: MountState) -> Color {
         switch state {
-        case .disconnected:   return .gray
-        case .connecting:     return .orange
-        case .connected:      return .green
-        case .error:          return .red
+        case .unmounted:  return .gray
+        case .mounting:   return .orange
+        case .mounted:    return .green
+        case .error:      return .red
         }
     }
 
@@ -211,7 +215,7 @@ struct MenuBarView: View {
             return mountURL
         }
 
-        if let path = connectionManager.mountState(for: config.id).mountPath {
+        if let path = connectionManager.effectiveMountState(for: config.id).mountPath {
             return URL(fileURLWithPath: path)
         }
 

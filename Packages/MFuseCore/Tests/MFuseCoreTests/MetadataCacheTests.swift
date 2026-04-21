@@ -67,7 +67,7 @@ final class MetadataCacheTests: XCTestCase {
 
         let childrenResult = await cache.children(of: parent)
         XCTAssertNotNil(childrenResult)
-        XCTAssertEqual(childrenResult, [])
+        XCTAssertEqual(childrenResult?.count, 0)
     }
 
     func testInvalidate() async {

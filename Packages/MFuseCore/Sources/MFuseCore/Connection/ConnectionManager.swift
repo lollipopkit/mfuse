@@ -260,6 +260,26 @@ public final class ConnectionManager: ObservableObject {
         mountStates[id] ?? .unmounted
     }
 
+    /// User-facing state that collapses the connection handshake into mount semantics.
+    public func effectiveMountState(for id: UUID) -> MountState {
+        let mountState = mountState(for: id)
+        switch mountState {
+        case .mounted, .mounting, .error:
+            return mountState
+        case .unmounted:
+            break
+        }
+
+        switch state(for: id) {
+        case .connecting, .connected:
+            return mountProvider == nil ? .unmounted : .mounting
+        case .error(let message):
+            return .error(message)
+        case .disconnected:
+            return .unmounted
+        }
+    }
+
     /// Best-effort mount state repair for already-registered File Provider domains.
     public func repairMountState(for id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }),

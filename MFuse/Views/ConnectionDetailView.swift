@@ -7,12 +7,8 @@ struct ConnectionDetailView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     let config: ConnectionConfig
 
-    private var state: ConnectionState {
-        connectionManager.state(for: config.id)
-    }
-
     private var mount: MountState {
-        connectionManager.mountState(for: config.id)
+        connectionManager.effectiveMountState(for: config.id)
     }
 
     private var symlinkBaseURL: URL {
@@ -40,27 +36,17 @@ struct ConnectionDetailView: View {
                     LabeledContent("Auth", value: config.authMethod.rawValue.capitalized)
                 }
 
-                Section("Status") {
+                Section("Mount") {
                     LabeledContent("State") {
                         HStack(spacing: 6) {
-                            Image(systemName: state.iconName)
-                                .foregroundStyle(stateColor)
-                            Text(state.statusText)
-                        }
-                    }
-                }
-
-                Section("Mount") {
-                    LabeledContent("Mount State") {
-                        HStack(spacing: 6) {
                             Image(systemName: mount.isMounted ? "folder.fill" : "folder")
-                                .foregroundStyle(mount.isMounted ? .green : .secondary)
+                                .foregroundStyle(iconColor)
                             Text(mount.statusText)
                                 .foregroundStyle(mountStateColor)
                         }
                     }
                     if mount.isMounted {
-                        LabeledContent("Symlink") {
+                        LabeledContent("Shortcut") {
                             Text(
                                 FileProviderMountProvider.symlinkDisplayPath(
                                     for: config,
@@ -119,25 +105,25 @@ struct ConnectionDetailView: View {
                 }
                 .buttonStyle(.bordered)
             }
-            connectionButton
+            mountButton
             refreshButton
         }
     }
 
-    private var connectionButton: some View {
+    private var mountButton: some View {
         Group {
-            if state.isConnected {
-                Button("Disconnect") {
+            if mount.isMounted {
+                Button("Unmount") {
                     Task {
                         await connectionManager.disconnect(config.id)
                     }
                 }
                 .tint(.red)
-            } else if case .connecting = state {
+            } else if case .mounting = mount {
                 ProgressView()
                     .controlSize(.small)
             } else {
-                Button("Connect") {
+                Button("Mount") {
                     Task {
                         await connectionManager.connect(config.id)
                     }
@@ -149,7 +135,7 @@ struct ConnectionDetailView: View {
 
     private var refreshButton: some View {
         Group {
-            if state.isConnected {
+            if mount.isMounted {
                 Button {
                     Task {
                         try? await connectionManager.mountProvider?.signalEnumerator(for: config)
@@ -162,21 +148,21 @@ struct ConnectionDetailView: View {
         }
     }
 
+    private var iconColor: Color {
+        switch mount {
+        case .mounted:    return .green
+        case .mounting:   return .orange
+        case .error:      return .red
+        case .unmounted:  return .secondary
+        }
+    }
+
     private var mountStateColor: Color {
         switch mount {
         case .unmounted:  return .secondary
         case .mounting:   return .orange
         case .mounted:    return .green
         case .error:      return .red
-        }
-    }
-
-    private var stateColor: Color {
-        switch state {
-        case .disconnected:   return .gray
-        case .connecting:     return .orange
-        case .connected:      return .green
-        case .error:          return .red
         }
     }
 

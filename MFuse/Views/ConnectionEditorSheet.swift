@@ -74,7 +74,7 @@ struct ConnectionEditorSheet: View {
         VStack(spacing: 0) {
             // Title
             HStack {
-                Text(existingID != nil ? "Edit Connection" : "New Connection")
+                Text(existingID != nil ? "Edit Mount" : "New Mount")
                     .font(.headline)
                 Spacer()
             }
@@ -193,7 +193,7 @@ struct ConnectionEditorSheet: View {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.red)
-                            Text("Credentials will be sent in cleartext. Enable TLS to encrypt your connection.")
+                            Text("Credentials will be sent in cleartext. Enable TLS to encrypt this mount.")
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         }
@@ -218,7 +218,7 @@ struct ConnectionEditorSheet: View {
 
             // Buttons
             HStack {
-                Button("Test Connection") { testConnection() }
+                Button("Test Access") { testConnection() }
                     .disabled(isTesting || !isValid)
                 if isTesting {
                     ProgressView()
@@ -317,7 +317,7 @@ struct ConnectionEditorSheet: View {
                     guard !Task.isCancelled else { return }
                     switch result {
                     case .success:
-                        testResult = "Connection successful!"
+                        testResult = "Access successful!"
                         testSuccess = true
                     case .failure(let error):
                         testResult = error.localizedDescription
