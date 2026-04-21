@@ -114,6 +114,7 @@ public final class ConnectionManager: ObservableObject {
         let previousState = states[config.id]
         let previousMountState = mountStates[config.id]
         let previousFileSystem = fileSystems[config.id]
+        let savedCredential = try await credentialProvider.credential(for: config.id)
         connections.removeAll { $0.id == config.id }
         states.removeValue(forKey: config.id)
         mountStates.removeValue(forKey: config.id)
@@ -134,6 +135,7 @@ public final class ConnectionManager: ObservableObject {
             try await credentialProvider.delete(for: config.id)
         } catch {
             let credentialDeleteError = error
+            var restoreFailures: [String] = []
             do {
                 try restoreRemovedConnectionStateAndPersist(
                     for: config.id,
@@ -143,13 +145,23 @@ public final class ConnectionManager: ObservableObject {
                     fileSystem: previousFileSystem
                 )
             } catch {
-                let restoreError = error
+                restoreFailures.append("Failed to restore the removed connection: \(error.localizedDescription)")
+            }
+            if let savedCredential {
+                do {
+                    try await credentialProvider.store(savedCredential, for: config.id)
+                } catch {
+                    restoreFailures.append("Failed to restore the credential: \(error.localizedDescription)")
+                }
+            }
+            if !restoreFailures.isEmpty {
+                let restoreFailureSummary = restoreFailures.joined(separator: " ")
                 throw RemoteFileSystemError.operationFailed(
-                    "Failed to delete credential for connection \(config.id.uuidString): \(credentialDeleteError.localizedDescription). Failed to restore the removed connection: \(restoreError.localizedDescription)"
+                    "Failed to delete credential for connection \(config.id.uuidString): \(credentialDeleteError.localizedDescription). \(restoreFailureSummary)"
                 )
             }
             throw RemoteFileSystemError.operationFailed(
-                "Failed to delete credential for connection \(config.id.uuidString); restored the connection so removal can be retried: \(credentialDeleteError.localizedDescription)"
+                "Failed to delete credential for connection \(config.id.uuidString); restored the connection and credential so removal can be retried: \(credentialDeleteError.localizedDescription)"
             )
         }
         connectionGenerations.removeValue(forKey: config.id)
@@ -712,14 +724,7 @@ public final class ConnectionManager: ObservableObject {
 
     private func isCleanupComplete(for id: UUID) -> Bool {
         let connectionIsDisconnected = states[id]?.isConnected != true
-        let mountState = mountState(for: id)
-        let mountIsStopped: Bool
-        switch mountState {
-        case .mounted, .mounting:
-            mountIsStopped = false
-        case .unmounted, .error:
-            mountIsStopped = true
-        }
+        let mountIsStopped = mountState(for: id) == .unmounted
 
         return connectionIsDisconnected
             && mountIsStopped

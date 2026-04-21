@@ -37,6 +37,10 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
 - NFS
 - Google Drive
 
+## 后端说明
+
+- SFTP 的目录枚举带有一个兼容性 fallback：当常规 SFTP 列表请求超时，或遇到某些连接级错误时，MFuse 可能会复用现有 SSH 会话，在远端主机上执行一小段 `python3` 脚本来完成目录枚举。这个 fallback 不会用于正常成功的列表请求，也不会用于权限不足或路径不存在这类错误。触发该 fallback 的远端主机需要提供 `python3`，否则目录枚举会失败。
+
 ## 仓库结构
 
 ```text

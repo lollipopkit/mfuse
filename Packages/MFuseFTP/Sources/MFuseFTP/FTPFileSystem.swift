@@ -59,7 +59,10 @@ public actor FTPFileSystem: RemoteFileSystem {
             }
 
             // Set binary mode
-            _ = try await conn.sendCommand("TYPE I")
+            let typeResp = try await conn.sendCommand("TYPE I")
+            guard (200..<300).contains(typeResp.code) else {
+                throw FTPError.unexpectedResponse(typeResp)
+            }
         } catch {
             try? await conn.close()
             throw mapConnectionError(error)
@@ -84,7 +87,13 @@ public actor FTPFileSystem: RemoteFileSystem {
 
         // Open data connection and send LIST
         let (dataChannel, dataHandler) = try await conn.openDataConnection()
-        let response = try await conn.sendCommand("LIST \(remotePath)")
+        let response: FTPResponse
+        do {
+            response = try await conn.sendCommand("LIST \(remotePath)")
+        } catch {
+            try? await dataChannel.close()
+            throw error
+        }
         guard response.code == 150 || response.code == 125 else {
             try await dataChannel.close()
             throw RemoteFileSystemError.operationFailed("LIST failed: \(response.text)")
@@ -154,7 +163,13 @@ public actor FTPFileSystem: RemoteFileSystem {
         let remotePath = resolvedPath(path)
 
         let (dataChannel, dataHandler) = try await conn.openDataConnection()
-        let response = try await conn.sendCommand("RETR \(remotePath)")
+        let response: FTPResponse
+        do {
+            response = try await conn.sendCommand("RETR \(remotePath)")
+        } catch {
+            try? await dataChannel.close()
+            throw error
+        }
         guard response.code == 150 || response.code == 125 else {
             try await dataChannel.close()
             if response.code == 550 {
@@ -184,7 +199,13 @@ public actor FTPFileSystem: RemoteFileSystem {
         let remotePath = resolvedPath(path)
 
         let (dataChannel, _) = try await conn.openDataConnection()
-        let response = try await conn.sendCommand("STOR \(remotePath)")
+        let response: FTPResponse
+        do {
+            response = try await conn.sendCommand("STOR \(remotePath)")
+        } catch {
+            try? await dataChannel.close()
+            throw error
+        }
         guard response.code == 150 || response.code == 125 else {
             try await dataChannel.close()
             throw RemoteFileSystemError.operationFailed("STOR failed: \(response.text)")
@@ -212,7 +233,13 @@ public actor FTPFileSystem: RemoteFileSystem {
         let remotePath = resolvedPath(path)
 
         let (dataChannel, _) = try await conn.openDataConnection()
-        let response = try await conn.sendCommand("STOR \(remotePath)")
+        let response: FTPResponse
+        do {
+            response = try await conn.sendCommand("STOR \(remotePath)")
+        } catch {
+            try? await dataChannel.close()
+            throw error
+        }
         guard response.code == 150 || response.code == 125 else {
             try await dataChannel.close()
             throw RemoteFileSystemError.operationFailed("STOR failed: \(response.text)")
@@ -342,7 +369,13 @@ public actor FTPFileSystem: RemoteFileSystem {
 
     private func resolvedPath(_ path: RemotePath) -> String {
         if path.isRoot { return config.remotePath }
-        let base = config.remotePath.hasSuffix("/") ? config.remotePath : config.remotePath + "/"
+        let base = if config.remotePath == "/" {
+            "/"
+        } else if config.remotePath.hasSuffix("/") {
+            config.remotePath
+        } else {
+            config.remotePath + "/"
+        }
         return base + path.components.joined(separator: "/")
     }
 
@@ -354,7 +387,13 @@ public actor FTPFileSystem: RemoteFileSystem {
         let targetPath = path.parent ?? path
         let remotePath = resolvedPath(targetPath)
         let (dataChannel, dataHandler) = try await conn.openDataConnection()
-        let response = try await conn.sendCommand("LIST \(remotePath)")
+        let response: FTPResponse
+        do {
+            response = try await conn.sendCommand("LIST \(remotePath)")
+        } catch {
+            try? await dataChannel.close()
+            throw error
+        }
         guard response.code == 150 || response.code == 125 else {
             try await dataChannel.close()
             if response.code == 550 {

@@ -6,18 +6,28 @@ import XCTest
 final class MockCredentialProvider: @unchecked Sendable, CredentialProvider {
     var credentials: [UUID: Credential] = [:]
     var deletedConnectionIDs: [UUID] = []
+    var storedConnectionIDs: [UUID] = []
     var deleteError: Error?
+    var storeError: Error?
+    var deleteRemovesCredentialBeforeThrow = false
 
     func credential(for connectionID: UUID) async throws -> Credential? {
         credentials[connectionID]
     }
 
     func store(_ credential: Credential, for connectionID: UUID) async throws {
+        storedConnectionIDs.append(connectionID)
+        if let storeError {
+            throw storeError
+        }
         credentials[connectionID] = credential
     }
 
     func delete(for connectionID: UUID) async throws {
         deletedConnectionIDs.append(connectionID)
+        if deleteRemovesCredentialBeforeThrow {
+            credentials.removeValue(forKey: connectionID)
+        }
         if let deleteError {
             throw deleteError
         }
@@ -325,6 +335,66 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
     }
 
+    func testRemoveConnectionRestoresCredentialWhenDeleteFailsAfterRemovingIt() async throws {
+        let config = ConnectionConfig(
+            name: "RestoreCredential",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        let credential = Credential(password: "pass")
+        try manager.add(config)
+        credentialProvider.credentials[config.id] = credential
+        credentialProvider.deleteRemovesCredentialBeforeThrow = true
+        credentialProvider.deleteError = RemoteFileSystemError.operationFailed("mock delete failure")
+
+        do {
+            try await manager.remove(config)
+            XCTFail("Expected remove to fail when credential deletion fails")
+        } catch {
+            // Expected
+        }
+
+        XCTAssertEqual(manager.connections, [config])
+        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(credentialProvider.credentials[config.id], credential)
+        XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
+        XCTAssertEqual(credentialProvider.storedConnectionIDs, [config.id])
+    }
+
+    func testRemoveConnectionReportsCredentialRestoreFailureWhenDeleteFails() async throws {
+        let config = ConnectionConfig(
+            name: "RestoreCredentialFailure",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        let credential = Credential(password: "pass")
+        try manager.add(config)
+        credentialProvider.credentials[config.id] = credential
+        credentialProvider.deleteRemovesCredentialBeforeThrow = true
+        credentialProvider.deleteError = RemoteFileSystemError.operationFailed("mock delete failure")
+        credentialProvider.storeError = RemoteFileSystemError.operationFailed("mock store failure")
+
+        do {
+            try await manager.remove(config)
+            XCTFail("Expected remove to fail when credential restoration fails")
+        } catch let error as RemoteFileSystemError {
+            guard case .operationFailed(let message) = error else {
+                return XCTFail("Expected operationFailed, got \(error)")
+            }
+            XCTAssertTrue(message.contains(config.id.uuidString))
+            XCTAssertTrue(message.contains("mock delete failure"))
+            XCTAssertTrue(message.contains("mock store failure"))
+        } catch {
+            XCTFail("Expected operationFailed, got \(error)")
+        }
+
+        XCTAssertEqual(manager.connections, [config])
+        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertNil(credentialProvider.credentials[config.id])
+        XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
+        XCTAssertEqual(credentialProvider.storedConnectionIDs, [config.id])
+    }
+
     func testRemoveConnectionCleansUpErroredResidualFileSystem() async throws {
         let config = ConnectionConfig(
             name: "ResidualCleanup",
@@ -387,6 +457,47 @@ final class ConnectionManagerTests: XCTestCase {
             return XCTFail("Expected error state after failed cleanup")
         }
         XCTAssertNotNil(manager.fileSystem(for: config.id))
+        XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
+        XCTAssertTrue(credentialProvider.deletedConnectionIDs.isEmpty)
+        XCTAssertEqual(storage.loadConnections(), [config])
+    }
+
+    func testRemoveConnectionAbortsWhenUnmountLeavesMountStateError() async throws {
+        let config = ConnectionConfig(
+            name: "UnmountCleanupFailure",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-remove-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.setUnmountShouldFail(true)
+
+        do {
+            try await manager.remove(config)
+            XCTFail("Expected remove to fail when mount cleanup leaves error state")
+        } catch let error as ConnectionManagerError {
+            XCTAssertEqual(error, .cleanupFailed(config.id))
+        } catch {
+            XCTFail("Expected cleanupFailed error, got \(error)")
+        }
+
+        XCTAssertEqual(manager.connections, [config])
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        guard case .error(let message) = manager.mountState(for: config.id) else {
+            return XCTFail("Expected mount error state after failed unmount cleanup")
+        }
+        XCTAssertTrue(message.contains("mock unmount failure"))
+        XCTAssertNil(manager.fileSystem(for: config.id))
         XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
         XCTAssertTrue(credentialProvider.deletedConnectionIDs.isEmpty)
         XCTAssertEqual(storage.loadConnections(), [config])

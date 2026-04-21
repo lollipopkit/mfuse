@@ -37,6 +37,10 @@ Saved mounts can optionally enable `Auto-Mount on App Launch`. When combined wit
 - NFS
 - Google Drive
 
+## Backend Notes
+
+- SFTP directory enumeration has a compatibility fallback: when the normal SFTP listing path times out or hits certain connection-level failures, MFuse may execute a small `python3` snippet on the remote host over the existing SSH session to enumerate the directory. This fallback is not used for normal successful listings, permission-denied errors, or missing-path errors. Remote hosts that hit this fallback must have `python3` available, otherwise enumeration fails.
+
 ## Project Structure
 
 ```text

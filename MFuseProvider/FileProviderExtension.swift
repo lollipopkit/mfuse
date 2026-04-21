@@ -569,6 +569,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 "Bootstrap failed for domain \(config.domainIdentifier, privacy: .public): \(String(describing: error), privacy: .public)"
             )
             try? await fileSystem.disconnect()
+            await cache.invalidateAll()
             await cache.close()
             await contentCache.invalidateAll()
             await contentCache.close()

@@ -452,7 +452,9 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         for (index, component) in components.enumerated() {
             let isLast = index == components.count - 1
             currentPath = currentPath.appending(component)
-            let escapedName = component.replacingOccurrences(of: "'", with: "\\'")
+            let escapedName = component
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
             let query = "'\(currentID)' in parents and name='\(escapedName)' and trashed=false"
             guard var urlComponents = URLComponents(string: "\(Self.apiBase)/files") else {
                 throw RemoteFileSystemError.operationFailed("Invalid Google Drive files endpoint")
