@@ -39,10 +39,12 @@ struct ConnectionEditorSheet: View {
     @State private var didLoadStoredCredential = false
 
     private let existingID: UUID?
+    private let draftID: UUID
     private let onSave: (ConnectionConfig, Credential) -> Void
 
     init(config: ConnectionConfig?, onSave: @escaping (ConnectionConfig, Credential) -> Void) {
         self.existingID = config?.id
+        self.draftID = config?.id ?? UUID()
         self.onSave = onSave
         _name = State(initialValue: config?.name ?? "")
         _backendType = State(initialValue: config?.backendType ?? .sftp)
@@ -259,7 +261,7 @@ struct ConnectionEditorSheet: View {
         do {
             let credential = try buildCredential()
             let config = ConnectionConfig(
-                id: existingID ?? UUID(),
+                id: draftID,
                 name: name,
                 backendType: backendType,
                 host: host,
@@ -392,11 +394,13 @@ struct ConnectionEditorSheet: View {
     private func clearCredentialState(except method: AuthMethod) {
         switch method {
         case .password:
+            password = ""
             oauthToken = ""
             privateKeyPath = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .publicKey:
+            password = ""
             oauthToken = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""

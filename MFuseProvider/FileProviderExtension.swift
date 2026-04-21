@@ -105,6 +105,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
     private static let bootstrapTimeoutSeconds = 15.0
     private static let contentCacheStoreRetryCount = 2
+    private static let streamedReadChunkSize: UInt32 = 1_048_576
     private static let registerBackendsOnce: Void = {
         BackendRegistry.shared.registerAllBuiltIns(
             sftpFactory: { config, credential in
@@ -258,10 +259,15 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     return
                 }
 
-                let data = try await context.fileSystem.readFile(at: path)
-                progress.completedUnitCount = 80
+                let temporaryURL = try await downloadFileToTemporaryURL(
+                    at: path,
+                    remoteItem: remoteItem,
+                    using: context,
+                    progress: progress
+                )
+                defer { try? FileManager.default.removeItem(at: temporaryURL) }
                 let cachedURL = try await storeContentCache(
-                    data: data,
+                    fileAt: temporaryURL,
                     for: remoteItem,
                     using: context
                 )
@@ -296,29 +302,38 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 let context = try await runtimeContext()
                 let parentPath = itemTemplate.parentItemIdentifier.remotePath
                 let newPath = parentPath.appending(itemTemplate.filename)
-                var createdData: Data?
+                let createdFileURL: URL?
 
                 if itemTemplate.contentType == .folder {
                     try await context.fileSystem.createDirectory(at: newPath)
+                    createdFileURL = nil
                 } else if let url = url {
-                    let data = try Data(contentsOf: url)
+                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
                     try await context.fileSystem.createFile(at: newPath, data: data)
-                    createdData = data
+                    createdFileURL = url
                 } else {
                     let data = Data()
                     try await context.fileSystem.createFile(at: newPath, data: data)
-                    createdData = data
+                    let temporaryURL = try context.stateStore.temporaryFileURL(
+                        for: UUID().uuidString,
+                        extension: itemTemplate.filename.pathExtension.isEmpty ? "tmp" : itemTemplate.filename.pathExtension
+                    )
+                    try data.write(to: temporaryURL, options: .atomic)
+                    createdFileURL = temporaryURL
                 }
 
                 let remoteItem = try await context.fileSystem.itemInfo(at: newPath)
                 await context.cache.put(item: remoteItem)
                 await context.cache.invalidateChildren(of: parentPath)
-                if let createdData, !remoteItem.isDirectory {
+                if let createdFileURL, !remoteItem.isDirectory {
                     do {
-                        _ = try await context.contentCache.store(data: createdData, for: remoteItem)
+                        _ = try await storeContentCache(fileAt: createdFileURL, for: remoteItem, using: context)
                     } catch {
                         logger.error("createItem content cache store failed: \(error.localizedDescription)")
                         await context.contentCache.invalidate(path: remoteItem.path)
+                    }
+                    if url == nil {
+                        try? FileManager.default.removeItem(at: createdFileURL)
                     }
                 }
                 let newItem = FileProviderItem(
@@ -352,7 +367,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             do {
                 let context = try await runtimeContext()
                 var currentPath = item.itemIdentifier.remotePath
-                var updatedData: Data?
+                var updatedFileURL: URL?
                 let originalPath = currentPath
 
                 let targetParent = changedFields.contains(.parentItemIdentifier)
@@ -377,17 +392,17 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 }
 
                 if changedFields.contains(.contents), let url = newContents {
-                    let data = try Data(contentsOf: url)
+                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
                     try await context.fileSystem.writeFile(at: currentPath, data: data)
-                    updatedData = data
+                    updatedFileURL = url
                 }
 
                 let remoteItem = try await context.fileSystem.itemInfo(at: currentPath)
                 let parentID = parentIdentifier(for: currentPath)
                 await context.cache.put(item: remoteItem)
-                if let updatedData {
+                if let updatedFileURL {
                     do {
-                        _ = try await context.contentCache.store(data: updatedData, for: remoteItem)
+                        _ = try await storeContentCache(fileAt: updatedFileURL, for: remoteItem, using: context)
                     } catch {
                         logger.error("modifyItem content cache store failed: \(error.localizedDescription)")
                         await context.contentCache.invalidate(path: remoteItem.path)
@@ -580,7 +595,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func storeContentCache(
-        data: Data,
+        fileAt sourceURL: URL,
         for remoteItem: RemoteItem,
         using context: FileProviderRuntimeContext
     ) async throws -> URL {
@@ -588,7 +603,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
         for attempt in 0..<Self.contentCacheStoreRetryCount {
             do {
-                return try await context.contentCache.store(data: data, for: remoteItem)
+                return try await context.contentCache.store(fileAt: sourceURL, for: remoteItem)
             } catch {
                 lastError = error
                 await context.contentCache.invalidate(path: remoteItem.path)
@@ -599,6 +614,72 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         throw lastError ?? RemoteFileSystemError.operationFailed(
             "Failed to cache content for \(remoteItem.path.absoluteString)"
         )
+    }
+
+    private func downloadFileToTemporaryURL(
+        at path: RemotePath,
+        remoteItem: RemoteItem,
+        using context: FileProviderRuntimeContext,
+        progress: Progress
+    ) async throws -> URL {
+        let pathExtension = remoteItem.path.pathExtension ?? "tmp"
+        let temporaryURL = try context.stateStore.temporaryFileURL(
+            for: UUID().uuidString,
+            extension: pathExtension.isEmpty ? "tmp" : pathExtension
+        )
+        FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: temporaryURL)
+        var shouldDeleteTemporaryFile = true
+
+        do {
+            defer { try? handle.close() }
+
+            if supportsChunkedRead(for: context.config.backendType) {
+                let totalBytes = max(remoteItem.size, 1)
+                var offset: UInt64 = 0
+
+                while true {
+                    let chunk = try await context.fileSystem.readFile(
+                        at: path,
+                        offset: offset,
+                        length: Self.streamedReadChunkSize
+                    )
+                    if chunk.isEmpty {
+                        break
+                    }
+
+                    try handle.write(contentsOf: chunk)
+                    offset += UInt64(chunk.count)
+                    progress.completedUnitCount = min(80, Int64((offset * 80) / totalBytes))
+
+                    if chunk.count < Int(Self.streamedReadChunkSize) {
+                        break
+                    }
+                }
+            } else {
+                let data = try await context.fileSystem.readFile(at: path)
+                try handle.write(contentsOf: data)
+                progress.completedUnitCount = 80
+            }
+
+            shouldDeleteTemporaryFile = false
+            return temporaryURL
+        } catch {
+            try? handle.close()
+            if shouldDeleteTemporaryFile {
+                try? FileManager.default.removeItem(at: temporaryURL)
+            }
+            throw error
+        }
+    }
+
+    private func supportsChunkedRead(for backendType: BackendType) -> Bool {
+        switch backendType {
+        case .s3, .sftp:
+            return true
+        default:
+            return false
+        }
     }
 
     private func currentOrCreateBootstrapTask() async -> Task<FileProviderRuntimeContext, Error> {
@@ -634,7 +715,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                                userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
             case .permissionDenied:
                 return NSError(domain: NSFileProviderErrorDomain,
-                               code: NSFileProviderError.notAuthenticated.rawValue)
+                               code: NSFileProviderError.permissionDenied.rawValue)
             case .authenticationFailed:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.notAuthenticated.rawValue)

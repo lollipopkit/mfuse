@@ -159,11 +159,23 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public static func matchesManagedSymlinkFilename(_ name: String) -> Bool {
-        guard let separatorIndex = name.lastIndex(of: "-") else {
+        let uuidLength = 36
+        guard name.count > uuidLength else {
             return false
         }
+
+        let uuidStartIndex = name.index(name.endIndex, offsetBy: -uuidLength)
+        guard uuidStartIndex > name.startIndex else {
+            return false
+        }
+
+        let separatorIndex = name.index(before: uuidStartIndex)
+        guard name[separatorIndex] == "-" else {
+            return false
+        }
+
         let prefix = name[..<separatorIndex]
-        let suffix = name[name.index(after: separatorIndex)...]
+        let suffix = name[uuidStartIndex...]
         return !prefix.isEmpty && UUID(uuidString: String(suffix)) != nil
     }
 
@@ -196,10 +208,27 @@ public final class FileProviderMountProvider: MountProvider {
         guard itemType == .typeSymbolicLink else {
             return
         }
-        _ = expectedDestinationURL
-        guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
-            return
+
+        if let expectedDestinationURL {
+            guard Self.matchesManagedSymlinkFilename(symlinkURL.lastPathComponent),
+                  let destinationPath = try? fm.destinationOfSymbolicLink(atPath: symlinkURL.path) else {
+                return
+            }
+
+            let resolvedDestinationURL = URL(
+                fileURLWithPath: destinationPath,
+                relativeTo: symlinkURL.deletingLastPathComponent()
+            ).standardizedFileURL
+
+            guard resolvedDestinationURL == expectedDestinationURL.standardizedFileURL else {
+                return
+            }
+        } else {
+            guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
+                return
+            }
         }
+
         try fm.removeItem(at: symlinkURL)
     }
 

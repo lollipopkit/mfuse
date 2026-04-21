@@ -14,6 +14,7 @@ struct MFuseApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var connectionManager: ConnectionManager
+    @State private var didPerformInitialSetup = false
     private let mountProvider: FileProviderMountProvider
     private let storage: SharedStorage
     private let keychain: KeychainService
@@ -80,17 +81,7 @@ struct MFuseApp: App {
                 .environment(\.keychainService, keychain)
                 .frame(minWidth: 700, minHeight: 450)
                 .task {
-                    await connectionManager.syncMounts()
-                    // First-launch: check if extension is available
-                    let sharedDefaults = UserDefaults(suiteName: AppGroupConstants.groupIdentifier)
-                    if !(sharedDefaults?.bool(forKey: AppGroupConstants.extensionOnboardedKey) ?? false) {
-                        do {
-                            _ = try await connectionManager.mountProvider?.mountedDomains()
-                            sharedDefaults?.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
-                        } catch {
-                            connectionManager.needsExtensionSetup = true
-                        }
-                    }
+                    await performInitialSetupIfNeeded()
                 }
         }
         .windowStyle(.titleBar)
@@ -115,6 +106,24 @@ struct MFuseApp: App {
                 .environmentObject(connectionManager)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    @MainActor
+    private func performInitialSetupIfNeeded() async {
+        guard !didPerformInitialSetup else { return }
+        didPerformInitialSetup = true
+
+        await connectionManager.syncMounts()
+
+        let sharedDefaults = UserDefaults(suiteName: AppGroupConstants.groupIdentifier)
+        if !(sharedDefaults?.bool(forKey: AppGroupConstants.extensionOnboardedKey) ?? false) {
+            do {
+                _ = try await connectionManager.mountProvider?.mountedDomains()
+                sharedDefaults?.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
+            } catch {
+                connectionManager.needsExtensionSetup = true
+            }
+        }
     }
 }
 

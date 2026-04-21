@@ -1,4 +1,4 @@
-.PHONY: build test generate clean lint release-install-signing release-clean-signing release-dmg
+.PHONY: build test test-stable test-all generate clean lint release-install-signing release-clean-signing release-dmg
 
 SCHEME = MFuse
 CODESIGN_FLAGS = CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
@@ -6,21 +6,25 @@ CODESIGN_FLAGS = CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_AL
 build:
 	xcodebuild -scheme $(SCHEME) build $(CODESIGN_FLAGS)
 
-test:
+test: test-stable
+
+# Stable local/default test subset. Use `make test-all` for the full package matrix.
+test-stable:
 	cd Packages/MFuseWebDAV && swift test
 	cd Packages/MFuseSMB && swift test
 	cd Packages/MFuseNFS && swift test
 	cd Packages/MFuseGoogleDrive && swift test
-# NOTE: The following packages currently have pre-existing compilation errors:
-#   MFuseCore  — RemoteItem not Equatable (MetadataCacheTests)
-#   MFuseFTP   — NIOSSL API changes (FTPConnection)
-#   MFuseSFTP  — missing return in closure (SFTPFileSystem)
-#   MFuseS3    — Soto S3ErrorType access level changes (S3FileSystem)
-# Uncomment once fixed:
-# 	cd Packages/MFuseCore && swift test
-# 	cd Packages/MFuseFTP && swift test
-# 	cd Packages/MFuseSFTP && swift test
-# 	cd Packages/MFuseS3 && swift test
+
+# Full verification matrix intended for CI and exhaustive validation.
+test-all:
+	cd Packages/MFuseWebDAV && swift test
+	cd Packages/MFuseSMB && swift test
+	cd Packages/MFuseNFS && swift test
+	cd Packages/MFuseGoogleDrive && swift test
+	cd Packages/MFuseCore && swift test
+	cd Packages/MFuseFTP && swift test
+	cd Packages/MFuseSFTP && swift test
+	cd Packages/MFuseS3 && swift test
 
 generate:
 	xcodegen generate

@@ -83,9 +83,11 @@ public final class ConnectionManager: ObservableObject {
         }
         let previousConnections = connections
         let previousState = states[config.id]
+        let previousMountState = mountStates[config.id]
         let previousFileSystem = fileSystems[config.id]
         connections.removeAll { $0.id == config.id }
         states.removeValue(forKey: config.id)
+        mountStates.removeValue(forKey: config.id)
         fileSystems.removeValue(forKey: config.id)
         do {
             try storage.saveConnections(connections)
@@ -94,12 +96,21 @@ public final class ConnectionManager: ObservableObject {
             if let previousState {
                 states[config.id] = previousState
             }
+            if let previousMountState {
+                mountStates[config.id] = previousMountState
+            }
             if let previousFileSystem {
                 fileSystems[config.id] = previousFileSystem
             }
             throw error
         }
-        try? await credentialProvider.delete(for: config.id)
+        do {
+            try await credentialProvider.delete(for: config.id)
+        } catch {
+            throw RemoteFileSystemError.operationFailed(
+                "Removed connection \(config.id.uuidString) but failed to delete its credential: \(error.localizedDescription)"
+            )
+        }
     }
 
     // MARK: - Connection lifecycle

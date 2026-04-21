@@ -249,7 +249,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     public func createDirectory(at path: RemotePath) async throws {
         guard let parentPath = path.parent else { throw RemoteFileSystemError.operationFailed("Cannot create directory at root") }
         do {
-            _ = try await resolveFileID(for: path, expectFolder: true)
+            _ = try await resolveFileID(for: path)
             throw RemoteFileSystemError.alreadyExists(path)
         } catch RemoteFileSystemError.notFound {
             // Expected path for create-only semantics.
@@ -293,6 +293,19 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     }
 
     public func move(from source: RemotePath, to destination: RemotePath) async throws {
+        if source == destination {
+            return
+        }
+
+        do {
+            _ = try await resolveFileID(for: destination)
+            throw RemoteFileSystemError.alreadyExists(destination)
+        } catch RemoteFileSystemError.notFound {
+            // Expected path for create-only semantics.
+        } catch {
+            throw error
+        }
+
         let fileID = try await resolveFileID(for: source)
         guard let srcParent = source.parent, let dstParent = destination.parent else {
             throw RemoteFileSystemError.operationFailed("Cannot move root")
@@ -326,6 +339,19 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     }
 
     public func copy(from source: RemotePath, to destination: RemotePath) async throws {
+        if source == destination {
+            return
+        }
+
+        do {
+            _ = try await resolveFileID(for: destination)
+            throw RemoteFileSystemError.alreadyExists(destination)
+        } catch RemoteFileSystemError.notFound {
+            // Expected path for create-only semantics.
+        } catch {
+            throw error
+        }
+
         let fileID = try await resolveFileID(for: source)
         guard let dstParent = destination.parent else { throw RemoteFileSystemError.operationFailed("Cannot copy to root") }
         let destParentID = try await resolveFileID(for: dstParent, expectFolder: true)

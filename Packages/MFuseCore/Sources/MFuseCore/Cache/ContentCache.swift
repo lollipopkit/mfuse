@@ -48,6 +48,42 @@ public actor ContentCache {
         return destinationURL
     }
 
+    @discardableResult
+    public func store(fileAt sourceURL: URL, for item: RemoteItem) throws -> URL {
+        let pathDirectory = pathDirectoryURL(for: item.path)
+        try fileManager.createDirectory(at: pathDirectory, withIntermediateDirectories: true)
+
+        let destinationURL = fileURL(for: item)
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            return destinationURL
+        }
+
+        let temporaryURL = pathDirectory.appendingPathComponent(UUID().uuidString, isDirectory: false)
+        if fileManager.fileExists(atPath: temporaryURL.path) {
+            try? fileManager.removeItem(at: temporaryURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: temporaryURL)
+        do {
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        } catch {
+            let nsError = error as NSError
+            guard nsError.domain == NSCocoaErrorDomain,
+                  nsError.code == NSFileWriteFileExistsError else {
+                try? fileManager.removeItem(at: temporaryURL)
+                throw error
+            }
+
+            do {
+                _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+            } catch {
+                try? fileManager.removeItem(at: temporaryURL)
+                throw error
+            }
+        }
+        pruneVersions(in: pathDirectory, keeping: destinationURL.lastPathComponent)
+        return destinationURL
+    }
+
     public func invalidate(path: RemotePath) {
         let directoryURL = pathDirectoryURL(for: path)
         guard fileManager.fileExists(atPath: directoryURL.path) else { return }
