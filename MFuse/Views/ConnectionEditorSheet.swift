@@ -2,12 +2,22 @@ import SwiftUI
 import MFuseCore
 import AppKit
 
+private final class EphemeralCredentialProvider: CredentialProvider, @unchecked Sendable {
+    func credential(for connectionID: UUID) async throws -> Credential? { nil }
+    func store(_ credential: Credential, for connectionID: UUID) async throws {}
+    func delete(for connectionID: UUID) async throws {}
+}
+
 struct ConnectionEditorSheet: View {
 
     @MainActor
     private static let sharedTestConnectionManager = ConnectionManager(
-        storage: SharedStorage.withLegacyMigration(),
-        credentialProvider: MirroredCredentialProvider(primary: KeychainService())
+        storage: SharedStorage(
+            allowFallbackToTemporaryDirectory: true,
+            containerURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("MFuseTestConnectionManager", isDirectory: true)
+        ),
+        credentialProvider: EphemeralCredentialProvider()
     )
 
     @Environment(\.credentialProvider) private var credentialProvider

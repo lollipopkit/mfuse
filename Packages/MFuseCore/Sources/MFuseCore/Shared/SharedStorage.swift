@@ -144,9 +144,11 @@ public final class SharedStorage: Sendable {
             let coordinator = NSFileCoordinator()
             coordinator.coordinate(writingItemAt: connectionsFileURL, options: .forReplacing, error: &coordinationError) { coordinatedURL in
                 do {
-                    let latestConnections = try self.decodeConnectionsFromDisk(at: coordinatedURL) ?? []
-                    let mergedConnections = self.mergeConnections(latest: latestConnections, incoming: connections)
-                    let data = try JSONEncoder().encode(mergedConnections)
+                    // The app is the authoritative writer for connections.json.
+                    // Writing the incoming snapshot directly preserves explicit deletions
+                    // performed by callers such as ConnectionManager.remove(_:) instead of
+                    // resurrecting entries still present on disk.
+                    let data = try JSONEncoder().encode(connections)
                     try data.write(to: coordinatedURL, options: .atomic)
                 } catch {
                     writeError = error
@@ -206,25 +208,5 @@ public final class SharedStorage: Sendable {
             return nil
         }
         return try JSONDecoder().decode([ConnectionConfig].self, from: data)
-    }
-
-    private func mergeConnections(
-        latest: [ConnectionConfig],
-        incoming: [ConnectionConfig]
-    ) -> [ConnectionConfig] {
-        var mergedByID: [UUID: ConnectionConfig] = [:]
-
-        for connection in latest {
-            mergedByID[connection.id] = connection
-        }
-
-        for connection in incoming {
-            mergedByID[connection.id] = connection
-        }
-
-        var merged = incoming
-        let incomingIDs = Set(incoming.map(\.id))
-        merged.append(contentsOf: latest.filter { !incomingIDs.contains($0.id) })
-        return merged.filter { mergedByID.removeValue(forKey: $0.id) != nil }
     }
 }

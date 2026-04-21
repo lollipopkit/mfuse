@@ -60,6 +60,28 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: storage.connectionsFileURL.path))
     }
 
+    func testSaveConnectionsPreservesExplicitDeletion() throws {
+        let storage = SharedStorage(
+            legacyDefaults: legacyDefaults,
+            containerURL: containerURL
+        )
+        let first = ConnectionConfig(
+            name: "first",
+            backendType: .sftp,
+            host: "first.example.com"
+        )
+        let second = ConnectionConfig(
+            name: "second",
+            backendType: .sftp,
+            host: "second.example.com"
+        )
+
+        try storage.saveConnections([first, second])
+        try storage.saveConnections([first])
+
+        XCTAssertEqual(storage.loadConnections(), [first])
+    }
+
     func testLoadConnectionsMigratesLegacyDefaultsIntoFile() throws {
         let config = ConnectionConfig(
             name: "legacy",

@@ -332,6 +332,12 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 let parentPath = itemTemplate.parentItemIdentifier.remotePath
                 let newPath = parentPath.appending(itemTemplate.filename)
                 let createdFileURL: URL?
+                var temporaryCreatedFileURL: URL?
+                defer {
+                    if let temporaryCreatedFileURL {
+                        try? FileManager.default.removeItem(at: temporaryCreatedFileURL)
+                    }
+                }
 
                 if itemTemplate.contentType == .folder {
                     try await context.fileSystem.createDirectory(at: newPath)
@@ -346,6 +352,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                         extension: filenamePathExtension.isEmpty ? "tmp" : filenamePathExtension
                     )
                     FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
+                    temporaryCreatedFileURL = temporaryURL
                     try await context.fileSystem.createFile(at: newPath, from: temporaryURL)
                     createdFileURL = temporaryURL
                 }
@@ -359,9 +366,6 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     } catch {
                         logger.error("createItem content cache store failed: \(error.localizedDescription)")
                         await context.contentCache.invalidate(path: remoteItem.path)
-                    }
-                    if url == nil {
-                        try? FileManager.default.removeItem(at: createdFileURL)
                     }
                 }
                 let newItem = FileProviderItem(

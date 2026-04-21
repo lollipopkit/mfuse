@@ -18,7 +18,11 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     public func credential(for connectionID: UUID) async throws -> Credential? {
         let primaryCredential = try await primary.credential(for: connectionID)
         if let primaryCredential {
-            try sharedStore.store(primaryCredential, for: connectionID)
+            do {
+                try sharedStore.store(primaryCredential, for: connectionID)
+            } catch {
+                // Best-effort mirror repair for the File Provider extension.
+            }
             return primaryCredential
         }
 

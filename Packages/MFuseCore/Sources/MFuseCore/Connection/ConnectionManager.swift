@@ -141,7 +141,17 @@ public final class ConnectionManager: ObservableObject {
                 setMountState(.mounting, for: config)
                 do {
                     try await mp.mount(config: config)
-                    try? await fs.disconnect()
+                    if let disconnectFailure = await disconnectMountedFileSystem(
+                        fs,
+                        for: config,
+                        context: "after mounting"
+                    ) {
+                        let errorState = ConnectionState.error(disconnectFailure)
+                        states[id] = errorState
+                        onStateChange?(config, errorState)
+                        scheduleMountResolution(for: config, using: mp)
+                        return
+                    }
                     fileSystems.removeValue(forKey: id)
                     let disconnectedState = ConnectionState.disconnected
                     states[id] = disconnectedState
@@ -149,12 +159,19 @@ public final class ConnectionManager: ObservableObject {
                     try? await mp.signalEnumerator(for: config)
                     scheduleMountResolution(for: config, using: mp)
                 } catch {
-                    let desc = describe(error)
+                    var desc = describe(error)
                     if isMissingFileProviderExtensionError(error) {
                         needsExtensionSetup = true
                     }
-                    try? await fs.disconnect()
-                    fileSystems.removeValue(forKey: id)
+                    if let disconnectFailure = await disconnectMountedFileSystem(
+                        fs,
+                        for: config,
+                        context: "after mount failure"
+                    ) {
+                        desc += " | \(disconnectFailure)"
+                    } else {
+                        fileSystems.removeValue(forKey: id)
+                    }
                     let errorState = ConnectionState.error(desc)
                     states[id] = errorState
                     onStateChange?(config, errorState)
@@ -537,6 +554,21 @@ public final class ConnectionManager: ObservableObject {
                 self.setMountState(.error(desc), for: config)
             }
             self.mountResolutionTasks.removeValue(forKey: config.id)
+        }
+    }
+
+    private func disconnectMountedFileSystem(
+        _ fileSystem: any RemoteFileSystem,
+        for config: ConnectionConfig,
+        context: String
+    ) async -> String? {
+        do {
+            try await fileSystem.disconnect()
+            return nil
+        } catch {
+            let message = "Failed to disconnect filesystem for \(config.name) \(context): \(describe(error))"
+            logger.error("\(message, privacy: .public)")
+            return message
         }
     }
 

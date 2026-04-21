@@ -112,8 +112,12 @@ public actor MetadataCache {
             sql = "SELECT data FROM items WHERE expires > ?1"
             pattern = nil
         } else {
-            sql = "SELECT data FROM items WHERE path LIKE ?1 AND expires > ?2"
-            pattern = parent.absoluteString + "/%"
+            sql = "SELECT data FROM items WHERE path LIKE ?1 ESCAPE '\\' AND expires > ?2"
+            let escapedParentPath = parent.absoluteString
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%")
+                .replacingOccurrences(of: "_", with: "\\_")
+            pattern = escapedParentPath + "/%"
         }
 
         var stmt: OpaquePointer?
@@ -149,7 +153,7 @@ public actor MetadataCache {
 
     public func putAll(items: [RemoteItem], parent: RemotePath) throws {
         try withTransaction {
-            try invalidateChildrenInternal(of: parent)
+            try invalidateDescendantsInternal(of: parent)
             try putDirectoryStateInternal(parent: parent, isEmpty: items.isEmpty)
             for item in items {
                 try putInternal(item: item)
@@ -272,6 +276,58 @@ public actor MetadataCache {
         sqlite3_bind_text(directoryStmt, 1, parent.absoluteString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         guard sqlite3_step(directoryStmt) == SQLITE_DONE else {
             throw sqliteError(db: db, message: "MetadataCache invalidateChildren state failed")
+        }
+    }
+
+    private func invalidateDescendantsInternal(of parent: RemotePath) throws {
+        guard let db = db else {
+            throw databaseUnavailableError()
+        }
+
+        let itemSQL: String
+        let stateSQL: String
+        let pattern: String?
+
+        if parent.isRoot {
+            itemSQL = "DELETE FROM items"
+            stateSQL = "DELETE FROM directory_states"
+            pattern = nil
+        } else {
+            itemSQL = "DELETE FROM items WHERE path LIKE ?1 ESCAPE '\\' OR parent = ?2"
+            stateSQL = "DELETE FROM directory_states WHERE parent LIKE ?1 ESCAPE '\\' OR parent = ?2"
+            let escapedParentPath = parent.absoluteString
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%")
+                .replacingOccurrences(of: "_", with: "\\_")
+            pattern = escapedParentPath + "/%"
+        }
+
+        var itemStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, itemSQL, -1, &itemStmt, nil) == SQLITE_OK else {
+            throw sqliteError(db: db, message: "MetadataCache invalidateDescendants items prepare failed")
+        }
+        defer { sqlite3_finalize(itemStmt) }
+
+        if let pattern {
+            sqlite3_bind_text(itemStmt, 1, pattern, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(itemStmt, 2, parent.absoluteString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+        guard sqlite3_step(itemStmt) == SQLITE_DONE else {
+            throw sqliteError(db: db, message: "MetadataCache invalidateDescendants items failed")
+        }
+
+        var stateStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, stateSQL, -1, &stateStmt, nil) == SQLITE_OK else {
+            throw sqliteError(db: db, message: "MetadataCache invalidateDescendants state prepare failed")
+        }
+        defer { sqlite3_finalize(stateStmt) }
+
+        if let pattern {
+            sqlite3_bind_text(stateStmt, 1, pattern, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stateStmt, 2, parent.absoluteString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+        guard sqlite3_step(stateStmt) == SQLITE_DONE else {
+            throw sqliteError(db: db, message: "MetadataCache invalidateDescendants state failed")
         }
     }
 

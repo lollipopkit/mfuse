@@ -557,10 +557,12 @@ final class ConnectionManagerTests: XCTestCase {
             .appendingPathComponent("CloudStorage", isDirectory: true)
             .appendingPathComponent("MFuse-Orphan", isDirectory: true)
         try? FileManager.default.createDirectory(at: testSymlinkBaseURL, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: orphanTargetURL, withIntermediateDirectories: true)
         try? FileManager.default.createSymbolicLink(
             atPath: orphanSymlinkURL.path,
             withDestinationPath: orphanTargetURL.path
         )
+        XCTAssertNoThrow(try FileManager.default.destinationOfSymbolicLink(atPath: orphanSymlinkURL.path))
         manager.mountProvider = mountProvider
         manager.staleDomainRemover = { domainID in
             await mountProvider.recordStaleDomainRemoval(domainID)
@@ -569,7 +571,7 @@ final class ConnectionManagerTests: XCTestCase {
 
         await manager.syncMounts()
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanSymlinkURL.path))
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: orphanSymlinkURL.path))
         let removedDomains = await mountProvider.staleDomainsRemoved
         XCTAssertEqual(removedDomains, [orphanDomainID])
     }
