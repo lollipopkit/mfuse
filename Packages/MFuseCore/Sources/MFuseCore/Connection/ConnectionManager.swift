@@ -4,6 +4,17 @@ import FileProvider
 #endif
 import os.log
 
+public enum ConnectionManagerError: Error, LocalizedError, Equatable {
+    case cleanupFailed(UUID)
+
+    public var errorDescription: String? {
+        switch self {
+        case .cleanupFailed(let id):
+            return "Failed to clean up connection \(id.uuidString) before removal"
+        }
+    }
+}
+
 /// Manages the lifecycle of remote filesystem connections.
 /// Used by the main app to create, connect, disconnect, and track connections.
 @MainActor
@@ -19,7 +30,9 @@ public final class ConnectionManager: ObservableObject {
     private let credentialProvider: CredentialProvider
     private let registry: BackendRegistry
     private var fileSystems: [UUID: any RemoteFileSystem] = [:]
+    private var connectionGenerations: [UUID: Int] = [:]
     private var inFlightConnectionIDs: Set<UUID> = []
+    private var interruptedConnectionIDs: Set<UUID> = []
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
     var staleDomainRemover: ((String) async throws -> Void)?
@@ -79,6 +92,7 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func remove(_ config: ConnectionConfig) async throws {
+        advanceConnectionGeneration(for: config.id)
         let shouldCleanupMount = states[config.id]?.isConnected == true
             || {
                 if case .error = states[config.id] {
@@ -92,6 +106,9 @@ public final class ConnectionManager: ObservableObject {
             || fileSystems[config.id] != nil
         if shouldCleanupMount {
             await disconnect(config.id)
+            guard isCleanupComplete(for: config.id) else {
+                throw ConnectionManagerError.cleanupFailed(config.id)
+            }
         }
         let previousConnections = connections
         let previousState = states[config.id]
@@ -135,6 +152,7 @@ public final class ConnectionManager: ObservableObject {
                 "Failed to delete credential for connection \(config.id.uuidString); restored the connection so removal can be retried: \(credentialDeleteError.localizedDescription)"
             )
         }
+        connectionGenerations.removeValue(forKey: config.id)
     }
 
     // MARK: - Connection lifecycle
@@ -153,20 +171,36 @@ public final class ConnectionManager: ObservableObject {
         guard inFlightConnectionIDs.insert(id).inserted else {
             return
         }
+        let localGeneration = connectionGenerations[id, default: 0]
+        interruptedConnectionIDs.remove(id)
         states[id] = .connecting
         defer {
             inFlightConnectionIDs.remove(id)
+            interruptedConnectionIDs.remove(id)
         }
 
         do {
             let credential = try await credentialProvider.credential(for: id) ?? Credential()
+            guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                  !interruptedConnectionIDs.contains(id) else {
+                return
+            }
             guard let fs = registry.createFileSystem(config: config, credential: credential) else {
+                guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                      !interruptedConnectionIDs.contains(id) else {
+                    return
+                }
                 let errorState = ConnectionState.error("Unsupported backend: \(config.backendType.displayName)")
                 states[id] = errorState
                 onStateChange?(config, errorState)
                 return
             }
             try await connectFileSystemWithRetry(fs, for: config)
+            if !isCurrentConnectionAttempt(for: id, generation: localGeneration)
+                || interruptedConnectionIDs.contains(id) {
+                try? await fs.disconnect()
+                return
+            }
             fileSystems[id] = fs
             states[id] = .connected
             onStateChange?(config, .connected)
@@ -176,22 +210,44 @@ public final class ConnectionManager: ObservableObject {
                 setMountState(.mounting, for: config)
                 do {
                     try await mp.mount(config: config)
+                    guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                          !interruptedConnectionIDs.contains(id) else {
+                        try? await mp.unmount(config: config)
+                        try? await fs.disconnect()
+                        return
+                    }
                     if let disconnectFailure = await disconnectMountedFileSystem(
                         fs,
                         for: config,
                         context: "after mounting"
                     ) {
+                        guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                              !interruptedConnectionIDs.contains(id) else {
+                            return
+                        }
                         let errorState = ConnectionState.error(disconnectFailure)
                         states[id] = errorState
                         onStateChange?(config, errorState)
                         scheduleMountResolution(for: config, using: mp)
                         return
                     }
+                    guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                          !interruptedConnectionIDs.contains(id) else {
+                        return
+                    }
                     fileSystems.removeValue(forKey: id)
                     let disconnectedState = ConnectionState.disconnected
                     states[id] = disconnectedState
                     onStateChange?(config, disconnectedState)
+                    guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                          !interruptedConnectionIDs.contains(id) else {
+                        return
+                    }
                     try? await mp.signalEnumerator(for: config)
+                    guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                          !interruptedConnectionIDs.contains(id) else {
+                        return
+                    }
                     scheduleMountResolution(for: config, using: mp)
                 } catch {
                     var desc = describe(error)
@@ -207,6 +263,10 @@ public final class ConnectionManager: ObservableObject {
                     } else {
                         fileSystems.removeValue(forKey: id)
                     }
+                    guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                          !interruptedConnectionIDs.contains(id) else {
+                        return
+                    }
                     let errorState = ConnectionState.error(desc)
                     states[id] = errorState
                     onStateChange?(config, errorState)
@@ -214,6 +274,10 @@ public final class ConnectionManager: ObservableObject {
                 }
             }
         } catch {
+            guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                  !interruptedConnectionIDs.contains(id) else {
+                return
+            }
             let errorState = ConnectionState.error(describe(error))
             states[id] = errorState
             onStateChange?(config, errorState)
@@ -221,6 +285,10 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func disconnect(_ id: UUID) async {
+        advanceConnectionGeneration(for: id)
+        if inFlightConnectionIDs.contains(id) {
+            interruptedConnectionIDs.insert(id)
+        }
         reconnectTasks[id]?.cancel()
         reconnectTasks.removeValue(forKey: id)
         mountResolutionTasks[id]?.cancel()
@@ -296,9 +364,16 @@ public final class ConnectionManager: ObservableObject {
 
         for config in connections where
             states[config.id]?.isConnected == true ||
+            {
+                if case .error = states[config.id] {
+                    return true
+                }
+                return false
+            }() ||
             mountState(for: config.id).isMounted ||
             mountState(for: config.id) == .mounting ||
-            pendingMountResolutionIDs.contains(config.id) {
+            pendingMountResolutionIDs.contains(config.id) ||
+            fileSystems[config.id] != nil {
             await disconnect(config.id)
         }
     }
@@ -633,6 +708,37 @@ public final class ConnectionManager: ObservableObject {
             fileSystem: restoredFileSystem
         )
         try storage.saveConnections(restoredConnections)
+    }
+
+    private func isCleanupComplete(for id: UUID) -> Bool {
+        let connectionIsDisconnected = states[id]?.isConnected != true
+        let mountState = mountState(for: id)
+        let mountIsStopped: Bool
+        switch mountState {
+        case .mounted, .mounting:
+            mountIsStopped = false
+        case .unmounted, .error:
+            mountIsStopped = true
+        }
+
+        return connectionIsDisconnected
+            && mountIsStopped
+            && mountResolutionTasks[id] == nil
+            && fileSystems[id] == nil
+    }
+
+    @discardableResult
+    private func advanceConnectionGeneration(for id: UUID) -> Int {
+        let nextGeneration = connectionGenerations[id, default: 0] + 1
+        connectionGenerations[id] = nextGeneration
+        return nextGeneration
+    }
+
+    private func isCurrentConnectionAttempt(for id: UUID, generation: Int) -> Bool {
+        guard connectionGenerations[id, default: 0] == generation else {
+            return false
+        }
+        return connections.contains(where: { $0.id == id })
     }
 
     private func disconnectMountedFileSystem(

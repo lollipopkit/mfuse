@@ -357,6 +357,41 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNil(credentialProvider.credentials[config.id])
     }
 
+    func testRemoveConnectionAbortsWhenCleanupRemainsIncomplete() async throws {
+        let config = ConnectionConfig(
+            name: "CleanupFailure",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        guard let fileSystem = lastCreatedFileSystem else {
+            return XCTFail("Expected file system to be created")
+        }
+
+        await fileSystem.setDisconnectShouldFail(true)
+
+        do {
+            try await manager.remove(config)
+            XCTFail("Expected remove to fail when disconnect cleanup is incomplete")
+        } catch let error as ConnectionManagerError {
+            XCTAssertEqual(error, .cleanupFailed(config.id))
+        } catch {
+            XCTFail("Expected cleanupFailed error, got \(error)")
+        }
+
+        XCTAssertEqual(manager.connections, [config])
+        guard case .error = manager.state(for: config.id) else {
+            return XCTFail("Expected error state after failed cleanup")
+        }
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+        XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
+        XCTAssertTrue(credentialProvider.deletedConnectionIDs.isEmpty)
+        XCTAssertEqual(storage.loadConnections(), [config])
+    }
+
     func testConnectSuccess() async throws {
         let config = ConnectionConfig(
             name: "Test",
@@ -394,6 +429,44 @@ final class ConnectionManagerTests: XCTestCase {
 
         XCTAssertEqual(manager.state(for: config.id), .connected)
         XCTAssertNotNil(manager.fileSystem(for: config.id))
+        let connectCallCount = await fileSystem.connectCallCount
+        XCTAssertEqual(connectCallCount, 1)
+    }
+
+    func testConnectInterruptedByDisconnect() async throws {
+        let config = ConnectionConfig(
+            name: "Interrupted",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let fileSystem = MockFileSystem()
+        await fileSystem.setConnectDelay(nanoseconds: 200_000_000)
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in
+            fileSystem
+        }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        let connectTask = Task { @MainActor in
+            await manager.connect(config.id)
+        }
+
+        for _ in 0..<50 {
+            if await fileSystem.connectCallCount == 1 {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let initialConnectCallCount = await fileSystem.connectCallCount
+        XCTAssertEqual(initialConnectCallCount, 1)
+        await manager.disconnect(config.id)
+        _ = await connectTask.value
+
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        XCTAssertNil(manager.fileSystem(for: config.id))
         let connectCallCount = await fileSystem.connectCallCount
         XCTAssertEqual(connectCallCount, 1)
     }

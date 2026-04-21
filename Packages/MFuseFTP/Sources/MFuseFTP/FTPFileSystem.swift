@@ -71,9 +71,9 @@ public actor FTPFileSystem: RemoteFileSystem {
     public func disconnect() async throws {
         if let conn = connection {
             _ = try? await conn.sendCommand("QUIT")
-            try? await conn.close()
+            try await conn.close()
+            connection = nil
         }
-        connection = nil
     }
 
     // MARK: - Enumeration

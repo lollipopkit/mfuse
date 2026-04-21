@@ -343,7 +343,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     try await context.fileSystem.createDirectory(at: newPath)
                     createdFileURL = nil
                 } else if let url = url {
-                    try await context.fileSystem.createFile(at: newPath, from: url)
+                    try await createFile(at: newPath, from: url, using: context.fileSystem)
                     createdFileURL = url
                 } else {
                     let filenamePathExtension = (itemTemplate.filename as NSString).pathExtension
@@ -353,7 +353,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     )
                     FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
                     temporaryCreatedFileURL = temporaryURL
-                    try await context.fileSystem.createFile(at: newPath, from: temporaryURL)
+                    try await createFile(at: newPath, from: temporaryURL, using: context.fileSystem)
                     createdFileURL = temporaryURL
                 }
 
@@ -425,7 +425,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 }
 
                 if changedFields.contains(.contents), let url = newContents {
-                    try await context.fileSystem.writeFile(at: currentPath, from: url)
+                    try await writeFile(at: currentPath, from: url, using: context.fileSystem)
                     updatedFileURL = url
                 }
 
@@ -600,6 +600,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         var lastError: Error?
 
         for attempt in 0..<Self.bootstrapTransientRetryCount {
+            try Task.checkCancellation()
             do {
                 try await withOperationTimeout(
                     seconds: Self.bootstrapTimeoutSeconds,
@@ -609,6 +610,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 }
                 return
             } catch {
+                if error is CancellationError || Task.isCancelled {
+                    throw error
+                }
                 lastError = error
                 guard attempt < Self.bootstrapTransientRetryCount - 1,
                       shouldRetryTransientConnectionError(error) else {
@@ -618,7 +622,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 logger.warning(
                     "Retrying transient bootstrap connection failure for domain \(config.domainIdentifier, privacy: .public): \(error.localizedDescription, privacy: .public)"
                 )
-                try? await Task.sleep(nanoseconds: Self.bootstrapTransientRetryDelayNanoseconds)
+                try await Task.sleep(nanoseconds: Self.bootstrapTransientRetryDelayNanoseconds)
             }
         }
 
@@ -707,6 +711,38 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         throw lastError ?? RemoteFileSystemError.operationFailed(
             "Failed to cache content for \(remoteItem.path.absoluteString)"
         )
+    }
+
+    private func createFile(
+        at path: RemotePath,
+        from localFileURL: URL,
+        using fileSystem: any RemoteFileSystem
+    ) async throws {
+        do {
+            try await fileSystem.createFile(at: path, from: localFileURL)
+        } catch let error as RemoteFileSystemError {
+            guard case .unsupported = error else {
+                throw error
+            }
+            let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
+            try await fileSystem.createFile(at: path, data: data)
+        }
+    }
+
+    private func writeFile(
+        at path: RemotePath,
+        from localFileURL: URL,
+        using fileSystem: any RemoteFileSystem
+    ) async throws {
+        do {
+            try await fileSystem.writeFile(at: path, from: localFileURL)
+        } catch let error as RemoteFileSystemError {
+            guard case .unsupported = error else {
+                throw error
+            }
+            let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
+            try await fileSystem.writeFile(at: path, data: data)
+        }
     }
 
     private func downloadFileToTemporaryURL(

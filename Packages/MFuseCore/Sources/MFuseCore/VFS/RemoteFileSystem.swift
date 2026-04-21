@@ -117,12 +117,8 @@ public extension RemoteFileSystem {
     }
 
     func copy(from source: RemotePath, to destination: RemotePath) async throws {
-        let info = try await itemInfo(at: source)
-        if info.isDirectory {
-            throw RemoteFileSystemError.unsupported("Recursive copy not supported by default")
-        }
-        let data = try await readFile(at: source)
-        try await writeFile(at: destination, data: data)
+        _ = (source, destination)
+        throw RemoteFileSystemError.unsupported("Streaming copy not supported by default")
     }
 
     func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
