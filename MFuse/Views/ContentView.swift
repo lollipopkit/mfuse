@@ -98,7 +98,7 @@ struct ContentView: View {
         Task {
             do {
                 let keychain = KeychainService()
-                let previousCredential = try await keychain.retrieve(for: config.id)
+                let previousCredential = try await keychain.credential(for: config.id)
                 try await keychain.store(credential, for: config.id)
                 do {
                     if connectionManager.connections.contains(where: { $0.id == config.id }) {

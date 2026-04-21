@@ -127,6 +127,11 @@ public final class ConnectionManager: ObservableObject {
                     if isMissingFileProviderExtensionError(error) {
                         needsExtensionSetup = true
                     }
+                    try? await fs.disconnect()
+                    fileSystems.removeValue(forKey: id)
+                    let errorState = ConnectionState.error(desc)
+                    states[id] = errorState
+                    onStateChange?(config, errorState)
                     setMountState(.error(desc), for: config)
                 }
             }

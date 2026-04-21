@@ -83,7 +83,14 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         guard let data = try? Data(contentsOf: url) else {
             return nil
         }
-        return try JSONDecoder().decode(ConnectionConfig.self, from: data)
+        do {
+            return try JSONDecoder().decode(ConnectionConfig.self, from: data)
+        } catch {
+            Self.logger.error(
+                "Failed to decode bootstrap config at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
     }
 
     public func saveBootstrapConfig(_ config: ConnectionConfig) throws {
@@ -178,7 +185,14 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         guard let data = try? Data(contentsOf: url) else {
             return nil
         }
-        return try JSONDecoder().decode(ConnectionConfig.self, from: data)
+        do {
+            return try JSONDecoder().decode(ConnectionConfig.self, from: data)
+        } catch {
+            logger.error(
+                "Failed to decode bootstrap config at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
     }
 
     public static func saveBootstrapConfig(_ config: ConnectionConfig) throws {

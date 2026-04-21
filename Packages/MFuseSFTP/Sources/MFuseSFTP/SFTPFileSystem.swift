@@ -728,10 +728,12 @@ public actor SFTPFileSystem: RemoteFileSystem {
                 type = .file
             }
 
+            let safeSize = max(Int64(0), entry.size)
+
             return RemoteItem(
                 path: childPath,
                 type: type,
-                size: max(0, UInt64(entry.size)),
+                size: UInt64(safeSize),
                 modificationDate: Date(timeIntervalSince1970: entry.mtime),
                 creationDate: nil,
                 permissions: UInt16(entry.mode)
@@ -914,14 +916,26 @@ private struct OpenSSHPrivateKeyReader {
         guard BCryptSHA512Initializer.didInit else {
             throw RemoteFileSystemError.unsupported("Failed to initialize bcrypt support.")
         }
+        guard !decryptionKey.isEmpty else {
+            throw RemoteFileSystemError.unsupported("OpenSSH decryption key is empty.")
+        }
+        guard !salt.isEmpty else {
+            throw RemoteFileSystemError.unsupported("OpenSSH KDF salt is empty.")
+        }
 
         var derived = [UInt8](repeating: 0, count: keyLength + ivLength)
         let status = decryptionKey.withUnsafeBytes { passBytes in
             salt.withUnsafeBytes { saltBytes in
+                guard
+                    let passBaseAddress = passBytes.bindMemory(to: UInt8.self).baseAddress,
+                    let saltBaseAddress = saltBytes.bindMemory(to: UInt8.self).baseAddress
+                else {
+                    return -1
+                }
                 citadel_bcrypt_pbkdf(
-                    passBytes.baseAddress!,
+                    passBaseAddress,
                     passBytes.count,
-                    saltBytes.bindMemory(to: UInt8.self).baseAddress!,
+                    saltBaseAddress,
                     salt.count,
                     &derived,
                     derived.count,
@@ -938,6 +952,9 @@ private struct OpenSSHPrivateKeyReader {
 
     // swiftlint:disable:next identifier_name
     private func decryptAESCTR(_ data: Data, cipherName: String, key: [UInt8], iv: [UInt8]) throws -> Data {
+        guard !data.isEmpty else {
+            throw RemoteFileSystemError.unsupported("Empty OpenSSH encrypted payload")
+        }
         guard data.count.isMultiple(of: 16) else {
             throw RemoteFileSystemError.unsupported("The encrypted OpenSSH private key payload is malformed.")
         }

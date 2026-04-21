@@ -42,45 +42,52 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
 
     public func connect() async throws {
         guard let token = credential.token, !token.isEmpty else {
+            self.accessToken = nil
             throw RemoteFileSystemError.authenticationFailed
         }
-        self.accessToken = token
 
-        // Validate token by fetching about
-        let req = try authorizedRequest(url: "\(Self.apiBase)/about?fields=user")
-        let (_, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteFileSystemError.connectionFailed("Invalid response")
-        }
-
-        if http.statusCode == 401 {
-            // Try refresh
-            if let refreshToken = credential.password {
-                let clientID = config.parameters["clientID"] ?? ""
-                let redirectURI = config.parameters["redirectURI"] ?? ""
-                guard !clientID.isEmpty, !redirectURI.isEmpty else {
-                    throw RemoteFileSystemError.connectionFailed(
-                        "Google Drive OAuth refresh requires non-empty clientID and redirectURI"
-                    )
-                }
-                let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
-                let newToken = try await provider.refresh(refreshToken: refreshToken)
-                let updatedCredential = Credential(
-                    password: newToken.refreshToken ?? credential.password,
-                    privateKey: credential.privateKey,
-                    passphrase: credential.passphrase,
-                    accessKeyID: credential.accessKeyID,
-                    secretAccessKey: credential.secretAccessKey,
-                    token: newToken.accessToken
-                )
-                try await onCredentialUpdated?(updatedCredential)
-                self.credential = updatedCredential
-                self.accessToken = newToken.accessToken
-            } else {
-                throw RemoteFileSystemError.authenticationFailed
+        do {
+            // Validate token by fetching about
+            let req = try authorizedRequest(url: "\(Self.apiBase)/about?fields=user", token: token)
+            let (_, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                throw RemoteFileSystemError.connectionFailed("Invalid response")
             }
-        } else if http.statusCode != 200 {
-            throw RemoteFileSystemError.connectionFailed("Google Drive API returned \(http.statusCode)")
+
+            if http.statusCode == 401 {
+                // Try refresh
+                if let refreshToken = credential.password {
+                    let clientID = config.parameters["clientID"] ?? ""
+                    let redirectURI = config.parameters["redirectURI"] ?? ""
+                    guard !clientID.isEmpty, !redirectURI.isEmpty else {
+                        throw RemoteFileSystemError.connectionFailed(
+                            "Google Drive OAuth refresh requires non-empty clientID and redirectURI"
+                        )
+                    }
+                    let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
+                    let newToken = try await provider.refresh(refreshToken: refreshToken)
+                    let updatedCredential = Credential(
+                        password: newToken.refreshToken ?? credential.password,
+                        privateKey: credential.privateKey,
+                        passphrase: credential.passphrase,
+                        accessKeyID: credential.accessKeyID,
+                        secretAccessKey: credential.secretAccessKey,
+                        token: newToken.accessToken
+                    )
+                    try await onCredentialUpdated?(updatedCredential)
+                    self.credential = updatedCredential
+                    self.accessToken = newToken.accessToken
+                } else {
+                    throw RemoteFileSystemError.authenticationFailed
+                }
+            } else if http.statusCode == 200 {
+                self.accessToken = token
+            } else {
+                throw RemoteFileSystemError.connectionFailed("Google Drive API returned \(http.statusCode)")
+            }
+        } catch {
+            self.accessToken = nil
+            throw error
         }
     }
 
@@ -195,6 +202,14 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
 
     public func createFile(at path: RemotePath, data: Data) async throws {
         guard let parentPath = path.parent else { throw RemoteFileSystemError.operationFailed("Cannot create file at root") }
+        do {
+            _ = try await resolveFileID(for: path, expectFolder: false)
+            throw RemoteFileSystemError.alreadyExists(path)
+        } catch RemoteFileSystemError.notFound {
+            // Expected path for create-only semantics.
+        } catch {
+            throw error
+        }
         let parentID = try await resolveFileID(for: parentPath, expectFolder: true)
         let name = path.name
 
@@ -362,9 +377,18 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             try checkHTTPResponse(response, path: path)
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let files = json["files"] as? [[String: Any]] ?? []
-
-            guard let first = files.first, let fileID = first["id"] as? String else {
+            if files.isEmpty {
                 throw RemoteFileSystemError.notFound(path)
+            }
+            guard files.count == 1 else {
+                throw RemoteFileSystemError.operationFailed(
+                    "Ambiguous Google Drive path resolution for \(currentPath.absoluteString)"
+                )
+            }
+            guard let first = files.first, let fileID = first["id"] as? String else {
+                throw RemoteFileSystemError.operationFailed(
+                    "Google Drive path resolution returned an invalid file record for \(currentPath.absoluteString)"
+                )
             }
 
             if !isLast {
@@ -396,6 +420,10 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         guard let token = accessToken else {
             throw RemoteFileSystemError.notConnected
         }
+        return try authorizedRequest(url: urlStr, token: token)
+    }
+
+    private func authorizedRequest(url urlStr: String, token: String) throws -> URLRequest {
         guard let url = URL(string: urlStr) else {
             throw RemoteFileSystemError.operationFailed("Invalid URL: \(urlStr)")
         }

@@ -343,7 +343,7 @@ final class ConnectionManagerTests: XCTestCase {
         let fileSystem = MockFileSystem()
         await fileSystem.setEnumerateShouldFail(true)
         MockFileSystemFactory.lastCreated = fileSystem
-        BackendRegistry.shared.register(.sftp) { _, _ in
+        registry.register(.sftp) { _, _ in
             MockFileSystemFactory.lastCreated = fileSystem
             return fileSystem
         }

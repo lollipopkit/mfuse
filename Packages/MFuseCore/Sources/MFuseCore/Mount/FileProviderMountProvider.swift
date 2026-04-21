@@ -102,11 +102,7 @@ public final class FileProviderMountProvider: MountProvider {
 
         let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
 
-        if try itemType(at: symlinkURL) == .typeSymbolicLink {
-            try fm.removeItem(at: symlinkURL)
-        } else {
-            try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
-        }
+        try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
         guard !fm.fileExists(atPath: symlinkURL.path) else {
             Self.logger.warning(
                 "Skipping symlink creation because target path is occupied by a non-managed item: \(symlinkURL.path, privacy: .public)"

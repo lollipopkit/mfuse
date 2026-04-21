@@ -51,7 +51,7 @@ final class MetadataCacheTests: XCTestCase {
         let items = [
             RemoteItem(path: parent.appending("a.txt"), type: .file, size: 100),
             RemoteItem(path: parent.appending("b.txt"), type: .file, size: 200),
-            RemoteItem(path: parent.appending("subdir"), type: .directory),
+            RemoteItem(path: parent.appending("subdir"), type: .directory)
         ]
         try await cache.putAll(items: items, parent: parent)
 
@@ -88,7 +88,7 @@ final class MetadataCacheTests: XCTestCase {
     func testInvalidateAll() async {
         let items = [
             RemoteItem(path: RemotePath("/a"), type: .file),
-            RemoteItem(path: RemotePath("/b"), type: .file),
+            RemoteItem(path: RemotePath("/b"), type: .file)
         ]
         for item in items { await cache.put(item: item) }
 
@@ -130,7 +130,7 @@ final class MetadataCacheTests: XCTestCase {
     func testPutAllReplacesOldChildren() async throws {
         let parent = RemotePath("/dir")
         let oldItems = [
-            RemoteItem(path: parent.appending("old.txt"), type: .file),
+            RemoteItem(path: parent.appending("old.txt"), type: .file)
         ]
         try await cache.putAll(items: oldItems, parent: parent)
         let oldChildren = await cache.children(of: parent)
@@ -138,7 +138,7 @@ final class MetadataCacheTests: XCTestCase {
 
         let newItems = [
             RemoteItem(path: parent.appending("new1.txt"), type: .file),
-            RemoteItem(path: parent.appending("new2.txt"), type: .file),
+            RemoteItem(path: parent.appending("new2.txt"), type: .file)
         ]
         try await cache.putAll(items: newItems, parent: parent)
         let newChildren = await cache.children(of: parent)
