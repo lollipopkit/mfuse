@@ -210,6 +210,24 @@ final class SharedStorageTests: XCTestCase {
         )
     }
 
+    func testProviderStateStorageURLUsesAppGroupApplicationSupportLayout() throws {
+        let stateURL = try FileProviderDomainStateStore.providerStateStorageURL(
+            containerURL: containerURL,
+            domainIdentifier: "test-domain"
+        )
+
+        XCTAssertEqual(
+            stateURL,
+            containerURL
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true)
+                .appendingPathComponent("MFuse", isDirectory: true)
+                .appendingPathComponent("FileProviderState", isDirectory: true)
+                .appendingPathComponent("test-domain", isDirectory: true)
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL.path))
+    }
+
     @available(macOS 15.0, *)
     func testPrepareManagedDirectoryURLCreatesDirectoryDirectly() throws {
         let managedURL = containerURL

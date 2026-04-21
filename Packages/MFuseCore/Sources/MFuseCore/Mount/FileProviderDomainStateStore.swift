@@ -82,21 +82,11 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
     }
 
     public func stateStorageURL() throws -> URL {
-        if #available(macOS 15.0, *) {
-            guard let url = try Self.prepareManagedDirectoryURL(try manager.stateDirectoryURL()) else {
-                throw RemoteFileSystemError.operationFailed(
-                    "File Provider state directory unavailable for \(domain.identifier.rawValue)"
-                )
-            }
-            return url
-        }
-
         let baseURL = try Self.requiredAppGroupContainerURL()
-        let fallbackURL = baseURL
-            .appendingPathComponent("File Provider State", isDirectory: true)
-            .appendingPathComponent(domain.identifier.rawValue, isDirectory: true)
-        try FileManager.default.createDirectory(at: fallbackURL, withIntermediateDirectories: true)
-        return fallbackURL
+        return try Self.providerStateStorageURL(
+            containerURL: baseURL,
+            domainIdentifier: domain.identifier.rawValue
+        )
     }
 
     public func temporaryDirectoryURL() throws -> URL? {
@@ -166,6 +156,21 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
+    }
+
+    public static func providerStateStorageURL(
+        containerURL: URL,
+        domainIdentifier: String
+    ) throws -> URL {
+        let directoryURL = containerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("MFuse", isDirectory: true)
+            .appendingPathComponent("FileProviderState", isDirectory: true)
+            .appendingPathComponent(domainIdentifier, isDirectory: true)
+
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return directoryURL
     }
 
     private static func bootstrapStorageURL(for domainIdentifier: String) throws -> URL {
