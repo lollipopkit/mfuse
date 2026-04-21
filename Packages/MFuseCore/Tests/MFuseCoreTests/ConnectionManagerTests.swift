@@ -6,6 +6,7 @@ import XCTest
 final class MockCredentialProvider: @unchecked Sendable, CredentialProvider {
     var credentials: [UUID: Credential] = [:]
     var deletedConnectionIDs: [UUID] = []
+    var deleteError: Error?
 
     func credential(for connectionID: UUID) async throws -> Credential? {
         credentials[connectionID]
@@ -17,6 +18,9 @@ final class MockCredentialProvider: @unchecked Sendable, CredentialProvider {
 
     func delete(for connectionID: UUID) async throws {
         deletedConnectionIDs.append(connectionID)
+        if let deleteError {
+            throw deleteError
+        }
         credentials.removeValue(forKey: connectionID)
     }
 }
@@ -27,6 +31,7 @@ actor MockFileSystem: RemoteFileSystem {
     var isConnected: Bool = false
     var connectCalled = false
     var connectCallCount = 0
+    var connectDelayNanoseconds: UInt64 = 0
     var disconnectCalled = false
     var shouldFail = false
     var connectFailures: [RemoteFileSystemError] = []
@@ -46,9 +51,16 @@ actor MockFileSystem: RemoteFileSystem {
         connectFailures = failures
     }
 
+    func setConnectDelay(nanoseconds: UInt64) {
+        connectDelayNanoseconds = nanoseconds
+    }
+
     func connect() async throws {
         connectCalled = true
         connectCallCount += 1
+        if connectDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: connectDelayNanoseconds)
+        }
         if !connectFailures.isEmpty {
             throw connectFailures.removeFirst()
         }
@@ -289,6 +301,62 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
     }
 
+    func testRemoveConnectionRestoresStateWhenCredentialDeletionFails() async throws {
+        let config = ConnectionConfig(
+            name: "ToRestore",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        try manager.add(config)
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        credentialProvider.deleteError = RemoteFileSystemError.operationFailed("mock delete failure")
+
+        do {
+            try await manager.remove(config)
+            XCTFail("Expected remove to fail when credential deletion fails")
+        } catch {
+            // Expected
+        }
+
+        XCTAssertEqual(manager.connections, [config])
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
+        XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
+    }
+
+    func testRemoveConnectionCleansUpErroredResidualFileSystem() async throws {
+        let config = ConnectionConfig(
+            name: "ResidualCleanup",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        guard let fileSystem = lastCreatedFileSystem else {
+            return XCTFail("Expected file system to be created")
+        }
+
+        await fileSystem.setDisconnectShouldFail(true)
+        await manager.disconnect(config.id)
+
+        guard case .error = manager.state(for: config.id) else {
+            return XCTFail("Expected error state after failed disconnect")
+        }
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+
+        await fileSystem.setDisconnectShouldFail(false)
+        try await manager.remove(config)
+
+        XCTAssertTrue(manager.connections.isEmpty)
+        XCTAssertNil(manager.fileSystem(for: config.id))
+        let isConnected = await fileSystem.isConnected
+        XCTAssertFalse(isConnected)
+        XCTAssertNil(credentialProvider.credentials[config.id])
+    }
+
     func testConnectSuccess() async throws {
         let config = ConnectionConfig(
             name: "Test",
@@ -302,6 +370,32 @@ final class ConnectionManagerTests: XCTestCase {
         await manager.connect(config.id)
         XCTAssertEqual(manager.state(for: config.id), .connected)
         XCTAssertNotNil(manager.fileSystem(for: config.id))
+    }
+
+    func testConnectSkipsConcurrentAttemptForSameID() async throws {
+        let config = ConnectionConfig(
+            name: "Concurrent",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let fileSystem = MockFileSystem()
+        await fileSystem.setConnectDelay(nanoseconds: 200_000_000)
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in
+            fileSystem
+        }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        async let first: Void = manager.connect(config.id)
+        async let second: Void = manager.connect(config.id)
+        _ = await (first, second)
+
+        XCTAssertEqual(manager.state(for: config.id), .connected)
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+        let connectCallCount = await fileSystem.connectCallCount
+        XCTAssertEqual(connectCallCount, 1)
     }
 
     func testConnectRetriesTransientNetworkFailure() async throws {
@@ -435,7 +529,7 @@ final class ConnectionManagerTests: XCTestCase {
         }
     }
 
-    func testTestConnectionEnumeratesFromRoot() async {
+    func testTestConnectionEnumeratesConfiguredRemotePath() async {
         let config = ConnectionConfig(
             name: "Test",
             backendType: .sftp,
@@ -459,7 +553,10 @@ final class ConnectionManagerTests: XCTestCase {
             return
         }
         let paths = await fs.enumeratedPaths
-        XCTAssertEqual(paths, [.root])
+        let expectedPaths: [RemotePath] = [
+            config.remotePath.isEmpty ? .root : RemotePath(config.remotePath),
+        ]
+        XCTAssertEqual(paths, expectedPaths)
     }
 
     func testTestConnectionDisconnectsWhenEnumerationFails() async {

@@ -38,6 +38,17 @@ public enum RemoteFileSystemError: Error, Sendable, LocalizedError {
             return message
         }
     }
+
+    public var isTransientConnectionFailure: Bool {
+        switch self {
+        case .authenticationFailed:
+            return false
+        case .connectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 // MARK: - Protocol

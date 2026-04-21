@@ -570,9 +570,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             )
             try? await fileSystem.disconnect()
             await cache.close()
+            await contentCache.invalidateAll()
             await contentCache.close()
             await anchorStore.close()
-            await contentCache.invalidateAll()
             stateStore.close()
             throw error
         }
@@ -628,8 +628,13 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func shouldRetryTransientConnectionError(_ error: Error) -> Bool {
-        if case RemoteFileSystemError.authenticationFailed = error {
-            return false
+        if let remoteError = error as? RemoteFileSystemError {
+            if case .authenticationFailed = remoteError {
+                return false
+            }
+            if remoteError.isTransientConnectionFailure {
+                return true
+            }
         }
 
         let normalizedDescription = error.localizedDescription.lowercased()
@@ -811,13 +816,23 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
     private func remoteDescendantItems(
         of path: RemotePath,
-        using fileSystem: any RemoteFileSystem
+        using fileSystem: any RemoteFileSystem,
+        maxDepth: Int? = nil
     ) async throws -> [RemoteItem] {
-        let children = try await fileSystem.enumerate(at: path)
-        var descendants = children
+        var descendants: [RemoteItem] = []
+        var pending: [(path: RemotePath, remainingDepth: Int?)] = [(path, maxDepth)]
 
-        for child in children where child.isDirectory {
-            descendants.append(contentsOf: try await remoteDescendantItems(of: child.path, using: fileSystem))
+        while let next = pending.popLast() {
+            let children = try await fileSystem.enumerate(at: next.path)
+            descendants.append(contentsOf: children)
+
+            for child in children where child.isDirectory {
+                if let remainingDepth = next.remainingDepth, remainingDepth == 0 {
+                    continue
+                }
+                let nextDepth = next.remainingDepth.map { $0 - 1 }
+                pending.append((child.path, nextDepth))
+            }
         }
 
         return descendants

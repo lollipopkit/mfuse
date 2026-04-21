@@ -19,6 +19,7 @@ public final class ConnectionManager: ObservableObject {
     private let credentialProvider: CredentialProvider
     private let registry: BackendRegistry
     private var fileSystems: [UUID: any RemoteFileSystem] = [:]
+    private var inFlightConnectionIDs: Set<UUID> = []
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
     var staleDomainRemover: ((String) async throws -> Void)?
@@ -79,9 +80,16 @@ public final class ConnectionManager: ObservableObject {
 
     public func remove(_ config: ConnectionConfig) async throws {
         let shouldCleanupMount = states[config.id]?.isConnected == true
+            || {
+                if case .error = states[config.id] {
+                    return true
+                }
+                return false
+            }()
             || mountState(for: config.id).isMounted
             || mountState(for: config.id) == .mounting
             || mountResolutionTasks[config.id] != nil
+            || fileSystems[config.id] != nil
         if shouldCleanupMount {
             await disconnect(config.id)
         }
@@ -96,23 +104,35 @@ public final class ConnectionManager: ObservableObject {
         do {
             try storage.saveConnections(connections)
         } catch {
-            connections = previousConnections
-            if let previousState {
-                states[config.id] = previousState
-            }
-            if let previousMountState {
-                mountStates[config.id] = previousMountState
-            }
-            if let previousFileSystem {
-                fileSystems[config.id] = previousFileSystem
-            }
+            restoreRemovedConnectionState(
+                for: config.id,
+                connections: previousConnections,
+                state: previousState,
+                mountState: previousMountState,
+                fileSystem: previousFileSystem
+            )
             throw error
         }
         do {
             try await credentialProvider.delete(for: config.id)
         } catch {
+            let credentialDeleteError = error
+            do {
+                try restoreRemovedConnectionStateAndPersist(
+                    for: config.id,
+                    connections: previousConnections,
+                    state: previousState,
+                    mountState: previousMountState,
+                    fileSystem: previousFileSystem
+                )
+            } catch {
+                let restoreError = error
+                throw RemoteFileSystemError.operationFailed(
+                    "Failed to delete credential for connection \(config.id.uuidString): \(credentialDeleteError.localizedDescription). Failed to restore the removed connection: \(restoreError.localizedDescription)"
+                )
+            }
             throw RemoteFileSystemError.operationFailed(
-                "Removed connection \(config.id.uuidString) but failed to delete its credential: \(error.localizedDescription)"
+                "Failed to delete credential for connection \(config.id.uuidString); restored the connection so removal can be retried: \(credentialDeleteError.localizedDescription)"
             )
         }
     }
@@ -121,7 +141,22 @@ public final class ConnectionManager: ObservableObject {
 
     public func connect(_ id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }) else { return }
+        if case .connecting = states[id] {
+            return
+        }
+        if case .connected = states[id] {
+            return
+        }
+        guard fileSystems[id] == nil else {
+            return
+        }
+        guard inFlightConnectionIDs.insert(id).inserted else {
+            return
+        }
         states[id] = .connecting
+        defer {
+            inFlightConnectionIDs.remove(id)
+        }
 
         do {
             let credential = try await credentialProvider.credential(for: id) ?? Credential()
@@ -299,6 +334,7 @@ public final class ConnectionManager: ObservableObject {
         guard let fs = registry.createFileSystem(config: config, credential: credential) else {
             return .failure(RemoteFileSystemError.unsupported(config.backendType.displayName))
         }
+        let enumerationPath = config.remotePath.isEmpty ? RemotePath.root : RemotePath(config.remotePath)
         do {
             try await fs.connect()
         } catch {
@@ -306,7 +342,7 @@ public final class ConnectionManager: ObservableObject {
         }
 
         do {
-            _ = try await fs.enumerate(at: .root)
+            _ = try await fs.enumerate(at: enumerationPath)
         } catch {
             try? await fs.disconnect()
             return .failure(error)
@@ -555,6 +591,48 @@ public final class ConnectionManager: ObservableObject {
             }
             self.mountResolutionTasks.removeValue(forKey: config.id)
         }
+    }
+
+    private func restoreRemovedConnectionState(
+        for id: UUID,
+        connections restoredConnections: [ConnectionConfig],
+        state restoredState: ConnectionState?,
+        mountState restoredMountState: MountState?,
+        fileSystem restoredFileSystem: (any RemoteFileSystem)?
+    ) {
+        connections = restoredConnections
+        if let restoredState {
+            states[id] = restoredState
+        } else {
+            states.removeValue(forKey: id)
+        }
+        if let restoredMountState {
+            mountStates[id] = restoredMountState
+        } else {
+            mountStates.removeValue(forKey: id)
+        }
+        if let restoredFileSystem {
+            fileSystems[id] = restoredFileSystem
+        } else {
+            fileSystems.removeValue(forKey: id)
+        }
+    }
+
+    private func restoreRemovedConnectionStateAndPersist(
+        for id: UUID,
+        connections restoredConnections: [ConnectionConfig],
+        state restoredState: ConnectionState?,
+        mountState restoredMountState: MountState?,
+        fileSystem restoredFileSystem: (any RemoteFileSystem)?
+    ) throws {
+        restoreRemovedConnectionState(
+            for: id,
+            connections: restoredConnections,
+            state: restoredState,
+            mountState: restoredMountState,
+            fileSystem: restoredFileSystem
+        )
+        try storage.saveConnections(restoredConnections)
     }
 
     private func disconnectMountedFileSystem(

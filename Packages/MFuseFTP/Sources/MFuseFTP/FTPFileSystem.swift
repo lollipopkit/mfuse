@@ -90,7 +90,13 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("LIST failed: \(response.text)")
         }
 
-        let rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
+        let rawData: Data
+        do {
+            rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
+        } catch {
+            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
+            throw error
+        }
         try validateTransferCompletion(
             try await conn.readResponse(),
             failurePrefix: "LIST completion failed"
@@ -157,7 +163,13 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("RETR failed: \(response.text)")
         }
 
-        let data = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
+        let data: Data
+        do {
+            data = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
+        } catch {
+            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
+            throw error
+        }
         try validateTransferCompletion(
             try await conn.readResponse(),
             failurePrefix: "RETR completion failed"
@@ -178,10 +190,15 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("STOR failed: \(response.text)")
         }
 
-        var buffer = dataChannel.allocator.buffer(capacity: data.count)
-        buffer.writeBytes(data)
-        try await dataChannel.writeAndFlush(buffer)
-        try await dataChannel.close()
+        do {
+            var buffer = dataChannel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            try await dataChannel.writeAndFlush(buffer)
+            try await dataChannel.close()
+        } catch {
+            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
+            throw error
+        }
 
         // Wait for transfer complete
         let doneResp = try await conn.readResponse()
@@ -201,16 +218,21 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("STOR failed: \(response.text)")
         }
 
-        let handle = try FileHandle(forReadingFrom: localFileURL)
-        defer { try? handle.close() }
+        do {
+            let handle = try FileHandle(forReadingFrom: localFileURL)
+            defer { try? handle.close() }
 
-        while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
-            var buffer = dataChannel.allocator.buffer(capacity: chunk.count)
-            buffer.writeBytes(chunk)
-            try await dataChannel.writeAndFlush(buffer)
+            while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
+                var buffer = dataChannel.allocator.buffer(capacity: chunk.count)
+                buffer.writeBytes(chunk)
+                try await dataChannel.writeAndFlush(buffer)
+            }
+
+            try await dataChannel.close()
+        } catch {
+            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
+            throw error
         }
-
-        try await dataChannel.close()
 
         let doneResp = try await conn.readResponse()
         if doneResp.code != 226 && doneResp.code != 250 {
@@ -341,7 +363,13 @@ public actor FTPFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("LIST failed: \(response.text)")
         }
 
-        let rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
+        let rawData: Data
+        do {
+            rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
+        } catch {
+            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
+            throw error
+        }
         try validateTransferCompletion(
             try await conn.readResponse(),
             failurePrefix: "LIST completion failed"
@@ -416,5 +444,13 @@ public actor FTPFileSystem: RemoteFileSystem {
         guard response.code == 226 || response.code == 250 else {
             throw RemoteFileSystemError.operationFailed("\(failurePrefix): \(response.text)")
         }
+    }
+
+    private func cleanupFailedDataTransfer(
+        on dataChannel: Channel,
+        using connection: FTPConnection
+    ) async {
+        try? await dataChannel.close()
+        _ = try? await connection.readResponse()
     }
 }
