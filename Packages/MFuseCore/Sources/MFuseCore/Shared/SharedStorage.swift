@@ -18,6 +18,7 @@ public final class SharedStorage: Sendable {
     public init(
         legacyDefaults: UserDefaults? = nil,
         allowFallbackToTemporaryDirectory: Bool = false,
+        createDirectoriesOnInit: Bool = true,
         containerURL: URL? = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
         )
@@ -34,12 +35,14 @@ public final class SharedStorage: Sendable {
                 "Pass allowFallbackToTemporaryDirectory: true only for tests, or inject an explicit containerURL."
             )
         }
-        do {
-            try ensureDirectories()
-        } catch {
-            preconditionFailure(
-                "SharedStorage failed to create storage directories under \(self.containerURL.path): \(error)"
-            )
+        if createDirectoriesOnInit {
+            do {
+                try ensureDirectories()
+            } catch {
+                preconditionFailure(
+                    "SharedStorage failed to create storage directories under \(self.containerURL.path): \(error)"
+                )
+            }
         }
     }
 

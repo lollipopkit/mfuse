@@ -1,5 +1,6 @@
 import Foundation
 import os.log
+import Darwin
 
 /// Persists SSH host key fingerprints for Trust-On-First-Use (TOFU) validation.
 /// Stored in the App Group container so both the app and File Provider extension share
@@ -64,9 +65,20 @@ public final class HostKeyStore: Sendable {
         let fileManager = FileManager.default
         if fileManager.fileExists(atPath: fileURL.path) {
             do {
+                clearTransientAttributesIfNeeded(at: fileURL)
                 let data = try Data(contentsOf: fileURL)
                 return try JSONDecoder().decode([String: String].self, from: data)
             } catch {
+                if isAccessDenied(error) {
+                    clearTransientAttributesIfNeeded(at: fileURL)
+                    if let reloaded = tryDecodeStoreAfterMetadataRepair() {
+                        return reloaded
+                    }
+                    Self.logger.error(
+                        "Access denied reading host key store at \(self.fileURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                    return legacyDefaults?.dictionary(forKey: Self.storeKey) as? [String: String] ?? [:]
+                }
                 Self.logger.error(
                     "Failed to decode host key store at \(self.fileURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
@@ -86,7 +98,9 @@ public final class HostKeyStore: Sendable {
         do {
             let data = try JSONEncoder().encode(store)
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            clearTransientAttributesIfNeeded(at: fileURL)
             try data.write(to: fileURL, options: .atomic)
+            clearTransientAttributesIfNeeded(at: fileURL)
         } catch {
             Self.logger.error(
                 "Failed to persist host key store at \(self.fileURL.path, privacy: .public) via directory \(directoryURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
@@ -107,6 +121,41 @@ public final class HostKeyStore: Sendable {
             Self.logger.error(
                 "Failed to move corrupt host key store from \(self.fileURL.path, privacy: .public) to \(backupURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
+        }
+    }
+
+    private func isAccessDenied(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain,
+           [NSFileReadNoPermissionError, NSFileWriteNoPermissionError, NSFileReadNoSuchFileError].contains(nsError.code) {
+            return nsError.code != NSFileReadNoSuchFileError
+        }
+
+        if nsError.domain == NSPOSIXErrorDomain,
+           [Int(EPERM), Int(EACCES)].contains(nsError.code) {
+            return true
+        }
+
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying.domain == NSPOSIXErrorDomain,
+           [Int(EPERM), Int(EACCES)].contains(underlying.code) {
+            return true
+        }
+
+        return false
+    }
+
+    private func tryDecodeStoreAfterMetadataRepair() -> [String: String]? {
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return nil
+        }
+        return try? JSONDecoder().decode([String: String].self, from: data)
+    }
+
+    private func clearTransientAttributesIfNeeded(at url: URL) {
+        url.path.withCString { path in
+            _ = removexattr(path, "com.apple.quarantine", 0)
+            _ = removexattr(path, "com.apple.provenance", 0)
         }
     }
 }

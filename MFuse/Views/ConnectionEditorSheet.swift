@@ -249,23 +249,17 @@ struct ConnectionEditorSheet: View {
     // MARK: - Validation
 
     private var isValid: Bool {
-        !name.isEmpty && (
-            if backendType == .googleDrive {
-                !gdClientID.isEmpty && !gdRedirectURI.isEmpty
-            } else if backendType == .s3 {
-                !s3Bucket.isEmpty &&
-                (UInt16(port) != nil || port.isEmpty) &&
-                (
-                    if authMethod == .accessKey {
-                        !s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty
-                    } else {
-                        true
-                    }
-                )
-            } else {
-                !host.isEmpty && (UInt16(port) != nil || port.isEmpty)
-            }
-        )
+        guard !name.isEmpty else { return false }
+        if backendType == .googleDrive {
+            return !gdClientID.isEmpty && !gdRedirectURI.isEmpty
+        }
+        if backendType == .s3 {
+            let hasValidPort = UInt16(port) != nil || port.isEmpty
+            let hasRequiredAccessKeyCredentials =
+                authMethod != .accessKey || (!s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty)
+            return !s3Bucket.isEmpty && hasValidPort && hasRequiredAccessKeyCredentials
+        }
+        return !host.isEmpty && (UInt16(port) != nil || port.isEmpty)
     }
 
     // MARK: - Actions

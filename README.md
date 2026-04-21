@@ -50,7 +50,7 @@ MFuse is split into three main layers:
 - `Packages/`: reusable Swift packages, including `MFuseCore` plus protocol backends such as `MFuseSFTP`, `MFuseS3`, and `MFuseWebDAV`.
 
 Shared connection metadata is stored through `SharedStorage`, while secrets are handled by `KeychainService`. Mounting is handled through `FileProviderMountProvider`, and mounted domains become visible through macOS File Provider.
-Mounted domains are persistent across app relaunches as long as the connection config still exists. MFuse also recreates a convenience symlink at `~/MFuse/<name>` for active mounts. A manual disconnect removes both the File Provider domain and the symlink, so it will not be restored automatically on the next launch.
+Mounted domains are persistent across app relaunches as long as the connection config still exists. MFuse also recreates a convenience shortcut for active mounts in a writable shortcuts directory. A manual disconnect removes both the File Provider domain and the shortcut, so it will not be restored automatically on the next launch.
 
 ## Project Structure
 
@@ -107,6 +107,12 @@ make lint
 ```bash
 make build
 ```
+
+### Local Xcode builds
+
+If you build `MFuse.app` from Xcode and copy it into `/Applications`, use a valid Apple development team for both the app target and the File Provider extension target.
+
+Unsigned or ad hoc signed builds can still launch, but macOS may ignore the File Provider extension because the App Group entitlement is not accepted at runtime. When that happens, mounts fail and Finder may show missing-file errors for the generated convenience shortcut.
 
 ## Common Commands
 

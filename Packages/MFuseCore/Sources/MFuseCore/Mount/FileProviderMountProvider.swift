@@ -3,7 +3,7 @@ import FileProvider
 import os.log
 
 /// MountProvider backed by macOS File Provider (NSFileProviderDomain).
-/// Mounts appear under ~/Library/CloudStorage/. Symlinks created at ~/MFuse/<name>.
+/// Mounts appear under ~/Library/CloudStorage/. Convenience links are created in a writable shortcuts directory.
 public final class FileProviderMountProvider: MountProvider {
 
     private static let logger = Logger(
@@ -11,8 +11,20 @@ public final class FileProviderMountProvider: MountProvider {
         category: "FileProviderMountProvider"
     )
 
-    public static let defaultSymlinkBaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("MFuse")
+    public static let defaultSymlinkBaseURL: URL = {
+        if let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
+        ) {
+            return containerURL
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true)
+                .appendingPathComponent("MFuse", isDirectory: true)
+                .appendingPathComponent("Shortcuts", isDirectory: true)
+        }
+
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("MFuse", isDirectory: true)
+    }()
 
     /// Base directory for convenience symlinks.
     public let symlinkBaseURL: URL
@@ -24,39 +36,31 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func mount(config: ConnectionConfig) async throws {
-        let domainID = NSFileProviderDomainIdentifier(rawValue: config.domainIdentifier)
-
-        // Remove stale domain with the same identifier before adding
-        let existing = try await NSFileProviderManager.domains()
-        if let stale = existing.first(where: { $0.identifier == domainID }) {
-            do {
-                try await NSFileProviderManager.remove(stale)
-                try await Task.sleep(nanoseconds: 500_000_000)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                throw error
-            }
-        }
-
         let domain = try makeDomain(for: config)
 
-        // Retry once if first attempt fails (system may need time after removal)
         do {
             try await NSFileProviderManager.add(domain)
         } catch {
             if isExtensionNotEnabledError(error) {
                 throw MountError.extensionNotEnabled
             }
-            try Task.checkCancellation()
-            try await Task.sleep(nanoseconds: 1_000_000_000)
-            try Task.checkCancellation()
-            do {
-                try await NSFileProviderManager.add(domain)
-            } catch {
-                if isExtensionNotEnabledError(error) {
-                    throw MountError.extensionNotEnabled
+            if shouldRetryMountAfterDomainRefresh(error) {
+                if let stale = try await findDomain(for: config) {
+                    try await NSFileProviderManager.remove(stale)
+                    try await Task.sleep(nanoseconds: 500_000_000)
                 }
+                try Task.checkCancellation()
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                try Task.checkCancellation()
+                do {
+                    try await NSFileProviderManager.add(domain)
+                } catch {
+                    if isExtensionNotEnabledError(error) {
+                        throw MountError.extensionNotEnabled
+                    }
+                    throw error
+                }
+            } else {
                 throw error
             }
         }
@@ -92,7 +96,7 @@ public final class FileProviderMountProvider: MountProvider {
         guard let manager = NSFileProviderManager(for: domain) else {
             throw MountError.managerNotFound(config.domainIdentifier)
         }
-        try await manager.signalEnumerator(for: .rootContainer)
+        try await manager.signalEnumerator(for: .workingSet)
     }
 
     public func mountURL(for config: ConnectionConfig) async throws -> URL? {
@@ -106,12 +110,9 @@ public final class FileProviderMountProvider: MountProvider {
         let fileManager = FileManager.default
         let baseDir = symlinkBaseURL
 
-        // Ensure ~/MFuse/ exists
-        if !fileManager.fileExists(atPath: baseDir.path) {
-            try fileManager.createDirectory(at: baseDir, withIntermediateDirectories: true)
-        }
-
         let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
+        let parentDirectoryURL = symlinkURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
 
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
         guard !fileManager.fileExists(atPath: symlinkURL.path) else {
@@ -121,7 +122,19 @@ public final class FileProviderMountProvider: MountProvider {
             return nil
         }
 
-        try fileManager.createSymbolicLink(at: symlinkURL, withDestinationURL: mountURL)
+        do {
+            try fileManager.createSymbolicLink(
+                atPath: symlinkURL.path,
+                withDestinationPath: mountURL.path
+            )
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+            try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
+            try fileManager.createSymbolicLink(
+                atPath: symlinkURL.path,
+                withDestinationPath: mountURL.path
+            )
+        }
         return symlinkURL
     }
 
@@ -160,6 +173,10 @@ public final class FileProviderMountProvider: MountProvider {
 
     public static func symlinkURL(for config: ConnectionConfig, baseDir: URL) -> URL {
         baseDir.appendingPathComponent(symlinkFilename(for: config))
+    }
+
+    public static func symlinkDisplayPath(for config: ConnectionConfig, baseDir: URL) -> String {
+        symlinkURL(for: config, baseDir: baseDir).path
     }
 
     public static func shouldRemoveManagedSymlink(at url: URL, fileManager: FileManager) -> Bool {
@@ -265,6 +282,11 @@ public final class FileProviderMountProvider: MountProvider {
             return true
         }
         return MountError.matchesExtensionNotEnabledMessage(nsError.localizedDescription)
+    }
+
+    private func shouldRetryMountAfterDomainRefresh(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileWriteFileExistsError
     }
 
     private func makeDomain(for config: ConnectionConfig) throws -> NSFileProviderDomain {

@@ -78,6 +78,23 @@ enum FileProviderOperationTimeout: LocalizedError {
     }
 }
 
+final class FileProviderDomainVersionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var currentVersion = NSFileProviderDomainVersion()
+
+    func read() -> NSFileProviderDomainVersion {
+        lock.lock()
+        defer { lock.unlock() }
+        return currentVersion
+    }
+
+    func advance() {
+        lock.lock()
+        currentVersion = currentVersion.next()
+        lock.unlock()
+    }
+}
+
 @Sendable
 func withOperationTimeout<T: Sendable>(
     seconds: Double,
@@ -101,7 +118,7 @@ func withOperationTimeout<T: Sendable>(
 
 /// The File Provider Replicated Extension — bridges the macOS File Provider framework
 /// to the MFuse VFS layer.
-public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
+public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, NSFileProviderDomainState {
 
     private static let bootstrapTimeoutSeconds = 15.0
     private static let contentCacheStoreRetryCount = 2
@@ -132,13 +149,14 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     config: config,
                     credential: credential
                 ) { updatedCredential in
-                    try await Self.sharedKeychain.store(updatedCredential, for: config.id)
+                    try await FileProviderExtension.sharedKeychain.store(updatedCredential, for: config.id)
                 }
             }
         )
     }()
     private let domain: NSFileProviderDomain
-    private let storage = SharedStorage()
+    private let domainVersionState = FileProviderDomainVersionState()
+    private let storage = SharedStorage(createDirectoriesOnInit: false)
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse.provider", category: "Extension")
     private let bootstrapTaskStore = BootstrapTaskStore()
     private let cleanupTaskStore = CleanupTaskStore()
@@ -147,6 +165,14 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         self.domain = domain
         super.init()
         Self.registerBackends()
+    }
+
+    public var domainVersion: NSFileProviderDomainVersion {
+        domainVersionState.read()
+    }
+
+    public var userInfo: [AnyHashable: Any] {
+        [:]
     }
 
     public func invalidate() {
@@ -311,9 +337,10 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     try await context.fileSystem.createFile(at: newPath, from: url)
                     createdFileURL = url
                 } else {
+                    let filenamePathExtension = (itemTemplate.filename as NSString).pathExtension
                     let temporaryURL = try context.stateStore.temporaryFileURL(
                         for: UUID().uuidString,
-                        extension: itemTemplate.filename.pathExtension.isEmpty ? "tmp" : itemTemplate.filename.pathExtension
+                        extension: filenamePathExtension.isEmpty ? "tmp" : filenamePathExtension
                     )
                     FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
                     try await context.fileSystem.createFile(at: newPath, from: temporaryURL)
@@ -527,11 +554,10 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 "Bootstrap failed for domain \(config.domainIdentifier, privacy: .public): \(String(describing: error), privacy: .public)"
             )
             try? await fileSystem.disconnect()
-            await cache.invalidateAll()
-            await contentCache.invalidateAll()
             await cache.close()
             await contentCache.close()
             await anchorStore.close()
+            await contentCache.invalidateAll()
             stateStore.close()
             throw error
         }

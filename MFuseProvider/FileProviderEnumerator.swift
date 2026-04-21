@@ -55,10 +55,13 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         for observer: NSFileProviderEnumerationObserver,
         startingAt page: NSFileProviderPage
     ) {
+        let pageData = page.rawValue as NSData
+        let initialPageSortedByDate = NSFileProviderPage.initialPageSortedByDate
+        let initialPageSortedByName = NSFileProviderPage.initialPageSortedByName
         // We emit a single logical enumeration in chunked batches to reduce memory use,
         // but we do not support follow-up page tokens. Callers should start with one of
         // the File Provider initial page constants; any other page is treated as exhausted.
-        if page != .initialPageSortedByDate && page != .initialPageSortedByName {
+        if !pageData.isEqual(initialPageSortedByDate) && !pageData.isEqual(initialPageSortedByName) {
             observer.finishEnumerating(upTo: nil)
             return
         }
@@ -120,7 +123,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 logger.info(
                     "Fetched enumerateItems for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public) count=\(remoteItems.count)"
                 )
-                await context.cache.putAll(items: remoteItems, parent: path)
+                try await context.cache.putAll(items: remoteItems, parent: path)
 
                 let items = remoteItems.map { item in
                     FileProviderItem(
@@ -199,7 +202,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                     observer.didDeleteItems(withIdentifiers: deletedIdentifiers)
                 }
 
-                await context.cache.putAll(items: remoteItems, parent: path)
+                try await context.cache.putAll(items: remoteItems, parent: path)
                 let newAnchor = try await context.anchorStore.incrementAnchor(for: domainIdentifier)
 
                 let items = remoteItems.map { item in

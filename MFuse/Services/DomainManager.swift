@@ -7,6 +7,8 @@ import FileProvider
 /// This class provides domain sync on startup.
 @MainActor
 public final class DomainManager: ObservableObject {
+    private static let replicatedDomainMigrationDefaultsKey =
+        "com.lollipopkit.mfuse.fileprovider.replicated-domain-migration-v1"
 
     struct SyncDomainsError: LocalizedError {
         let errors: [(id: String, error: Error)]
@@ -28,6 +30,18 @@ public final class DomainManager: ObservableObject {
     /// Sync current connections with File Provider domains.
     /// Removes stale domains that no longer have a corresponding connection.
     public func syncDomains() async throws {
+        try await repairReplicatedDomainRegistrationIfNeeded()
+        try await removeStaleDomainsAndSymlinks()
+    }
+
+    /// Remove currently registered MFuse domains that do not correspond to a saved connection.
+    /// This intentionally skips the replicated-domain migration path so it can be used for
+    /// targeted cleanup without invoking `removeAllDomains()`.
+    public func cleanupResidualDomains() async throws {
+        try await removeStaleDomainsAndSymlinks()
+    }
+
+    private func removeStaleDomainsAndSymlinks() async throws {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
         let domains = try await NSFileProviderManager.domains()
         var errors: [(id: String, error: Error)] = []
@@ -59,5 +73,41 @@ public final class DomainManager: ObservableObject {
         if !errors.isEmpty {
             throw SyncDomainsError(errors: errors)
         }
+    }
+
+    private func repairReplicatedDomainRegistrationIfNeeded() async throws {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.replicatedDomainMigrationDefaultsKey) else {
+            return
+        }
+
+        let existingDomains = try await NSFileProviderManager.domains()
+        let mountedDomainIDs = Set(existingDomains.map(\.identifier.rawValue))
+        let knownConfigsByDomainID = Dictionary(
+            uniqueKeysWithValues: connectionManager.connections.map { ($0.domainIdentifier, $0) }
+        )
+        var errors: [(id: String, error: Error)] = []
+
+        do {
+            try await NSFileProviderManager.removeAllDomains()
+            try await Task.sleep(nanoseconds: 500_000_000)
+        } catch {
+            throw SyncDomainsError(errors: [("__all_domains__", error)])
+        }
+
+        for domainID in mountedDomainIDs {
+            guard let config = knownConfigsByDomainID[domainID] else { continue }
+            do {
+                try await mountProvider.mount(config: config)
+            } catch {
+                errors.append((id: domainID, error: error))
+            }
+        }
+
+        if !errors.isEmpty {
+            throw SyncDomainsError(errors: errors)
+        }
+
+        defaults.set(true, forKey: Self.replicatedDomainMigrationDefaultsKey)
     }
 }

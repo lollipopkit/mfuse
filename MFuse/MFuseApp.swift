@@ -11,15 +11,19 @@ import AppKit
 
 @main
 struct MFuseApp: App {
+    private static let cleanupFileProviderStateArgument = "--cleanup-file-provider-state"
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var connectionManager: ConnectionManager
     @State private var didPerformInitialSetup = false
+    private let domainManager: DomainManager
     private let mountProvider: FileProviderMountProvider
     private let storage: SharedStorage
     private let keychain: KeychainService
+    private let isCleanupLaunch: Bool
 
     init() {
+        self.isCleanupLaunch = ProcessInfo.processInfo.arguments.contains(Self.cleanupFileProviderStateArgument)
         self.storage = SharedStorage.withLegacyMigration()
         self.keychain = KeychainService()
         self.mountProvider = FileProviderMountProvider()
@@ -59,6 +63,10 @@ struct MFuseApp: App {
             registry: registry
         )
         manager.mountProvider = self.mountProvider
+        self.domainManager = DomainManager(
+            connectionManager: manager,
+            mountProvider: self.mountProvider
+        )
         manager.onStateChange = { config, state in
             switch state {
             case .connected:
@@ -105,6 +113,7 @@ struct MFuseApp: App {
         MenuBarExtra("MFuse", systemImage: "externaldrive.connected.to.line.below") {
             MenuBarView()
                 .environmentObject(connectionManager)
+                .environment(\.keychainService, keychain)
         }
         .menuBarExtraStyle(.window)
     }
@@ -112,25 +121,21 @@ struct MFuseApp: App {
     @MainActor
     private func performInitialSetupIfNeeded() async {
         guard !didPerformInitialSetup else { return }
+        didPerformInitialSetup = true
 
-        await connectionManager.syncMounts()
-        guard !Task.isCancelled else { return }
-
-        let sharedDefaults = UserDefaults(suiteName: AppGroupConstants.groupIdentifier)
-        if !(sharedDefaults?.bool(forKey: AppGroupConstants.extensionOnboardedKey) ?? false) {
-            do {
-                _ = try await connectionManager.mountProvider?.mountedDomains()
-                guard !Task.isCancelled else { return }
-                sharedDefaults?.set(true, forKey: AppGroupConstants.extensionOnboardedKey)
-            } catch {
-                guard !Task.isCancelled else { return }
-                connectionManager.needsExtensionSetup = true
-                return
-            }
+        guard isCleanupLaunch else {
+            await connectionManager.syncMounts()
+            return
         }
 
-        guard !Task.isCancelled else { return }
-        didPerformInitialSetup = true
+        do {
+            try await domainManager.cleanupResidualDomains()
+        } catch {
+            NSLog("MFuse cleanup launch failed: %@", String(describing: error))
+        }
+
+        AppDelegate.allowsTermination = true
+        NSApp.terminate(nil)
     }
 }
 
@@ -168,8 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Environment Keys
 
 private struct KeychainServiceKey: EnvironmentKey {
+    private static let fallbackKeychainService = KeychainService()
+
     static var defaultValue: KeychainService {
-        fatalError("KeychainService was not injected. Use .environment(\\.keychainService, ...) to provide a KeychainService instance.")
+        fallbackKeychainService
     }
 }
 

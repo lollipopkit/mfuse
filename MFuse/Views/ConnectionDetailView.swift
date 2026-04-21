@@ -15,6 +15,11 @@ struct ConnectionDetailView: View {
         connectionManager.mountState(for: config.id)
     }
 
+    private var symlinkBaseURL: URL {
+        connectionManager.mountProvider?.symlinkBaseURL
+            ?? FileProviderMountProvider.defaultSymlinkBaseURL
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -56,7 +61,12 @@ struct ConnectionDetailView: View {
                     }
                     if mount.isMounted {
                         LabeledContent("Symlink") {
-                            Text("~/MFuse/\(FileProviderMountProvider.symlinkFilename(for: config))")
+                            Text(
+                                FileProviderMountProvider.symlinkDisplayPath(
+                                    for: config,
+                                    baseDir: symlinkBaseURL
+                                )
+                            )
                                 .textSelection(.enabled)
                         }
                         if let path = mount.mountPath {
@@ -80,6 +90,9 @@ struct ConnectionDetailView: View {
             .formStyle(.grouped)
         }
         .navigationTitle(config.name)
+        .task(id: config.id) {
+            await connectionManager.repairMountState(for: config.id)
+        }
     }
 
     private var header: some View {
@@ -168,11 +181,9 @@ struct ConnectionDetailView: View {
     }
 
     private func resolveFinderURL() async -> URL? {
-        let baseDir = connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
         let symlinkURL = FileProviderMountProvider.symlinkURL(
             for: config,
-            baseDir: baseDir
+            baseDir: symlinkBaseURL
         )
         if linkExists(at: symlinkURL) {
             return symlinkURL

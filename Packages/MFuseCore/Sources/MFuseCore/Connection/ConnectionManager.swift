@@ -2,11 +2,13 @@ import Foundation
 #if canImport(FileProvider)
 import FileProvider
 #endif
+import os.log
 
 /// Manages the lifecycle of remote filesystem connections.
 /// Used by the main app to create, connect, disconnect, and track connections.
 @MainActor
 public final class ConnectionManager: ObservableObject {
+    private let logger = Logger(subsystem: "com.lollipopkit.mfuse.core", category: "ConnectionManager")
 
     @Published public private(set) var connections: [ConnectionConfig] = []
     @Published public private(set) var states: [UUID: ConnectionState] = [:]
@@ -258,6 +260,32 @@ public final class ConnectionManager: ObservableObject {
         mountStates[id] ?? .unmounted
     }
 
+    /// Best-effort mount state repair for already-registered File Provider domains.
+    public func repairMountState(for id: UUID) async {
+        guard let config = connections.first(where: { $0.id == id }),
+              let mountProvider else {
+            return
+        }
+
+        do {
+            if let mountURL = try await mountProvider.mountURL(for: config) {
+                do {
+                    _ = try await mountProvider.createSymlink(for: config)
+                } catch {
+                    logger.warning(
+                        "Failed to recreate convenience symlink for \(config.domainIdentifier, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                }
+                setMountState(.mounted(path: mountURL.path), for: config)
+                return
+            }
+        } catch {
+            logger.warning(
+                "Failed to repair mount state for \(config.domainIdentifier, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     /// Sync mount states on startup: remove stale FP domains, rebuild symlinks for existing mounts.
     public func syncMounts() async {
         guard let mp = mountProvider else { return }
@@ -351,8 +379,16 @@ public final class ConnectionManager: ObservableObject {
             do {
                 let path = try await self.resolveMountPath(for: config, using: mountProvider)
                 try Task.checkCancellation()
-                guard try await mountProvider.createSymlink(for: config) != nil else {
-                    throw MountError.mountFailed("Failed to create symlink for \(config.name)")
+                do {
+                    if try await mountProvider.createSymlink(for: config) == nil {
+                        self.logger.warning(
+                            "Mounted domain \(config.domainIdentifier, privacy: .public) without creating convenience symlink"
+                        )
+                    }
+                } catch {
+                    self.logger.warning(
+                        "Mounted domain \(config.domainIdentifier, privacy: .public) but failed to create convenience symlink: \(String(describing: error), privacy: .public)"
+                    )
                 }
                 try Task.checkCancellation()
                 self.setMountState(.mounted(path: path), for: config)

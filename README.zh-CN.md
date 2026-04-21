@@ -50,7 +50,7 @@ MFuse 由三部分组成：macOS 主应用、File Provider extension，以及一
 - `Packages/`：可复用 Swift Package，包括 `MFuseCore` 和多个协议后端实现。
 
 连接配置通过 `SharedStorage` 在主应用和扩展之间共享，敏感凭证通过 `KeychainService` 管理。挂载逻辑由 `FileProviderMountProvider` 处理，最终以 macOS File Provider domain 的形式出现在 Finder 中。
-只要连接配置仍然存在，已挂载的 domain 在应用重启后会继续保留，MFuse 也会重建对应的 `~/MFuse/<name>` 便捷链接。用户手动执行 Disconnect 时，会同时移除 File Provider domain 和该链接，后续启动不会自动恢复。
+只要连接配置仍然存在，已挂载的 domain 在应用重启后会继续保留，MFuse 也会在可写的快捷入口目录里重建对应的便捷链接。用户手动执行 Disconnect 时，会同时移除 File Provider domain 和该链接，后续启动不会自动恢复。
 
 ## 仓库结构
 
@@ -107,6 +107,12 @@ make lint
 ```bash
 make build
 ```
+
+### 本地 Xcode 构建
+
+如果你是在 Xcode 里直接构建 `MFuse.app`，然后再复制到 `/Applications`，主应用 target 和 File Provider extension target 都需要使用有效的 Apple development team 签名。
+
+未签名或 ad hoc 签名的构建虽然可以启动，但 macOS 可能会在运行时忽略 File Provider extension，因为 App Group entitlement 不会被系统接受。出现这种情况时，mount 会失败，Finder 还可能对自动生成的便捷链接报“文件不存在”。
 
 ## 常用命令
 

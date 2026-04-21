@@ -102,6 +102,8 @@ struct MenuBarView: View {
     private func menuBarRow(_ config: ConnectionConfig) -> some View {
         let state = connectionManager.state(for: config.id)
         let mount = connectionManager.mountState(for: config.id)
+        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
+            ?? FileProviderMountProvider.defaultSymlinkBaseURL
         HStack(spacing: 8) {
             Circle()
                 .fill(stateColor(state))
@@ -111,7 +113,7 @@ struct MenuBarView: View {
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                 if mount.isMounted {
-                    Text("~/MFuse/\(FileProviderMountProvider.symlinkFilename(for: config))")
+                    Text(FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL))
                         .font(.caption2)
                         .foregroundStyle(.green.opacity(0.8))
                         .lineLimit(1)
@@ -188,9 +190,11 @@ struct MenuBarView: View {
     }
 
     private func resolveFinderURL(for config: ConnectionConfig) async -> URL? {
+        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
+            ?? FileProviderMountProvider.defaultSymlinkBaseURL
         let symlinkURL = FileProviderMountProvider.symlinkURL(
             for: config,
-            baseDir: FileProviderMountProvider.defaultSymlinkBaseURL
+            baseDir: symlinkBaseURL
         )
         if linkExists(at: symlinkURL) {
             return symlinkURL
