@@ -299,13 +299,23 @@ public actor S3FileSystem: RemoteFileSystem {
     }
 
     public func move(from source: RemotePath, to destination: RemotePath) async throws {
-        try await copy(from: source, to: destination)
+        let s3 = try requireS3()
+        let sourceItem = try await itemInfo(at: source)
+        try await ensureDestinationDoesNotExist(destination, using: s3)
+        try await copyItem(sourceItem, from: source, to: destination, using: s3)
         try await delete(at: source)
     }
 
     public func copy(from source: RemotePath, to destination: RemotePath) async throws {
         let s3 = try requireS3()
         let sourceItem = try await itemInfo(at: source)
+        try await ensureDestinationDoesNotExist(destination, using: s3)
+        try await copyItem(sourceItem, from: source, to: destination, using: s3)
+    }
+
+    // MARK: - Helpers
+
+    private func copyItem(_ sourceItem: RemoteItem, from source: RemotePath, to destination: RemotePath, using s3: S3) async throws {
 
         if sourceItem.isDirectory {
             let sourcePrefix = s3Key(for: source, isDirectory: true)
@@ -337,13 +347,34 @@ public actor S3FileSystem: RemoteFileSystem {
         )
     }
 
-    // MARK: - Helpers
-
     private func requireS3() throws -> S3 {
         guard let s3 = s3 else {
             throw RemoteFileSystemError.notConnected
         }
         return s3
+    }
+
+    private func ensureDestinationDoesNotExist(_ destination: RemotePath, using s3: S3) async throws {
+        let fileKey = s3Key(for: destination, isDirectory: false)
+        do {
+            _ = try await s3.headObject(.init(bucket: bucket, key: fileKey))
+            throw RemoteFileSystemError.alreadyExists(destination)
+        } catch {
+            guard isNotFoundError(error) else {
+                throw error
+            }
+        }
+
+        let directoryPrefix = s3Key(for: destination, isDirectory: true)
+        let listRequest = S3.ListObjectsV2Request(
+            bucket: bucket,
+            maxKeys: 1,
+            prefix: directoryPrefix
+        )
+        let listResponse = try await s3.listObjectsV2(listRequest)
+        if (listResponse.keyCount ?? 0) > 0 {
+            throw RemoteFileSystemError.alreadyExists(destination)
+        }
     }
 
     private func copyObject(fromKey srcKey: String, toKey dstKey: String, using s3: S3) async throws {

@@ -183,38 +183,76 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                     "Starting enumerateChanges for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public)"
                 )
                 let context = try await contextProvider()
+                let requestedAnchor = try Self.decodeSyncAnchor(anchor)
+                let currentAnchor = await context.anchorStore.currentAnchor(for: domainIdentifier)
+
+                guard requestedAnchor == currentAnchor else {
+                    logger.error(
+                        "Rejecting enumerateChanges for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public): requested anchor \(requestedAnchor) does not match current anchor \(currentAnchor)"
+                    )
+                    throw Self.syncAnchorExpiredError()
+                }
+
+                let cachedItems: [RemoteItem]
+                if let snapshot = await context.cache.children(of: path) {
+                    cachedItems = snapshot
+                } else if currentAnchor == 0 {
+                    cachedItems = []
+                } else {
+                    logger.error(
+                        "Rejecting enumerateChanges for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public): cached baseline missing for anchor \(currentAnchor)"
+                    )
+                    throw Self.syncAnchorExpiredError()
+                }
+
                 let remoteItems = try await withOperationTimeout(
                     seconds: Self.enumerationTimeoutSeconds,
                     operation: "enumerating changes for \(path.absoluteString) in domain \(self.domainIdentifier)"
                 ) {
                     try await context.fileSystem.enumerate(at: path)
                 }
-                let cachedItems = await context.cache.children(of: path) ?? []
                 logger.info(
                     "Fetched enumerateChanges for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public) count=\(remoteItems.count)"
                 )
-                let remotePaths = Set(remoteItems.map(\.path.absoluteString))
-                let deletedIdentifiers = cachedItems
-                    .filter { !remotePaths.contains($0.path.absoluteString) }
-                    .map { NSFileProviderItemIdentifier($0.path.absoluteString) }
-                if !deletedIdentifiers.isEmpty {
+                let changeSet = Self.computeChangeSet(
+                    cachedItems: cachedItems,
+                    remoteItems: remoteItems
+                )
+
+                if !changeSet.deletedIdentifiers.isEmpty {
                     guard !Task.isCancelled, self.isCurrentChangesEnumerationTask(id: taskID) else { return }
-                    observer.didDeleteItems(withIdentifiers: deletedIdentifiers)
+                    observer.didDeleteItems(withIdentifiers: changeSet.deletedIdentifiers)
                 }
 
+                let shouldAdvanceAnchor = currentAnchor == 0 || changeSet.hasChanges
                 try await context.cache.putAll(items: remoteItems, parent: path)
-                let newAnchor = try await context.anchorStore.incrementAnchor(for: domainIdentifier)
 
-                let items = remoteItems.map { item in
-                    FileProviderItem(
-                        remoteItem: item,
-                        parentID: self.containerID
-                    ) as NSFileProviderItem
+                let resultingAnchor: UInt64
+                if shouldAdvanceAnchor {
+                    resultingAnchor = try await context.anchorStore.incrementAnchor(for: domainIdentifier)
+                } else {
+                    resultingAnchor = currentAnchor
                 }
-                guard !Task.isCancelled, self.isCurrentChangesEnumerationTask(id: taskID) else { return }
-                observer.didUpdate(items)
 
-                let anchorData = withUnsafeBytes(of: newAnchor) { Data($0) }
+                if !changeSet.updatedItems.isEmpty {
+                    let items = changeSet.updatedItems.map { item in
+                        FileProviderItem(
+                            remoteItem: item,
+                            parentID: self.containerID
+                        ) as NSFileProviderItem
+                    }
+                    for batch in items.chunked(into: Self.pageSize) {
+                        guard !Task.isCancelled, self.isCurrentChangesEnumerationTask(id: taskID) else { return }
+                        observer.didUpdate(batch)
+                    }
+                }
+
+                let anchorData = Self.encodeSyncAnchor(resultingAnchor)
+                if !changeSet.deletedIdentifiers.isEmpty {
+                    logger.debug(
+                        "enumerateChanges reported deletes for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public): \(changeSet.deletedIdentifiers.count)"
+                    )
+                }
                 guard !Task.isCancelled, self.isCurrentChangesEnumerationTask(id: taskID) else { return }
                 didFinish = true
                 observer.finishEnumeratingChanges(
@@ -253,8 +291,71 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 }
 
 private extension FileProviderEnumerator {
+    struct ChangeSet {
+        let updatedItems: [RemoteItem]
+        let deletedIdentifiers: [NSFileProviderItemIdentifier]
+
+        var hasChanges: Bool {
+            !updatedItems.isEmpty || !deletedIdentifiers.isEmpty
+        }
+    }
+
     static func cancellationError() -> NSError {
         NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
+    }
+
+    static func syncAnchorExpiredError() -> NSError {
+        NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.syncAnchorExpired.rawValue)
+    }
+
+    static func decodeSyncAnchor(_ anchor: NSFileProviderSyncAnchor) throws -> UInt64 {
+        let rawValue = anchor.rawValue
+        guard !rawValue.isEmpty else { return 0 }
+        guard rawValue.count == MemoryLayout<UInt64>.size else {
+            throw syncAnchorExpiredError()
+        }
+
+        var decodedAnchor: UInt64 = 0
+        _ = withUnsafeMutableBytes(of: &decodedAnchor) { rawBuffer in
+            rawValue.copyBytes(to: rawBuffer)
+        }
+        return decodedAnchor
+    }
+
+    static func encodeSyncAnchor(_ anchor: UInt64) -> Data {
+        withUnsafeBytes(of: anchor) { Data($0) }
+    }
+
+    static func computeChangeSet(cachedItems: [RemoteItem], remoteItems: [RemoteItem]) -> ChangeSet {
+        let cachedByPath = Dictionary(uniqueKeysWithValues: cachedItems.map { ($0.path.absoluteString, $0) })
+        let remoteByPath = Dictionary(uniqueKeysWithValues: remoteItems.map { ($0.path.absoluteString, $0) })
+
+        let updatedItems = remoteItems.filter { remoteItem in
+            guard let cachedItem = cachedByPath[remoteItem.path.absoluteString] else {
+                return true
+            }
+            return !hasSameSnapshot(cachedItem, remoteItem)
+        }
+
+        let deletedIdentifiers = cachedItems.compactMap { cachedItem -> NSFileProviderItemIdentifier? in
+            guard remoteByPath[cachedItem.path.absoluteString] == nil else {
+                return nil
+            }
+            return NSFileProviderItemIdentifier(cachedItem.path.absoluteString)
+        }
+
+        return ChangeSet(updatedItems: updatedItems, deletedIdentifiers: deletedIdentifiers)
+    }
+
+    static func hasSameSnapshot(_ lhs: RemoteItem, _ rhs: RemoteItem) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.path == rhs.path &&
+        lhs.type == rhs.type &&
+        lhs.size == rhs.size &&
+        lhs.modificationDate == rhs.modificationDate &&
+        lhs.creationDate == rhs.creationDate &&
+        lhs.permissions == rhs.permissions &&
+        lhs.isHidden == rhs.isHidden
     }
 
     func replaceItemEnumerationTask(_ task: Task<Void, Never>, id: UUID) {

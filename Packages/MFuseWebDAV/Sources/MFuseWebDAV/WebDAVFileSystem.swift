@@ -204,6 +204,9 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         request.setValue(dstURL.absoluteString, forHTTPHeaderField: "Destination")
         request.setValue("F", forHTTPHeaderField: "Overwrite")
         let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 412 {
+            throw RemoteFileSystemError.alreadyExists(destination)
+        }
         try checkHTTPResponse(response, path: source, acceptCodes: 200...299)
     }
 
@@ -216,6 +219,9 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         request.setValue(dstURL.absoluteString, forHTTPHeaderField: "Destination")
         request.setValue("F", forHTTPHeaderField: "Overwrite")
         let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 412 {
+            throw RemoteFileSystemError.alreadyExists(destination)
+        }
         try checkHTTPResponse(response, path: source, acceptCodes: 200...299)
     }
 

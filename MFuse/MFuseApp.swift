@@ -12,6 +12,7 @@ import AppKit
 @main
 struct MFuseApp: App {
     private static let cleanupFileProviderStateArgument = "--cleanup-file-provider-state"
+    static let mainWindowID = "main"
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var connectionManager: ConnectionManager
@@ -86,7 +87,7 @@ struct MFuseApp: App {
 
     var body: some Scene {
         // Main window
-        WindowGroup {
+        WindowGroup(id: Self.mainWindowID) {
             ContentView()
                 .environmentObject(connectionManager)
                 .environmentObject(appSettings)

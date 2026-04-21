@@ -6,6 +6,7 @@ import MFuseCore
 struct MenuBarView: View {
 
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.openWindow) private var openWindow
     @State private var isQuitting = false
 
     var body: some View {
@@ -69,10 +70,8 @@ struct MenuBarView: View {
 
             HStack {
                 Button("Open MFuse") {
+                    openWindow(id: MFuseApp.mainWindowID)
                     NSApp.activate(ignoringOtherApps: true)
-                    if let window = NSApp.windows.first(where: { $0.title.contains("MFuse") || $0.isKeyWindow }) {
-                        window.makeKeyAndOrderFront(nil)
-                    }
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)

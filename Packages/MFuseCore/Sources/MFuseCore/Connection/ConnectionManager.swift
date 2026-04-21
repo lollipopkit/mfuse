@@ -167,19 +167,53 @@ public final class ConnectionManager: ObservableObject {
         mountResolutionTasks[id]?.cancel()
         mountResolutionTasks.removeValue(forKey: id)
 
-        // Auto-unmount if mount provider is set
-        if let config = connections.first(where: { $0.id == id }), let mp = mountProvider {
-            try? await mp.removeSymlink(for: config)
-            try? await mp.unmount(config: config)
-            setMountState(.unmounted, for: config)
+        let config = connections.first(where: { $0.id == id })
+        var cleanupFailures: [String] = []
+
+        if let config, let mp = mountProvider {
+            do {
+                try await mp.removeSymlink(for: config)
+            } catch {
+                let message = "Failed to remove symlink for \(config.name): \(describe(error))"
+                logger.error("\(message, privacy: .public)")
+                cleanupFailures.append(message)
+            }
+
+            do {
+                try await mp.unmount(config: config)
+            } catch {
+                let message = "Failed to unmount \(config.name): \(describe(error))"
+                logger.error("\(message, privacy: .public)")
+                cleanupFailures.append(message)
+            }
         }
 
         if let fs = fileSystems[id] {
-            try? await fs.disconnect()
+            do {
+                try await fs.disconnect()
+            } catch {
+                let targetName = config?.name ?? id.uuidString
+                let message = "Failed to disconnect filesystem for \(targetName): \(describe(error))"
+                logger.error("\(message, privacy: .public)")
+                cleanupFailures.append(message)
+            }
         }
+
+        if let config, !cleanupFailures.isEmpty {
+            let errorMessage = cleanupFailures.joined(separator: " | ")
+            let errorState = ConnectionState.error(errorMessage)
+            states[id] = errorState
+            setMountState(.error(errorMessage), for: config)
+            onStateChange?(config, errorState)
+            return
+        }
+
         fileSystems.removeValue(forKey: id)
         states[id] = .disconnected
-        if let config = connections.first(where: { $0.id == id }) {
+        if let config {
+            if mountProvider != nil {
+                setMountState(.unmounted, for: config)
+            }
             onStateChange?(config, .disconnected)
         }
     }
@@ -214,6 +248,9 @@ public final class ConnectionManager: ObservableObject {
                 let delay = Self.baseDelay * UInt64(1 << min(attempt, 4)) // 1s, 2s, 4s, 8s, 16s
                 try? await Task.sleep(nanoseconds: delay)
                 if Task.isCancelled { return }
+                if self.states[id]?.isConnected == true {
+                    return
+                }
                 await self.connect(id)
                 if self.states[id]?.isConnected == true { return }
             }

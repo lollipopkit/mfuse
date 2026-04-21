@@ -103,6 +103,11 @@ public actor SMBFileSystem: RemoteFileSystem {
         try await client.upload(content: data, path: smbPath)
     }
 
+    public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
+        try await writeFile(at: path, data: data)
+    }
+
     public func createFile(at path: RemotePath, data: Data) async throws {
         let client = try requireClient()
         let smbPath = resolvedPath(path)
@@ -113,6 +118,11 @@ public actor SMBFileSystem: RemoteFileSystem {
         } catch {
             throw error
         }
+    }
+
+    public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
+        let data = try Data(contentsOf: localFileURL, options: .mappedIfSafe)
+        try await createFile(at: path, data: data)
     }
 
     // MARK: - Mutations

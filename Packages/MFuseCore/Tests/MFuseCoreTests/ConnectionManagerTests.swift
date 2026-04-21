@@ -26,17 +26,24 @@ final class MockCredentialProvider: @unchecked Sendable, CredentialProvider {
 actor MockFileSystem: RemoteFileSystem {
     var isConnected: Bool = false
     var connectCalled = false
+    var connectCallCount = 0
     var disconnectCalled = false
     var shouldFail = false
     var enumerateShouldFail = false
+    var disconnectShouldFail = false
     var enumeratedPaths: [RemotePath] = []
 
     func setEnumerateShouldFail(_ shouldFail: Bool) {
         enumerateShouldFail = shouldFail
     }
 
+    func setDisconnectShouldFail(_ shouldFail: Bool) {
+        disconnectShouldFail = shouldFail
+    }
+
     func connect() async throws {
         connectCalled = true
+        connectCallCount += 1
         if shouldFail {
             throw RemoteFileSystemError.connectionFailed("mock failure")
         }
@@ -45,6 +52,9 @@ actor MockFileSystem: RemoteFileSystem {
 
     func disconnect() async throws {
         disconnectCalled = true
+        if disconnectShouldFail {
+            throw RemoteFileSystemError.operationFailed("mock disconnect failure")
+        }
         isConnected = false
     }
 
@@ -80,6 +90,8 @@ actor MockMountProvider: MountProvider {
     var removedDomains: [String] = []
     var nilMountURLCounts: [String: Int] = [:]
     var staleDomainsRemoved: [String] = []
+    var unmountShouldFail = false
+    var removeSymlinkShouldFail = false
 
     init(symlinkBaseURL: URL) {
         self.symlinkBaseURL = symlinkBaseURL
@@ -101,6 +113,14 @@ actor MockMountProvider: MountProvider {
         staleDomainsRemoved.append(domainID)
     }
 
+    func setUnmountShouldFail(_ shouldFail: Bool) {
+        unmountShouldFail = shouldFail
+    }
+
+    func setRemoveSymlinkShouldFail(_ shouldFail: Bool) {
+        removeSymlinkShouldFail = shouldFail
+    }
+
     func mount(config: ConnectionConfig) async throws {
         mountInvocations.append(config.domainIdentifier)
         if !mountedDomainIDs.contains(config.domainIdentifier) {
@@ -110,6 +130,9 @@ actor MockMountProvider: MountProvider {
 
     func unmount(config: ConnectionConfig) async throws {
         unmountInvocations.append(config.domainIdentifier)
+        if unmountShouldFail {
+            throw MountError.unmountFailed("mock unmount failure")
+        }
         mountedDomainIDs.removeAll { $0 == config.domainIdentifier }
         removedDomains.append(config.domainIdentifier)
     }
@@ -146,6 +169,9 @@ actor MockMountProvider: MountProvider {
 
     func removeSymlink(for config: ConnectionConfig) async throws {
         removeSymlinkInvocations.append(config.domainIdentifier)
+        if removeSymlinkShouldFail {
+            throw RemoteFileSystemError.operationFailed("mock remove symlink failure")
+        }
         let symlinkURL = symlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         try? FileManager.default.removeItem(at: symlinkURL)
@@ -285,6 +311,78 @@ final class ConnectionManagerTests: XCTestCase {
         await manager.disconnect(config.id)
         XCTAssertEqual(manager.state(for: config.id), .disconnected)
         XCTAssertNil(manager.fileSystem(for: config.id))
+    }
+
+    func testDisconnectReportsErrorWhenFileSystemDisconnectFails() async throws {
+        let config = ConnectionConfig(
+            name: "DisconnectFail",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        guard let fileSystem = lastCreatedFileSystem else {
+            return XCTFail("Expected file system to be created")
+        }
+        await fileSystem.setDisconnectShouldFail(true)
+
+        await manager.disconnect(config.id)
+
+        guard case .error(let message) = manager.state(for: config.id) else {
+            return XCTFail("Expected error state after disconnect failure")
+        }
+        XCTAssertTrue(message.contains("mock disconnect failure"))
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+    }
+
+    func testDisconnectReportsErrorWhenUnmountFails() async throws {
+        let config = ConnectionConfig(
+            name: "UnmountFail",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        await mountProvider.setUnmountShouldFail(true)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        await manager.disconnect(config.id)
+
+        guard case .error(let message) = manager.state(for: config.id) else {
+            return XCTFail("Expected error state after unmount failure")
+        }
+        XCTAssertTrue(message.contains("mock unmount failure"))
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+        XCTAssertEqual(manager.mountState(for: config.id), .error(message))
+    }
+
+    func testReconnectSkipsConnectWhenAlreadyConnectedBeforeRetryFires() async throws {
+        let config = ConnectionConfig(
+            name: "ReconnectSkip",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let sharedFileSystem = MockFileSystem()
+        lastCreatedFileSystem = sharedFileSystem
+        registry.register(.sftp) { _, _ in
+            sharedFileSystem
+        }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        manager.reconnect(config.id)
+        await manager.connect(config.id)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+
+        XCTAssertEqual(manager.state(for: config.id), .connected)
+        let connectCallCount = await sharedFileSystem.connectCallCount
+        XCTAssertEqual(connectCallCount, 1)
     }
 
     func testConnectUnsupportedBackend() async throws {
