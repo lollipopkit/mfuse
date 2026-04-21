@@ -11,20 +11,8 @@ public final class FileProviderMountProvider: MountProvider {
         category: "FileProviderMountProvider"
     )
 
-    public static let defaultSymlinkBaseURL: URL = {
-        if let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
-        ) {
-            return containerURL
-                .appendingPathComponent("Library", isDirectory: true)
-                .appendingPathComponent("Application Support", isDirectory: true)
-                .appendingPathComponent("MFuse", isDirectory: true)
-                .appendingPathComponent("Shortcuts", isDirectory: true)
-        }
-
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("MFuse", isDirectory: true)
-    }()
+    public static let defaultSymlinkBaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("MFuse", isDirectory: true)
 
     /// Base directory for convenience symlinks.
     public let symlinkBaseURL: URL
@@ -113,6 +101,7 @@ public final class FileProviderMountProvider: MountProvider {
         let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
         let parentDirectoryURL = symlinkURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
+        try cleanupLegacyShortcutIfNeeded(for: config)
 
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
         guard !fileManager.fileExists(atPath: symlinkURL.path) else {
@@ -142,6 +131,7 @@ public final class FileProviderMountProvider: MountProvider {
         let expectedDestinationURL = try? await resolveMountURL(for: config)
         let symlinkURL = Self.symlinkURL(for: config, baseDir: symlinkBaseURL)
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
+        try cleanupLegacyShortcutIfNeeded(for: config)
     }
 
     /// Sanitize a connection name for use as a filesystem directory name.
@@ -177,6 +167,22 @@ public final class FileProviderMountProvider: MountProvider {
 
     public static func symlinkDisplayPath(for config: ConnectionConfig, baseDir: URL) -> String {
         symlinkURL(for: config, baseDir: baseDir).path
+    }
+
+    static func legacySymlinkBaseURL(
+        containerURL: URL? = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
+        )
+    ) -> URL? {
+        guard let containerURL else {
+            return nil
+        }
+
+        return containerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("MFuse", isDirectory: true)
+            .appendingPathComponent("Shortcuts", isDirectory: true)
     }
 
     public static func shouldRemoveManagedSymlink(at url: URL, fileManager: FileManager) -> Bool {
@@ -275,6 +281,31 @@ public final class FileProviderMountProvider: MountProvider {
         }
 
         try fm.removeItem(at: symlinkURL)
+    }
+
+    private func cleanupLegacyShortcutIfNeeded(for config: ConnectionConfig) throws {
+        guard let legacyBaseURL = Self.legacySymlinkBaseURL(),
+              legacyBaseURL.standardizedFileURL != symlinkBaseURL.standardizedFileURL else {
+            return
+        }
+
+        let legacyShortcutURL = Self.symlinkURL(for: config, baseDir: legacyBaseURL)
+        let fm = FileManager.default
+
+        if Self.shouldRemoveManagedSymlink(at: legacyShortcutURL, fileManager: fm) {
+            try? fm.removeItem(at: legacyShortcutURL)
+            return
+        }
+
+        guard let itemType = try itemType(at: legacyShortcutURL),
+              itemType == .typeDirectory,
+              Self.matchesManagedSymlinkFilename(legacyShortcutURL.lastPathComponent),
+              let contents = try? fm.contentsOfDirectory(atPath: legacyShortcutURL.path),
+              contents.isEmpty else {
+            return
+        }
+
+        try? fm.removeItem(at: legacyShortcutURL)
     }
 
     private func findDomain(for config: ConnectionConfig) async throws -> NSFileProviderDomain? {

@@ -84,13 +84,7 @@ struct MenuBarView: View {
                 Spacer()
                 Button("Quit") {
                     isQuitting = true
-                    Task {
-                        await connectionManager.shutdown()
-                        await MainActor.run {
-                            AppDelegate.allowsTermination = true
-                            NSApplication.shared.terminate(nil)
-                        }
-                    }
+                    NSApplication.shared.terminate(nil)
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
@@ -185,10 +179,10 @@ struct MenuBarView: View {
 
     private func revealInFinder(config: ConnectionConfig) {
         Task {
-            let targetURL = await connectionManager.resolveFinderURL(for: config)
-                ?? FileProviderMountProvider.defaultSymlinkBaseURL
-            await MainActor.run {
-                NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+            if let targetURL = await connectionManager.resolveFinderURL(for: config) {
+                await MainActor.run {
+                    NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+                }
             }
         }
     }

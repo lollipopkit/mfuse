@@ -1,7 +1,13 @@
-.PHONY: all build test test-stable test-all generate clean lint release-install-signing release-clean-signing release-dmg
+.PHONY: all build test test-stable test-all generate clean lint release-install-signing release-clean-signing release-install-app release-dmg
 
 SCHEME = MFuse
 CODESIGN_FLAGS = CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+LOCAL_PROJECT_SPEC = project.local.yml
+XCODEGEN_ENV =
+
+ifneq ($(wildcard $(LOCAL_PROJECT_SPEC)),)
+XCODEGEN_ENV := INCLUDE_PROJECT_LOCAL_YML=1
+endif
 
 all: build test-stable
 
@@ -29,7 +35,7 @@ test-all:
 	cd Packages/MFuseS3 && swift test
 
 generate:
-	xcodegen generate
+	$(XCODEGEN_ENV) xcodegen generate
 
 clean:
 	xcodebuild -scheme $(SCHEME) clean
@@ -43,6 +49,9 @@ release-install-signing:
 
 release-clean-signing:
 	bash scripts/release/cleanup-apple-signing.sh
+
+release-install-app:
+	bash scripts/release/build-and-install-app.sh
 
 release-dmg:
 	bash scripts/release/release-dmg.sh

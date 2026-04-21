@@ -9,29 +9,45 @@ extension ConnectionManager {
             for: config,
             baseDir: symlinkBaseURL
         )
-        if linkExists(at: symlinkURL) {
+        if hasReachableLink(at: symlinkURL) {
             return symlinkURL
         }
 
         if let mountProvider,
            let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
-           linkExists(at: recreatedSymlinkURL) {
+           hasReachableLink(at: recreatedSymlinkURL) {
             return recreatedSymlinkURL
         }
 
         if let mountProvider,
-           let mountURL = try? await mountProvider.mountURL(for: config) {
+           let mountURL = try? await mountProvider.mountURL(for: config),
+           destinationExists(at: mountURL) {
             return mountURL
         }
 
         if let path = effectiveMountState(for: config.id).mountPath {
-            return URL(fileURLWithPath: path)
+            let url = URL(fileURLWithPath: path)
+            if destinationExists(at: url) {
+                return url
+            }
         }
 
         return nil
     }
 
-    func linkExists(at url: URL) -> Bool {
-        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
+    func hasReachableLink(at url: URL) -> Bool {
+        guard let destinationPath = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else {
+            return false
+        }
+
+        let destinationURL = URL(
+            fileURLWithPath: destinationPath,
+            relativeTo: url.deletingLastPathComponent()
+        ).standardizedFileURL
+        return destinationExists(at: destinationURL)
+    }
+
+    func destinationExists(at url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
     }
 }

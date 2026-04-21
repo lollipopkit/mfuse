@@ -3,41 +3,6 @@ import FileProvider
 import Foundation
 import os.log
 
-private final class SecurityScopedAccessTracker: @unchecked Sendable {
-    private let lock = NSLock()
-    private var trackedPaths: [String: () -> Void] = [:]
-
-    func trackIfNotExists(path: String, _ release: @escaping () -> Void) -> Bool {
-        lock.lock()
-        guard trackedPaths[path] == nil else {
-            lock.unlock()
-            return false
-        }
-        trackedPaths[path] = release
-        lock.unlock()
-        return true
-    }
-
-    func release(path: String) {
-        lock.lock()
-        let handler = trackedPaths.removeValue(forKey: path)
-        lock.unlock()
-
-        handler?()
-    }
-
-    func close() {
-        lock.lock()
-        let handlers = Array(trackedPaths.values)
-        trackedPaths.removeAll()
-        lock.unlock()
-
-        for release in handlers.reversed() {
-            release()
-        }
-    }
-}
-
 /// Resolves File Provider managed per-domain state directories on macOS.
 public struct FileProviderDomainStateStore: @unchecked Sendable {
 
@@ -49,7 +14,6 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
 
     public let domain: NSFileProviderDomain
     public let manager: NSFileProviderManager
-    private let securityScopedAccessTracker = SecurityScopedAccessTracker()
 
     public init?(domain: NSFileProviderDomain) {
         guard let manager = NSFileProviderManager(for: domain) else {
@@ -119,7 +83,7 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
 
     public func stateStorageURL() throws -> URL {
         if #available(macOS 15.0, *) {
-            guard let url = try preparedManagedURL(try manager.stateDirectoryURL()) else {
+            guard let url = try Self.prepareManagedDirectoryURL(try manager.stateDirectoryURL()) else {
                 throw RemoteFileSystemError.operationFailed(
                     "File Provider state directory unavailable for \(domain.identifier.rawValue)"
                 )
@@ -137,41 +101,22 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
 
     public func temporaryDirectoryURL() throws -> URL? {
         if #available(macOS 15.0, *) {
-            return try preparedManagedURL(try manager.temporaryDirectoryURL())
+            return try Self.prepareManagedDirectoryURL(try manager.temporaryDirectoryURL())
         }
         return nil
     }
 
     public func close() {
-        securityScopedAccessTracker.close()
+        // File Provider managed state and temporary directories are directly accessible
+        // to the extension process; no scoped access bookkeeping is required.
     }
 
     @available(macOS 15.0, *)
-    private func preparedManagedURL(_ url: URL?) throws -> URL? {
+    static func prepareManagedDirectoryURL(_ url: URL?) throws -> URL? {
         guard let url else {
             return nil
         }
-        let cacheKey = url.standardizedFileURL.path
-
-        guard url.startAccessingSecurityScopedResource() else {
-            throw RemoteFileSystemError.operationFailed(
-                "Unable to access File Provider managed directory: \(url.path)"
-            )
-        }
-
-        guard securityScopedAccessTracker.trackIfNotExists(path: cacheKey, {
-            url.stopAccessingSecurityScopedResource()
-        }) else {
-            url.stopAccessingSecurityScopedResource()
-            return url
-        }
-
-        do {
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        } catch {
-            securityScopedAccessTracker.release(path: cacheKey)
-            throw error
-        }
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 

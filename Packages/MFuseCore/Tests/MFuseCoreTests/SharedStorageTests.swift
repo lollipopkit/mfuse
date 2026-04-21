@@ -1,6 +1,22 @@
 import XCTest
 @testable import MFuseCore
 
+private final class InMemoryCredentialProvider: @unchecked Sendable, CredentialProvider {
+    var credentials: [UUID: Credential] = [:]
+
+    func credential(for connectionID: UUID) async throws -> Credential? {
+        credentials[connectionID]
+    }
+
+    func store(_ credential: Credential, for connectionID: UUID) async throws {
+        credentials[connectionID] = credential
+    }
+
+    func delete(for connectionID: UUID) async throws {
+        credentials.removeValue(forKey: connectionID)
+    }
+}
+
 final class SharedStorageTests: XCTestCase {
 
     private var legacyDefaults: UserDefaults!
@@ -92,6 +108,71 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertTrue(storage.temporaryFileURL(for: "item").path.contains("Library/Caches/MFuse/tmp"))
     }
 
+    func testSharedCredentialStorePersistsAndDeletesCredentials() throws {
+        let store = SharedCredentialStore(containerURL: containerURL)
+        let connectionID = UUID()
+        let credential = Credential(
+            password: "secret",
+            privateKey: Data("key".utf8),
+            passphrase: "passphrase",
+            accessKeyID: "access",
+            secretAccessKey: "secret-key",
+            token: "token"
+        )
+
+        try store.store(credential, for: connectionID)
+
+        XCTAssertEqual(try store.credential(for: connectionID), credential)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try store.credentialURL(for: connectionID).path))
+
+        try store.delete(for: connectionID)
+
+        XCTAssertNil(try store.credential(for: connectionID))
+    }
+
+    func testSharedCredentialStoreReadDoesNotCreateDirectory() throws {
+        let store = SharedCredentialStore(containerURL: containerURL)
+        let connectionID = UUID()
+        let credentialsDirectory = containerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("MFuse", isDirectory: true)
+            .appendingPathComponent("Credentials", isDirectory: true)
+
+        XCTAssertNil(try store.credential(for: connectionID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: credentialsDirectory.path))
+    }
+
+    func testMirroredCredentialProviderBackfillsMirrorFromPrimary() async throws {
+        let primary = InMemoryCredentialProvider()
+        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
+        let connectionID = UUID()
+        let credential = Credential(password: "primary-only")
+        try await primary.store(credential, for: connectionID)
+
+        let resolved = try await provider.credential(for: connectionID)
+
+        XCTAssertEqual(resolved, credential)
+        XCTAssertEqual(try sharedStore.credential(for: connectionID), credential)
+    }
+
+    func testMirroredCredentialProviderPrefersMirrorAndRepairsPrimary() async throws {
+        let primary = InMemoryCredentialProvider()
+        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
+        let connectionID = UUID()
+        let mirroredCredential = Credential(token: "fresh-token")
+        try sharedStore.store(mirroredCredential, for: connectionID)
+        try await primary.store(Credential(token: "stale-token"), for: connectionID)
+
+        let resolved = try await provider.credential(for: connectionID)
+        let repairedPrimary = try await primary.credential(for: connectionID)
+
+        XCTAssertEqual(resolved, mirroredCredential)
+        XCTAssertEqual(repairedPrimary, mirroredCredential)
+    }
+
     func testHostKeyStorePersistsToFileAndMigratesLegacyDefaults() {
         let fileURL = containerURL.appendingPathComponent("known_hosts.json")
         let legacyKey = "com.lollipopkit.mfuse.knownHostKeys"
@@ -127,6 +208,24 @@ final class SharedStorageTests: XCTestCase {
             try FileProviderDomainStateStore.loadBootstrapConfig(from: userInfo),
             config
         )
+    }
+
+    @available(macOS 15.0, *)
+    func testPrepareManagedDirectoryURLCreatesDirectoryDirectly() throws {
+        let managedURL = containerURL
+            .appendingPathComponent("Library/Containers/com.lollipopkit.mfuse.provider/Data/tmp", isDirectory: true)
+
+        let preparedURL = try FileProviderDomainStateStore.prepareManagedDirectoryURL(managedURL)
+
+        XCTAssertEqual(preparedURL, managedURL)
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: managedURL.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+    }
+
+    @available(macOS 15.0, *)
+    func testPrepareManagedDirectoryURLAllowsNil() throws {
+        XCTAssertNil(try FileProviderDomainStateStore.prepareManagedDirectoryURL(nil))
     }
 #endif
 }

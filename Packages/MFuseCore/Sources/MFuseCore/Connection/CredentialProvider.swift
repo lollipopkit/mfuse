@@ -1,7 +1,7 @@
 import Foundation
 
 /// Credentials for a remote connection, stored in the Keychain.
-public struct Credential: Sendable {
+public struct Credential: Codable, Equatable, Sendable {
     public let password: String?
     public let privateKey: Data?
     public let passphrase: String?

@@ -93,11 +93,10 @@ struct ConnectionDetailView: View {
             if mount.isMounted {
                 Button {
                     Task {
-                        let targetURL = await connectionManager.resolveFinderURL(for: config)
-                            ?? connectionManager.mountProvider?.symlinkBaseURL
-                            ?? FileProviderMountProvider.defaultSymlinkBaseURL
-                        await MainActor.run {
-                            NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+                        if let targetURL = await connectionManager.resolveFinderURL(for: config) {
+                            await MainActor.run {
+                                NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+                            }
                         }
                     }
                 } label: {

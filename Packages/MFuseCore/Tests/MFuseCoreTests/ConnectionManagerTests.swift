@@ -29,6 +29,7 @@ actor MockFileSystem: RemoteFileSystem {
     var connectCallCount = 0
     var disconnectCalled = false
     var shouldFail = false
+    var connectFailures: [RemoteFileSystemError] = []
     var enumerateShouldFail = false
     var disconnectShouldFail = false
     var enumeratedPaths: [RemotePath] = []
@@ -41,9 +42,16 @@ actor MockFileSystem: RemoteFileSystem {
         disconnectShouldFail = shouldFail
     }
 
+    func setConnectFailures(_ failures: [RemoteFileSystemError]) {
+        connectFailures = failures
+    }
+
     func connect() async throws {
         connectCalled = true
         connectCallCount += 1
+        if !connectFailures.isEmpty {
+            throw connectFailures.removeFirst()
+        }
         if shouldFail {
             throw RemoteFileSystemError.connectionFailed("mock failure")
         }
@@ -296,6 +304,32 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNotNil(manager.fileSystem(for: config.id))
     }
 
+    func testConnectRetriesTransientNetworkFailure() async throws {
+        let config = ConnectionConfig(
+            name: "Retry",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let fileSystem = MockFileSystem()
+        await fileSystem.setConnectFailures([
+            .connectionFailed("No route to host")
+        ])
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in
+            fileSystem
+        }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+
+        XCTAssertEqual(manager.state(for: config.id), .connected)
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+        let connectCallCount = await fileSystem.connectCallCount
+        XCTAssertEqual(connectCallCount, 2)
+    }
+
     func testDisconnect() async throws {
         let config = ConnectionConfig(
             name: "Test",
@@ -471,7 +505,7 @@ final class ConnectionManagerTests: XCTestCase {
 
         await manager.connect(config.id)
 
-        XCTAssertEqual(manager.state(for: config.id), .connected)
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
         let mountedState = await waitForMountState(config.id)
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
         XCTAssertEqual(manager.effectiveMountState(for: config.id), .mounted(path: mountURL.path))

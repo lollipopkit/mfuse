@@ -4,6 +4,7 @@ import MFuseCore
 struct ContentView: View {
 
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.credentialProvider) private var credentialProvider
     @State private var selectedConnection: ConnectionConfig?
     @State private var editorPresentation: EditorPresentation?
     @State private var showingExtensionGuide = false
@@ -103,9 +104,8 @@ struct ContentView: View {
     private func saveConnection(_ config: ConnectionConfig, credential: Credential) {
         Task {
             do {
-                let keychain = KeychainService()
-                let previousCredential = try await keychain.credential(for: config.id)
-                try await keychain.store(credential, for: config.id)
+                let previousCredential = try await credentialProvider.credential(for: config.id)
+                try await credentialProvider.store(credential, for: config.id)
                 do {
                     if connectionManager.connections.contains(where: { $0.id == config.id }) {
                         try connectionManager.update(config)
@@ -114,9 +114,9 @@ struct ContentView: View {
                     }
                 } catch {
                     if let previousCredential {
-                        try? await keychain.store(previousCredential, for: config.id)
+                        try? await credentialProvider.store(previousCredential, for: config.id)
                     } else {
-                        try? await keychain.delete(for: config.id)
+                        try? await credentialProvider.delete(for: config.id)
                     }
                     throw error
                 }

@@ -1,0 +1,4 @@
+settings:
+  base:
+    # Copy this file to project.local.yml and replace with your local Apple team ID.
+    DEVELOPMENT_TEAM: YOUR_TEAM_ID

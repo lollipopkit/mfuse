@@ -101,6 +101,9 @@ public actor SFTPFileSystem: RemoteFileSystem {
             if let pendingSSHClient {
                 try? await pendingSSHClient.close()
             }
+            Self.logger.error(
+                "SSH connect failed for \(self.config.host, privacy: .public): \(Self.describe(error), privacy: .public)"
+            )
             throw mapConnectionError(error)
         }
     }

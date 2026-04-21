@@ -39,4 +39,22 @@ final class FileProviderMountProviderTests: XCTestCase {
 
         XCTAssertEqual(itemType, .typeSymbolicLink)
     }
+
+    func testLegacySymlinkBaseURLUsesSharedContainerLayout() throws {
+        let containerURL = temporaryDirectoryURL.appendingPathComponent("group-container", isDirectory: true)
+        try FileManager.default.createDirectory(at: containerURL, withIntermediateDirectories: true)
+
+        let legacyURL = try XCTUnwrap(
+            FileProviderMountProvider.legacySymlinkBaseURL(containerURL: containerURL)
+        )
+
+        XCTAssertEqual(
+            legacyURL,
+            containerURL
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true)
+                .appendingPathComponent("MFuse", isDirectory: true)
+                .appendingPathComponent("Shortcuts", isDirectory: true)
+        )
+    }
 }

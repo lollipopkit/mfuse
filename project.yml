@@ -1,3 +1,8 @@
+include:
+  - path: project.local.yml
+    relativePaths: false
+    enable: ${INCLUDE_PROJECT_LOCAL_YML}
+
 name: MFuse
 
 options:
@@ -64,6 +69,7 @@ targets:
           ENABLE_HARDENED_RUNTIME: true
         Release:
           ENABLE_HARDENED_RUNTIME: true
+          ENABLE_DEBUG_DYLIB: false
 
   MFuseProvider:
     type: app-extension
@@ -92,3 +98,4 @@ targets:
           ENABLE_HARDENED_RUNTIME: true
         Release:
           ENABLE_HARDENED_RUNTIME: true
+          ENABLE_DEBUG_DYLIB: false

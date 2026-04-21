@@ -133,10 +133,10 @@ struct SidebarView: View {
         if mount.isMounted {
             Button("Reveal in Finder") {
                 Task {
-                    let targetURL = await connectionManager.resolveFinderURL(for: config)
-                        ?? FileProviderMountProvider.defaultSymlinkBaseURL
-                    await MainActor.run {
-                        NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+                    if let targetURL = await connectionManager.resolveFinderURL(for: config) {
+                        await MainActor.run {
+                            NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+                        }
                     }
                 }
             }

@@ -6,9 +6,10 @@ struct ConnectionEditorSheet: View {
     @MainActor
     private static let sharedTestConnectionManager = ConnectionManager(
         storage: SharedStorage.withLegacyMigration(),
-        credentialProvider: KeychainService()
+        credentialProvider: MirroredCredentialProvider(primary: KeychainService())
     )
 
+    @Environment(\.credentialProvider) private var credentialProvider
     @Environment(\.dismiss) private var dismiss
 
     // Editing state
@@ -378,8 +379,7 @@ struct ConnectionEditorSheet: View {
         guard !didLoadStoredCredential, let existingID else { return }
         didLoadStoredCredential = true
 
-        let keychain = KeychainService()
-        guard let credential = try? await keychain.credential(for: existingID) else { return }
+        guard let credential = try? await credentialProvider.credential(for: existingID) else { return }
 
         switch authMethod {
         case .password:

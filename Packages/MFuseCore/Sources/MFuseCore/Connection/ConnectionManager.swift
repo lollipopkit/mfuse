@@ -36,6 +36,8 @@ public final class ConnectionManager: ObservableObject {
     private static let baseDelay: UInt64 = 1_000_000_000 // 1 second in nanoseconds
     private static let mountURLRetryCount = 20
     private static let mountURLRetryDelay: UInt64 = 500_000_000 // 500 ms in nanoseconds
+    private static let transientConnectionRetryCount = 2
+    private static let transientConnectionRetryDelay: UInt64 = 750_000_000 // 750 ms in nanoseconds
 
     public init(
         storage: SharedStorage,
@@ -129,7 +131,7 @@ public final class ConnectionManager: ObservableObject {
                 onStateChange?(config, errorState)
                 return
             }
-            try await fs.connect()
+            try await connectFileSystemWithRetry(fs, for: config)
             fileSystems[id] = fs
             states[id] = .connected
             onStateChange?(config, .connected)
@@ -139,6 +141,11 @@ public final class ConnectionManager: ObservableObject {
                 setMountState(.mounting, for: config)
                 do {
                     try await mp.mount(config: config)
+                    try? await fs.disconnect()
+                    fileSystems.removeValue(forKey: id)
+                    let disconnectedState = ConnectionState.disconnected
+                    states[id] = disconnectedState
+                    onStateChange?(config, disconnectedState)
                     try? await mp.signalEnumerator(for: config)
                     scheduleMountResolution(for: config, using: mp)
                 } catch {
@@ -296,6 +303,22 @@ public final class ConnectionManager: ObservableObject {
         }
     }
 
+    /// Best-effort reconciliation between the app-facing credential store and any
+    /// mirrored provider snapshot store. This is especially important on startup so
+    /// already-saved mounts can be enumerated by the File Provider extension without
+    /// the extension touching Keychain items directly.
+    public func syncCredentialSnapshots() async {
+        for config in connections {
+            do {
+                _ = try await credentialProvider.credential(for: config.id)
+            } catch {
+                logger.warning(
+                    "Failed to sync credential snapshot for \(config.domainIdentifier, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+    }
+
     // MARK: - Mount state
 
     public func mountState(for id: UUID) -> MountState {
@@ -431,6 +454,35 @@ public final class ConnectionManager: ObservableObject {
         throw MountError.mountFailed("Mount path is not ready yet for \(config.name)")
     }
 
+    private func connectFileSystemWithRetry(
+        _ fileSystem: any RemoteFileSystem,
+        for config: ConnectionConfig
+    ) async throws {
+        var lastError: Error?
+
+        for attempt in 0..<Self.transientConnectionRetryCount {
+            do {
+                try await fileSystem.connect()
+                return
+            } catch {
+                lastError = error
+                guard attempt < Self.transientConnectionRetryCount - 1,
+                      shouldRetryTransientConnectionError(error) else {
+                    throw error
+                }
+
+                logger.warning(
+                    "Retrying transient connection failure for \(config.domainIdentifier, privacy: .public): \(self.describe(error), privacy: .public)"
+                )
+                try? await Task.sleep(nanoseconds: Self.transientConnectionRetryDelay)
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+    }
+
     private func scheduleMountResolution(
         for config: ConnectionConfig,
         using mountProvider: any MountProvider
@@ -480,6 +532,22 @@ public final class ConnectionManager: ObservableObject {
         }
         #endif
         return MountError.matchesExtensionNotEnabledMessage(describe(error))
+    }
+
+    private func shouldRetryTransientConnectionError(_ error: Error) -> Bool {
+        if case RemoteFileSystemError.authenticationFailed = error {
+            return false
+        }
+
+        let normalizedDescription = describe(error).lowercased()
+        let transientIndicators = [
+            "no route to host",
+            "host is down",
+            "network is down",
+            "network is unreachable",
+            "timed out",
+        ]
+        return transientIndicators.contains { normalizedDescription.contains($0) }
     }
 
     private func describe(_ error: Error) -> String {

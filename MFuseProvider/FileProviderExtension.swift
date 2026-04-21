@@ -121,9 +121,11 @@ func withOperationTimeout<T: Sendable>(
 public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, NSFileProviderDomainState {
 
     private static let bootstrapTimeoutSeconds = 15.0
+    private static let bootstrapTransientRetryCount = 2
+    private static let bootstrapTransientRetryDelayNanoseconds: UInt64 = 750_000_000
     private static let contentCacheStoreRetryCount = 2
     private static let streamedReadChunkSize: UInt32 = 1_048_576
-    private static let sharedKeychain = KeychainService()
+    private static let sharedCredentialStore = SharedCredentialStore()
     private static let registerBackendsOnce: Void = {
         BackendRegistry.shared.registerAllBuiltIns(
             sftpFactory: { config, credential in
@@ -149,7 +151,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     config: config,
                     credential: credential
                 ) { updatedCredential in
-                    try await FileProviderExtension.sharedKeychain.store(updatedCredential, for: config.id)
+                    try FileProviderExtension.sharedCredentialStore.store(updatedCredential, for: config.id)
                 }
             }
         )
@@ -543,12 +545,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
         do {
             logger.info("Connecting remote filesystem for domain \(config.domainIdentifier, privacy: .public)")
-            try await withOperationTimeout(
-                seconds: Self.bootstrapTimeoutSeconds,
-                operation: "connecting remote filesystem for domain \(config.domainIdentifier)"
-            ) {
-                try await fileSystem.connect()
-            }
+            try await connectFileSystemWithRetry(fileSystem, config: config)
             logger.info("Opening metadata cache at \(metadataCacheURL.path, privacy: .public)")
             try await cache.open()
             logger.info("Opening sync anchor store at \(syncAnchorStoreURL.path, privacy: .public)")
@@ -582,9 +579,58 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         return context
     }
 
+    private func connectFileSystemWithRetry(
+        _ fileSystem: any RemoteFileSystem,
+        config: ConnectionConfig
+    ) async throws {
+        var lastError: Error?
+
+        for attempt in 0..<Self.bootstrapTransientRetryCount {
+            do {
+                try await withOperationTimeout(
+                    seconds: Self.bootstrapTimeoutSeconds,
+                    operation: "connecting remote filesystem for domain \(config.domainIdentifier)"
+                ) {
+                    try await fileSystem.connect()
+                }
+                return
+            } catch {
+                lastError = error
+                guard attempt < Self.bootstrapTransientRetryCount - 1,
+                      shouldRetryTransientConnectionError(error) else {
+                    throw error
+                }
+
+                logger.warning(
+                    "Retrying transient bootstrap connection failure for domain \(config.domainIdentifier, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                try? await Task.sleep(nanoseconds: Self.bootstrapTransientRetryDelayNanoseconds)
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+    }
+
+    private func shouldRetryTransientConnectionError(_ error: Error) -> Bool {
+        if case RemoteFileSystemError.authenticationFailed = error {
+            return false
+        }
+
+        let normalizedDescription = error.localizedDescription.lowercased()
+        let transientIndicators = [
+            "no route to host",
+            "host is down",
+            "network is down",
+            "network is unreachable",
+            "timed out",
+        ]
+        return transientIndicators.contains { normalizedDescription.contains($0) }
+    }
+
     private func requireCredential(for config: ConnectionConfig) async throws -> Credential {
-        let keychain = KeychainService()
-        let credential = try await keychain.credential(for: config.id) ?? Credential()
+        let credential = try Self.sharedCredentialStore.credential(for: config.id) ?? Credential()
 
         switch config.authMethod {
         case .password:

@@ -95,6 +95,10 @@ make build
 
 If you build `MFuse.app` from Xcode and copy it into `/Applications`, use a valid Apple development team for both the app target and the File Provider extension target.
 
+Do not rely on changing the generated Xcode project by hand. `MFuse.xcodeproj` is regenerated from `project.yml`, so manual signing edits in Xcode can be lost the next time you run `make generate`.
+
+For stable local signing, copy `project.local.example.yml` to `project.local.yml`, set your local `DEVELOPMENT_TEAM`, and regenerate the project. `project.local.yml` is ignored by Git and is automatically merged by `make generate`.
+
 Unsigned or ad hoc signed builds can still launch, but macOS may ignore the File Provider extension because the App Group entitlement is not accepted at runtime. When that happens, mounts fail and Finder may show missing-file errors for the generated convenience shortcut.
 
 ## Common Commands
@@ -105,7 +109,20 @@ make test       # run the stable package test subset (alias of test-stable)
 make test-all   # run the full package test matrix
 make lint       # run SwiftLint
 make build      # build the app scheme
+make release-install-app  # build a signed Release app and install it to /Applications/MFuse.app
 make clean      # remove build outputs
+```
+
+`make release-install-app` runs `scripts/release/build-and-install-app.sh`, archives the `MFuse` scheme in `Release`, re-signs the export with explicit provisioning profiles, validates that the embedded profiles authorize the shared App Group, and then installs the result to `/Applications/MFuse.app`.
+
+For this local install flow, MFuse needs explicit provisioning profiles for both `com.lollipopkit.mfuse` and `com.lollipopkit.mfuse.provider`, and both profiles must include `group.com.lollipopkit.mfuse.shared` in `com.apple.security.application-groups`.
+
+The generic `Mac Team Provisioning Profile: *` is not sufficient. It omits the App Group entitlement, which causes macOS Sequoia to show the “would like to access data from other apps” launch prompt, prevents the File Provider extension from appearing in System Settings, and leaves Finder mounts empty or redirected into the shared container. The install script now fails instead of copying that broken build into `/Applications`.
+
+If you want to install somewhere else during local verification, override the target path:
+
+```bash
+INSTALL_PATH=/tmp/MFuse.app make release-install-app
 ```
 
 ## Local Release DMG

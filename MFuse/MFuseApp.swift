@@ -21,15 +21,15 @@ struct MFuseApp: App {
     private let domainManager: DomainManager
     private let mountProvider: FileProviderMountProvider
     private let storage: SharedStorage
-    private let keychain: KeychainService
+    private let credentialProvider: MirroredCredentialProvider
     private let isCleanupLaunch: Bool
 
     init() {
         self.isCleanupLaunch = ProcessInfo.processInfo.arguments.contains(Self.cleanupFileProviderStateArgument)
         self.storage = SharedStorage.withLegacyMigration()
-        self.keychain = KeychainService()
+        self.credentialProvider = MirroredCredentialProvider(primary: KeychainService())
         self.mountProvider = FileProviderMountProvider()
-        let keychain = self.keychain
+        let credentialProvider = self.credentialProvider
         let registry = BackendRegistry.shared
         registry.registerAllBuiltIns(
             sftpFactory: { config, credential in
@@ -55,15 +55,18 @@ struct MFuseApp: App {
                     config: config,
                     credential: credential
                 ) { updatedCredential in
-                    try await keychain.store(updatedCredential, for: config.id)
+                    try await credentialProvider.store(updatedCredential, for: config.id)
                 }
             }
         )
         let manager = ConnectionManager(
             storage: self.storage,
-            credentialProvider: self.keychain,
+            credentialProvider: self.credentialProvider,
             registry: registry
         )
+        AppDelegate.shutdownHandler = { [manager] in
+            await manager.shutdown()
+        }
         manager.mountProvider = self.mountProvider
         self.domainManager = DomainManager(
             connectionManager: manager,
@@ -91,7 +94,7 @@ struct MFuseApp: App {
             ContentView()
                 .environmentObject(connectionManager)
                 .environmentObject(appSettings)
-                .environment(\.keychainService, keychain)
+                .environment(\.credentialProvider, credentialProvider)
                 .frame(minWidth: 700, minHeight: 450)
                 .task {
                     await performInitialSetupIfNeeded()
@@ -118,7 +121,7 @@ struct MFuseApp: App {
             MenuBarView()
                 .environmentObject(connectionManager)
                 .environmentObject(appSettings)
-                .environment(\.keychainService, keychain)
+                .environment(\.credentialProvider, credentialProvider)
         }
         .menuBarExtraStyle(.window)
 
@@ -134,6 +137,12 @@ struct MFuseApp: App {
         didPerformInitialSetup = true
 
         guard isCleanupLaunch else {
+            await connectionManager.syncCredentialSnapshots()
+            do {
+                try await domainManager.syncDomains()
+            } catch {
+                NSLog("MFuse domain sync failed during launch: %@", String(describing: error))
+            }
             await connectionManager.syncMounts()
             NotificationService.shared.isEnabled = true
             return
@@ -152,21 +161,31 @@ struct MFuseApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var allowsTermination = false
+    static var isTerminationInProgress = false
+    static var shutdownHandler: (@MainActor () async -> Void)?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard Self.allowsTermination else {
+        guard !Self.allowsTermination else {
             sender.windows.forEach { window in
                 window.orderOut(nil)
             }
-            sender.setActivationPolicy(.accessory)
-            sender.hide(nil)
-            return .terminateCancel
+            return .terminateNow
         }
 
-        sender.windows.forEach { window in
-            window.orderOut(nil)
+        guard !Self.isTerminationInProgress else {
+            return .terminateLater
         }
-        return .terminateNow
+
+        Self.isTerminationInProgress = true
+
+        Task { @MainActor in
+            await Self.shutdownHandler?()
+            Self.allowsTermination = true
+            Self.isTerminationInProgress = false
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+
+        return .terminateLater
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -183,18 +202,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Environment Keys
 
-private struct KeychainServiceKey: EnvironmentKey {
-    private static let fallbackKeychainService = KeychainService()
+private struct CredentialProviderKey: EnvironmentKey {
+    private static let fallbackCredentialProvider = MirroredCredentialProvider(primary: KeychainService())
 
-    static var defaultValue: KeychainService {
-        fallbackKeychainService
+    static var defaultValue: any CredentialProvider {
+        fallbackCredentialProvider
     }
 }
 
 extension EnvironmentValues {
-    var keychainService: KeychainService {
-        get { self[KeychainServiceKey.self] }
-        set { self[KeychainServiceKey.self] = newValue }
+    var credentialProvider: any CredentialProvider {
+        get { self[CredentialProviderKey.self] }
+        set { self[CredentialProviderKey.self] = newValue }
     }
 }
 
