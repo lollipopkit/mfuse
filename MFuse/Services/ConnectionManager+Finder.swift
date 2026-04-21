@@ -9,20 +9,19 @@ extension ConnectionManager {
             for: config,
             baseDir: symlinkBaseURL
         )
-        if hasReachableLink(at: symlinkURL) {
-            return symlinkURL
-        }
-
-        if let mountProvider,
-           let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
-           hasReachableLink(at: recreatedSymlinkURL) {
-            return recreatedSymlinkURL
-        }
 
         if let mountProvider,
            let mountURL = try? await mountProvider.mountURL(for: config),
            destinationExists(at: mountURL) {
+            if let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
+               hasReachableLink(at: recreatedSymlinkURL) {
+                return recreatedSymlinkURL
+            }
             return mountURL
+        }
+
+        if hasReachableLink(at: symlinkURL) {
+            return symlinkURL
         }
 
         if let path = effectiveMountState(for: config.id).mountPath {

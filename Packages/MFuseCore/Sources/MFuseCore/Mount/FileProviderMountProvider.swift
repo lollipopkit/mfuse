@@ -272,23 +272,29 @@ public final class FileProviderMountProvider: MountProvider {
         }
 
         if let expectedDestinationURL {
-            guard Self.matchesManagedSymlinkFilename(symlinkURL.lastPathComponent),
-                  let destinationPath = try? fm.destinationOfSymbolicLink(atPath: symlinkURL.path) else {
+            guard Self.matchesManagedSymlinkFilename(symlinkURL.lastPathComponent) else {
                 return
             }
 
-            let resolvedDestinationURL = URL(
-                fileURLWithPath: destinationPath,
-                relativeTo: symlinkURL.deletingLastPathComponent()
-            ).standardizedFileURL
-            guard resolvedDestinationURL == expectedDestinationURL.standardizedFileURL
-                    || Self.isManagedMountDestination(resolvedDestinationURL) else {
-                return
+            if let destinationPath = try? fm.destinationOfSymbolicLink(atPath: symlinkURL.path) {
+                let resolvedDestinationURL = URL(
+                    fileURLWithPath: destinationPath,
+                    relativeTo: symlinkURL.deletingLastPathComponent()
+                ).standardizedFileURL
+                if resolvedDestinationURL == expectedDestinationURL.standardizedFileURL {
+                    try fm.removeItem(at: symlinkURL)
+                    return
+                }
             }
-        } else {
-            guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
-                return
-            }
+
+            // Replace any managed same-name symlink so the current config always points
+            // at the latest CloudStorage mount instead of a stale legacy container path.
+            try fm.removeItem(at: symlinkURL)
+            return
+        }
+
+        guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
+            return
         }
 
         try fm.removeItem(at: symlinkURL)
