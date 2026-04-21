@@ -18,7 +18,7 @@ public final class HostKeyStore: Sendable {
 
     public init(
         fileURL: URL? = nil,
-        legacyDefaults: UserDefaults? = nil
+        legacyDefaults: UserDefaults? = UserDefaults(suiteName: AppGroupConstants.groupIdentifier)
     ) {
         self.legacyDefaults = legacyDefaults
         if let fileURL {
@@ -67,11 +67,14 @@ public final class HostKeyStore: Sendable {
             do {
                 clearTransientAttributesIfNeeded(at: fileURL)
                 let data = try Data(contentsOf: fileURL)
-                return try JSONDecoder().decode([String: String].self, from: data)
+                let decoded = try JSONDecoder().decode([String: String].self, from: data)
+                persistToLegacyDefaults(decoded)
+                return decoded
             } catch {
                 if isAccessDenied(error) {
                     clearTransientAttributesIfNeeded(at: fileURL)
                     if let reloaded = tryDecodeStoreAfterMetadataRepair() {
+                        persistToLegacyDefaults(reloaded)
                         return reloaded
                     }
                     Self.logger.error(
@@ -87,25 +90,34 @@ public final class HostKeyStore: Sendable {
         }
 
         let store = legacyDefaults?.dictionary(forKey: Self.storeKey) as? [String: String] ?? [:]
-        if !store.isEmpty {
-            persist(store)
-        }
         return store
     }
 
     private func persist(_ store: [String: String]) {
+        persistToLegacyDefaults(store)
         let directoryURL = fileURL.deletingLastPathComponent()
         do {
             let data = try JSONEncoder().encode(store)
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            clearTransientAttributesIfNeeded(at: directoryURL)
             clearTransientAttributesIfNeeded(at: fileURL)
             try data.write(to: fileURL, options: .atomic)
             clearTransientAttributesIfNeeded(at: fileURL)
         } catch {
+            if isAccessDenied(error) {
+                Self.logger.warning(
+                    "Persisted host key store to app-group defaults after file access was denied at \(self.fileURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+                return
+            }
             Self.logger.error(
                 "Failed to persist host key store at \(self.fileURL.path, privacy: .public) via directory \(directoryURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
         }
+    }
+
+    private func persistToLegacyDefaults(_ store: [String: String]) {
+        legacyDefaults?.set(store, forKey: Self.storeKey)
     }
 
     private func backupCorruptStoreIfNeeded(using fileManager: FileManager) {

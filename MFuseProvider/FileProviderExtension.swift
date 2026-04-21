@@ -80,7 +80,7 @@ enum FileProviderOperationTimeout: LocalizedError {
 
 final class FileProviderDomainVersionState: @unchecked Sendable {
     private let lock = NSLock()
-    private var currentVersion = NSFileProviderDomainVersion()
+    private var currentVersion = NSFileProviderDomainVersion().next()
 
     func read() -> NSFileProviderDomainVersion {
         lock.lock()
@@ -301,6 +301,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
                 let parentID = parentIdentifier(for: path)
                 let item = FileProviderItem(remoteItem: remoteItem, parentID: parentID)
+                domainVersionState.advance()
                 completionHandler(cachedURL, item, nil)
             } catch {
                 logger.error("fetchContents failed: \(error.localizedDescription)")
@@ -365,6 +366,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     remoteItem: remoteItem,
                     parentID: itemTemplate.parentItemIdentifier
                 )
+                domainVersionState.advance()
                 completionHandler(newItem, [], false, nil)
             } catch {
                 logger.error("createItem failed: \(error.localizedDescription)")
@@ -434,6 +436,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 } else {
                     await context.contentCache.invalidate(path: currentPath)
                 }
+                domainVersionState.advance()
                 completionHandler(FileProviderItem(remoteItem: remoteItem, parentID: parentID), [], false, nil)
             } catch {
                 logger.error("modifyItem failed: \(error.localizedDescription)")
@@ -465,6 +468,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 if let parent = path.parent {
                     await context.cache.invalidateChildren(of: parent)
                 }
+                domainVersionState.advance()
                 completionHandler(nil)
             } catch {
                 logger.error("deleteItem failed: \(error.localizedDescription)")
@@ -574,6 +578,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         logger.info(
             "Connected to \(config.host, privacy: .public) for domain \(config.domainIdentifier, privacy: .public)"
         )
+        domainVersionState.advance()
         return context
     }
 
