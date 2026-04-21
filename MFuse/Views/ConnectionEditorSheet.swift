@@ -409,10 +409,12 @@ struct ConnectionEditorSheet: View {
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .publicKey:
+            password = ""
             oauthToken = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .agent, .anonymous:
+            password = ""
             oauthToken = ""
             privateKeyPath = ""
             s3AccessKeyID = ""

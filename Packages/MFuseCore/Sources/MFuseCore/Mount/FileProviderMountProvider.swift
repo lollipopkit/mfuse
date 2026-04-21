@@ -95,25 +95,25 @@ public final class FileProviderMountProvider: MountProvider {
     public func createSymlink(for config: ConnectionConfig) async throws -> URL? {
         guard let mountURL = try await mountURL(for: config) else { return nil }
 
-        let fm = FileManager.default
+        let fileManager = FileManager.default
         let baseDir = symlinkBaseURL
 
         // Ensure ~/MFuse/ exists
-        if !fm.fileExists(atPath: baseDir.path) {
-            try fm.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        if !fileManager.fileExists(atPath: baseDir.path) {
+            try fileManager.createDirectory(at: baseDir, withIntermediateDirectories: true)
         }
 
         let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
 
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
-        guard !fm.fileExists(atPath: symlinkURL.path) else {
+        guard !fileManager.fileExists(atPath: symlinkURL.path) else {
             Self.logger.warning(
                 "Skipping symlink creation because target path is occupied by a non-managed item: \(symlinkURL.path, privacy: .public)"
             )
             return nil
         }
 
-        try fm.createSymbolicLink(at: symlinkURL, withDestinationURL: mountURL)
+        try fileManager.createSymbolicLink(at: symlinkURL, withDestinationURL: mountURL)
         return symlinkURL
     }
 

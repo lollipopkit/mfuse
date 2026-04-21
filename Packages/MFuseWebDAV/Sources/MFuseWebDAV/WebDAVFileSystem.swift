@@ -288,8 +288,11 @@ public actor WebDAVFileSystem: RemoteFileSystem {
         return parser.parse(data: data)
     }
 
-    private func checkHTTPResponse(_ response: URLResponse, path: RemotePath,
-                                    acceptCodes: ClosedRange<Int> = 200...299) throws {
+    private func checkHTTPResponse(
+        _ response: URLResponse,
+        path: RemotePath,
+        acceptCodes: ClosedRange<Int> = 200...299
+    ) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard acceptCodes.contains(http.statusCode) || http.statusCode == 207 else {
             switch http.statusCode {

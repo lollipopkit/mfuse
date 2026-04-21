@@ -3,6 +3,35 @@ import Darwin
 import NIO
 import NIOFoundationCompat
 import NIOSSL
+import NIOTLS
+
+private final class TLSHandshakeCompletionHandler: ChannelInboundHandler, RemovableChannelHandler {
+    typealias InboundIn = ByteBuffer
+
+    private let promise: EventLoopPromise<Void>
+
+    init(promise: EventLoopPromise<Void>) {
+        self.promise = promise
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if case NIOTLS.TLSUserEvent.handshakeCompleted = event {
+            promise.succeed(())
+            context.pipeline.removeHandler(self, promise: nil)
+        }
+        context.fireUserInboundEventTriggered(event)
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        promise.fail(error)
+        context.fireErrorCaught(error)
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        promise.fail(FTPError.protocolError("TLS connection closed during handshake"))
+        context.fireChannelInactive()
+    }
+}
 
 /// Low-level FTP client built on SwiftNIO.
 /// Handles control connection commands and passive data connections.
@@ -36,31 +65,39 @@ final class FTPConnection: @unchecked Sendable {
             let staleChannel = takeChannel()
             try await staleChannel?.close()
 
-            let handler = FTPResponseHandler()
+            let handlerPromise = group.next().makePromise(of: FTPResponseHandler.self)
             let bootstrap = ClientBootstrap(group: group)
                 .channelOption(.socketOption(.so_reuseaddr), value: 1)
                 .channelInitializer { channel in
+                    let responseHandler = FTPResponseHandler()
+                    handlerPromise.succeed(responseHandler)
+
                     if self.useTLS {
                         do {
                             let sslHandler = try self.makeTLSHandler(serverHostname: self.host)
-                            return channel.pipeline.addHandlers([
-                                sslHandler,
-                                ByteToMessageHandler(FTPLineDecoder()),
-                                handler
-                            ])
+                            try channel.pipeline.syncOperations.addHandler(sslHandler)
+                            try channel.pipeline.syncOperations.addHandler(ByteToMessageHandler(FTPLineDecoder()))
+                            try channel.pipeline.syncOperations.addHandler(responseHandler)
+                            return channel.eventLoop.makeSucceededVoidFuture()
                         } catch {
+                            handlerPromise.fail(error)
                             return channel.eventLoop.makeFailedFuture(error)
                         }
                     }
-                    return channel.pipeline.addHandlers([
-                        ByteToMessageHandler(FTPLineDecoder()),
-                        handler
-                    ])
+                    do {
+                        try channel.pipeline.syncOperations.addHandler(ByteToMessageHandler(FTPLineDecoder()))
+                        try channel.pipeline.syncOperations.addHandler(responseHandler)
+                        return channel.eventLoop.makeSucceededVoidFuture()
+                    } catch {
+                        handlerPromise.fail(error)
+                        return channel.eventLoop.makeFailedFuture(error)
+                    }
                 }
 
             let connectedChannel = try await waitForFuture(
                 bootstrap.connect(host: host, port: port)
             )
+            let handler = try await waitForFuture(handlerPromise.futureResult)
 
             do {
                 // Read welcome banner
@@ -120,20 +157,25 @@ final class FTPConnection: @unchecked Sendable {
 
         let (pasvHost, dataPort) = try parsePASV(response.text)
         let dataHost = normalizedDataConnectionHost(pasvHost)
-        let dataHandler = FTPDataHandler()
-        var tlsHandler: NIOSSLClientHandler?
+        let dataHandlerPromise = group.next().makePromise(of: FTPDataHandler.self)
+        var handshakeFuture: EventLoopFuture<Void>?
 
         let bootstrap = ClientBootstrap(group: group)
             .channelInitializer { channel in
+                let dataHandler = FTPDataHandler()
+                dataHandlerPromise.succeed(dataHandler)
+
                 if self.useTLS {
                     do {
                         let handler = try self.makeTLSHandler(serverHostname: pasvHost)
-                        tlsHandler = handler
-                        return channel.pipeline.addHandlers([
-                            handler,
-                            dataHandler
-                        ])
+                        let handshakePromise = channel.eventLoop.makePromise(of: Void.self)
+                        handshakeFuture = handshakePromise.futureResult
+                        try channel.pipeline.syncOperations.addHandler(handler)
+                        try channel.pipeline.syncOperations.addHandler(TLSHandshakeCompletionHandler(promise: handshakePromise))
+                        try channel.pipeline.syncOperations.addHandler(dataHandler)
+                        return channel.eventLoop.makeSucceededVoidFuture()
                     } catch {
+                        dataHandlerPromise.fail(error)
                         return channel.eventLoop.makeFailedFuture(error)
                     }
                 }
@@ -143,9 +185,10 @@ final class FTPConnection: @unchecked Sendable {
         let dataChannel = try await waitForFuture(
             bootstrap.connect(host: dataHost, port: dataPort)
         )
-        if let tlsHandler {
+        let dataHandler = try await waitForFuture(dataHandlerPromise.futureResult)
+        if let handshakeFuture {
             do {
-                try await waitForFuture(tlsHandler.handshakeCompletedFuture)
+                try await waitForFuture(handshakeFuture)
             } catch {
                 try await dataChannel.close()
                 throw error
@@ -370,7 +413,7 @@ final class FTPLineDecoder: ByteToMessageDecoder {
 // MARK: - Response Handler
 
 /// Accumulates FTP response lines and provides async reading.
-final class FTPResponseHandler: ChannelInboundHandler {
+final class FTPResponseHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
     private struct PendingContinuation {
@@ -548,7 +591,7 @@ final class FTPResponseHandler: ChannelInboundHandler {
 // MARK: - Data Handler
 
 /// Collects data from an FTP data connection.
-final class FTPDataHandler: ChannelInboundHandler {
+final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
     private struct PendingContinuation {
