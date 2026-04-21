@@ -93,7 +93,7 @@ struct ConnectionDetailView: View {
             if mount.isMounted {
                 Button {
                     Task {
-                        let targetURL = await resolveFinderURL()
+                        let targetURL = await connectionManager.resolveFinderURL(for: config)
                             ?? connectionManager.mountProvider?.symlinkBaseURL
                             ?? FileProviderMountProvider.defaultSymlinkBaseURL
                         await MainActor.run {
@@ -164,36 +164,5 @@ struct ConnectionDetailView: View {
         case .mounted:    return .green
         case .error:      return .red
         }
-    }
-
-    private func resolveFinderURL() async -> URL? {
-        let symlinkURL = FileProviderMountProvider.symlinkURL(
-            for: config,
-            baseDir: symlinkBaseURL
-        )
-        if linkExists(at: symlinkURL) {
-            return symlinkURL
-        }
-
-        if let mountProvider = connectionManager.mountProvider,
-           let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
-           linkExists(at: recreatedSymlinkURL) {
-            return recreatedSymlinkURL
-        }
-
-        if let mountProvider = connectionManager.mountProvider,
-           let mountURL = try? await mountProvider.mountURL(for: config) {
-            return mountURL
-        }
-
-        if let path = mount.mountPath {
-            return URL(fileURLWithPath: path)
-        }
-
-        return nil
-    }
-
-    private func linkExists(at url: URL) -> Bool {
-        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
     }
 }

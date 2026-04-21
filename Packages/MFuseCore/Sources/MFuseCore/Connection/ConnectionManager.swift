@@ -169,6 +169,7 @@ public final class ConnectionManager: ObservableObject {
 
         let config = connections.first(where: { $0.id == id })
         var cleanupFailures: [String] = []
+        var didDisconnectFileSystem = false
 
         if let config, let mp = mountProvider {
             do {
@@ -191,6 +192,7 @@ public final class ConnectionManager: ObservableObject {
         if let fs = fileSystems[id] {
             do {
                 try await fs.disconnect()
+                didDisconnectFileSystem = true
             } catch {
                 let targetName = config?.name ?? id.uuidString
                 let message = "Failed to disconnect filesystem for \(targetName): \(describe(error))"
@@ -200,6 +202,9 @@ public final class ConnectionManager: ObservableObject {
         }
 
         if let config, !cleanupFailures.isEmpty {
+            if didDisconnectFileSystem {
+                fileSystems.removeValue(forKey: id)
+            }
             let errorMessage = cleanupFailures.joined(separator: " | ")
             let errorState = ConnectionState.error(errorMessage)
             states[id] = errorState

@@ -33,11 +33,15 @@ struct ContentView: View {
             )
             .frame(minWidth: 480, minHeight: 400)
         }
-        .sheet(isPresented: $showingExtensionGuide, onDismiss: {
-            connectionManager.needsExtensionSetup = false
-        }) {
-            ExtensionGuideView()
-        }
+        .sheet(
+            isPresented: $showingExtensionGuide,
+            onDismiss: {
+                connectionManager.needsExtensionSetup = false
+            },
+            content: {
+                ExtensionGuideView()
+            }
+        )
         .alert("Unable to Save Mount", isPresented: saveErrorIsPresented) {
             Button("OK", role: .cancel) {
                 saveErrorMessage = nil

@@ -27,6 +27,7 @@
 		8F713A9460DCCDC5B4143EF1 /* MFuseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1FF7DC0DBEBCEF62D05A4D8 /* MFuseApp.swift */; };
 		9280FFEC860158072EC49B64 /* MFuseGoogleDrive in Frameworks */ = {isa = PBXBuildFile; productRef = 01BE4CF29ADF4AC95EB94419 /* MFuseGoogleDrive */; };
 		9E9D0A54CD7DE9B2480875AD /* MFuseNFS in Frameworks */ = {isa = PBXBuildFile; productRef = 228EBBF46EDE11E9FDAAD28F /* MFuseNFS */; };
+		A2C5E6066BE413A084106C6F /* ConnectionManager+Finder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A62A28EC6E1BEDD2114EB15 /* ConnectionManager+Finder.swift */; };
 		A4EF6B8BD2BC0595EC43850B /* MFuseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1633EC474157C61E42AD0085 /* MFuseCore */; };
 		AA0A01F7AC49EDF70CC2E79E /* MFuseSMB in Frameworks */ = {isa = PBXBuildFile; productRef = 9515A704745A0275857BD362 /* MFuseSMB */; };
 		C3E85C9BBB2A1F19947616F7 /* MFuseWebDAV in Frameworks */ = {isa = PBXBuildFile; productRef = 7A62698BCF3B4D0223117E6F /* MFuseWebDAV */; };
@@ -71,6 +72,7 @@
 		05CEB8BCBB0786462FD52D96 /* MFuseSFTP */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseSFTP; path = Packages/MFuseSFTP; sourceTree = SOURCE_ROOT; };
 		0FEDD6AFA9D8D60CEB649D77 /* FileProviderExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderExtension.swift; sourceTree = "<group>"; };
 		282F68648AF3DFD0973FA2B2 /* FileProviderEnumerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderEnumerator.swift; sourceTree = "<group>"; };
+		2A62A28EC6E1BEDD2114EB15 /* ConnectionManager+Finder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionManager+Finder.swift"; sourceTree = "<group>"; };
 		38A93FDCB4A831E494F223A9 /* FileProvider.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = FileProvider.framework; path = System/Library/Frameworks/FileProvider.framework; sourceTree = SDKROOT; };
 		3B236DA03790F7A3CAC3D450 /* MFuseS3 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseS3; path = Packages/MFuseS3; sourceTree = SOURCE_ROOT; };
 		3B6A66F07E216C1AFA6FBC86 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 			isa = PBXGroup;
 			children = (
 				9E2CAE2DCA895B496A33267B /* AppSettingsStore.swift */,
+				2A62A28EC6E1BEDD2114EB15 /* ConnectionManager+Finder.swift */,
 				641045C86137A217F117D301 /* DomainManager.swift */,
 				3B6A66F07E216C1AFA6FBC86 /* NotificationService.swift */,
 			);
@@ -360,6 +363,7 @@
 				6CFC915ABB3E65C2A3A9069D /* AppSettingsStore.swift in Sources */,
 				3EB5D25B2551950935CCE632 /* ConnectionDetailView.swift in Sources */,
 				1E57605C6F274529C11F2FAB /* ConnectionEditorSheet.swift in Sources */,
+				A2C5E6066BE413A084106C6F /* ConnectionManager+Finder.swift in Sources */,
 				6E2ADD8447C2E0F96F71DE13 /* ContentView.swift in Sources */,
 				7C7BCD42BB471A66399444AC /* DomainManager.swift in Sources */,
 				288B5C71F50BB54A34945292 /* ExtensionGuideView.swift in Sources */,
@@ -567,6 +571,7 @@
 				CODE_SIGN_ENTITLEMENTS = MFuse/MFuse.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = MFuse/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

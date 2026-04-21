@@ -3,6 +3,12 @@ import MFuseCore
 
 struct ConnectionEditorSheet: View {
 
+    @MainActor
+    private static let sharedTestConnectionManager = ConnectionManager(
+        storage: SharedStorage.withLegacyMigration(),
+        credentialProvider: KeychainService()
+    )
+
     @Environment(\.dismiss) private var dismiss
 
     // Editing state
@@ -305,13 +311,10 @@ struct ConnectionEditorSheet: View {
 
             currentTestTask?.cancel()
             currentTestTask = Task {
-                let storage = SharedStorage.withLegacyMigration()
-                let keychain = KeychainService()
-                let manager = await ConnectionManager(
-                    storage: storage,
-                    credentialProvider: keychain
+                let result = await Self.sharedTestConnectionManager.testConnection(
+                    config,
+                    credential: credential
                 )
-                let result = await manager.testConnection(config, credential: credential)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard !Task.isCancelled else { return }

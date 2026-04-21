@@ -357,7 +357,7 @@ final class ConnectionManagerTests: XCTestCase {
             return XCTFail("Expected error state after unmount failure")
         }
         XCTAssertTrue(message.contains("mock unmount failure"))
-        XCTAssertNotNil(manager.fileSystem(for: config.id))
+        XCTAssertNil(manager.fileSystem(for: config.id))
         XCTAssertEqual(manager.mountState(for: config.id), .error(message))
     }
 

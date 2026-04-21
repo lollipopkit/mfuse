@@ -680,7 +680,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     offset += UInt64(chunk.count)
                     progress.completedUnitCount = min(80, Int64((offset * 80) / totalBytes))
 
-                    if offset >= remoteItem.size {
+                    if remoteItem.size > 0 && offset >= remoteItem.size {
                         break
                     }
                 }

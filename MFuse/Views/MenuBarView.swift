@@ -185,43 +185,11 @@ struct MenuBarView: View {
 
     private func revealInFinder(config: ConnectionConfig) {
         Task {
-            let targetURL = await resolveFinderURL(for: config) ?? FileProviderMountProvider.defaultSymlinkBaseURL
+            let targetURL = await connectionManager.resolveFinderURL(for: config)
+                ?? FileProviderMountProvider.defaultSymlinkBaseURL
             await MainActor.run {
                 NSWorkspace.shared.activateFileViewerSelecting([targetURL])
             }
         }
-    }
-
-    private func resolveFinderURL(for config: ConnectionConfig) async -> URL? {
-        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
-        let symlinkURL = FileProviderMountProvider.symlinkURL(
-            for: config,
-            baseDir: symlinkBaseURL
-        )
-        if linkExists(at: symlinkURL) {
-            return symlinkURL
-        }
-
-        if let mountProvider = connectionManager.mountProvider,
-           let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
-           linkExists(at: recreatedSymlinkURL) {
-            return recreatedSymlinkURL
-        }
-
-        if let mountProvider = connectionManager.mountProvider,
-           let mountURL = try? await mountProvider.mountURL(for: config) {
-            return mountURL
-        }
-
-        if let path = connectionManager.effectiveMountState(for: config.id).mountPath {
-            return URL(fileURLWithPath: path)
-        }
-
-        return nil
-    }
-
-    private func linkExists(at url: URL) -> Bool {
-        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
     }
 }

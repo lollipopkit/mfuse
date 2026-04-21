@@ -7,6 +7,7 @@ import MFuseCore
 @Test func writeFileFromURLThrowsNotConnectedInsteadOfUnsupported() async throws {
     let fs = makeFileSystem()
     let localFileURL = try makeTemporaryFileURL(contents: Data("hello".utf8))
+    defer { try? FileManager.default.removeItem(at: localFileURL) }
 
     do {
         try await fs.writeFile(at: RemotePath("/test.txt"), from: localFileURL)
@@ -22,6 +23,7 @@ import MFuseCore
 @Test func createFileFromURLThrowsNotConnectedInsteadOfUnsupported() async throws {
     let fs = makeFileSystem()
     let localFileURL = try makeTemporaryFileURL(contents: Data("hello".utf8))
+    defer { try? FileManager.default.removeItem(at: localFileURL) }
 
     do {
         try await fs.createFile(at: RemotePath("/test.txt"), from: localFileURL)

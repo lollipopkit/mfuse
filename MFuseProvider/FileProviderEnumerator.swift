@@ -55,13 +55,13 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         for observer: NSFileProviderEnumerationObserver,
         startingAt page: NSFileProviderPage
     ) {
-        let pageData = page.rawValue as NSData
-        let initialPageSortedByDate = NSFileProviderPage.initialPageSortedByDate
-        let initialPageSortedByName = NSFileProviderPage.initialPageSortedByName
+        let pageData = page.rawValue
+        let initialPageSortedByDate = NSFileProviderPage.initialPageSortedByDate as Data
+        let initialPageSortedByName = NSFileProviderPage.initialPageSortedByName as Data
         // We emit a single logical enumeration in chunked batches to reduce memory use,
         // but we do not support follow-up page tokens. Callers should start with one of
         // the File Provider initial page constants; any other page is treated as exhausted.
-        if !pageData.isEqual(initialPageSortedByDate) && !pageData.isEqual(initialPageSortedByName) {
+        if pageData != initialPageSortedByDate && pageData != initialPageSortedByName {
             observer.finishEnumerating(upTo: nil)
             return
         }

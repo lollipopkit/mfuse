@@ -8,6 +8,7 @@ struct SidebarView: View {
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse", category: "SidebarView")
     @EnvironmentObject var connectionManager: ConnectionManager
     @Binding var selectedConnection: ConnectionConfig?
+    @State private var removalErrorMessage: String?
     var onAdd: () -> Void
     var onEdit: (ConnectionConfig) -> Void
 
@@ -25,6 +26,13 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("MFuse")
+        .alert("Unable to Remove Mount", isPresented: removalErrorIsPresented) {
+            Button("OK", role: .cancel) {
+                removalErrorMessage = nil
+            }
+        } message: {
+            Text(removalErrorMessage ?? "An unknown error occurred.")
+        }
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Button(action: onAdd) {
@@ -35,17 +43,29 @@ struct SidebarView: View {
                 Menu {
                     Button("Mount All") {
                         Task {
-                            for config in connectionManager.connections
-                            where !connectionManager.effectiveMountState(for: config.id).isMounted {
-                                await connectionManager.connect(config.id)
+                            let configsToMount = connectionManager.connections.filter {
+                                !connectionManager.effectiveMountState(for: $0.id).isMounted
+                            }
+                            await withTaskGroup(of: Void.self) { group in
+                                for config in configsToMount {
+                                    group.addTask {
+                                        await connectionManager.connect(config.id)
+                                    }
+                                }
                             }
                         }
                     }
                     Button("Unmount All") {
                         Task {
-                            for config in connectionManager.connections
-                            where connectionManager.effectiveMountState(for: config.id).isMounted {
-                                await connectionManager.disconnect(config.id)
+                            let configsToUnmount = connectionManager.connections.filter {
+                                connectionManager.effectiveMountState(for: $0.id).isMounted
+                            }
+                            await withTaskGroup(of: Void.self) { group in
+                                for config in configsToUnmount {
+                                    group.addTask {
+                                        await connectionManager.disconnect(config.id)
+                                    }
+                                }
                             }
                         }
                     }
@@ -113,7 +133,8 @@ struct SidebarView: View {
         if mount.isMounted {
             Button("Reveal in Finder") {
                 Task {
-                    let targetURL = await resolveFinderURL(for: config) ?? FileProviderMountProvider.defaultSymlinkBaseURL
+                    let targetURL = await connectionManager.resolveFinderURL(for: config)
+                        ?? FileProviderMountProvider.defaultSymlinkBaseURL
                     await MainActor.run {
                         NSWorkspace.shared.activateFileViewerSelecting([targetURL])
                     }
@@ -127,16 +148,33 @@ struct SidebarView: View {
                 do {
                     await connectionManager.disconnect(config.id)
                     try await connectionManager.remove(config)
-                    if selectedConnection?.id == config.id {
-                        selectedConnection = nil
+                    await MainActor.run {
+                        if selectedConnection?.id == config.id {
+                            selectedConnection = nil
+                        }
                     }
                 } catch {
+                    let message = "Failed to remove mount \(config.id.uuidString): \(String(describing: error))"
                     logger.error(
-                        "Failed to remove mount \(config.id.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
+                        "\(message, privacy: .public)"
                     )
+                    await MainActor.run {
+                        removalErrorMessage = message
+                    }
                 }
             }
         }
+    }
+
+    private var removalErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { removalErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    removalErrorMessage = nil
+                }
+            }
+        )
     }
 
     private func stateColor(_ state: MountState) -> Color {
@@ -146,38 +184,5 @@ struct SidebarView: View {
         case .mounted:    return .green
         case .error:      return .red
         }
-    }
-
-    private func resolveFinderURL(for config: ConnectionConfig) async -> URL? {
-        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
-        let symlinkURL = FileProviderMountProvider.symlinkURL(
-            for: config,
-            baseDir: symlinkBaseURL
-        )
-        if linkExists(at: symlinkURL) {
-            return symlinkURL
-        }
-
-        if let mountProvider = connectionManager.mountProvider,
-           let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
-           linkExists(at: recreatedSymlinkURL) {
-            return recreatedSymlinkURL
-        }
-
-        if let mountProvider = connectionManager.mountProvider,
-           let mountURL = try? await mountProvider.mountURL(for: config) {
-            return mountURL
-        }
-
-        if let path = connectionManager.effectiveMountState(for: config.id).mountPath {
-            return URL(fileURLWithPath: path)
-        }
-
-        return nil
-    }
-
-    private func linkExists(at url: URL) -> Bool {
-        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
     }
 }

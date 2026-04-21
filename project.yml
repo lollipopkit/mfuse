@@ -60,6 +60,8 @@ targets:
         PRODUCT_NAME: MFuse
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
+        Debug:
+          ENABLE_HARDENED_RUNTIME: true
         Release:
           ENABLE_HARDENED_RUNTIME: true
 
