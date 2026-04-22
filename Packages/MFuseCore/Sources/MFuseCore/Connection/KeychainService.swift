@@ -91,10 +91,9 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
 
     private func migrateLegacyKeychainDataIfNeeded(account: String) throws -> Data? {
         for legacyAccessGroup in legacyAccessGroups {
-            guard let legacyData = try readKeychainData(
+            guard let legacyData = try readLegacyKeychainData(
                 account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
+                accessGroup: legacyAccessGroup
             ) else {
                 continue
             }
@@ -104,11 +103,7 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
                 account: account,
                 useDataProtectionKeychain: true
             )
-            try deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
+            try deleteLegacyKeychainData(account: account, accessGroup: legacyAccessGroup)
             return legacyData
         }
 
@@ -120,22 +115,47 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
             return
         }
         for legacyAccessGroup in legacyAccessGroups {
-            try? deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
+            try? deleteLegacyKeychainData(account: account, accessGroup: legacyAccessGroup)
         }
     }
 
     private func deleteLegacyKeychainData(account: String) throws {
         for legacyAccessGroup in legacyAccessGroups {
-            try deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
+            try deleteLegacyKeychainData(account: account, accessGroup: legacyAccessGroup)
         }
+    }
+
+    private func readLegacyKeychainData(account: String, accessGroup: String) throws -> Data? {
+        if let localData = try readKeychainData(
+            account: account,
+            accessGroup: accessGroup,
+            useDataProtectionKeychain: true,
+            syncModeOverride: .local
+        ) {
+            return localData
+        }
+
+        return try readKeychainData(
+            account: account,
+            accessGroup: accessGroup,
+            useDataProtectionKeychain: true,
+            syncModeOverride: .synchronizable
+        )
+    }
+
+    private func deleteLegacyKeychainData(account: String, accessGroup: String) throws {
+        try deleteKeychainData(
+            account: account,
+            accessGroup: accessGroup,
+            useDataProtectionKeychain: true,
+            syncModeOverride: .local
+        )
+        try deleteKeychainData(
+            account: account,
+            accessGroup: accessGroup,
+            useDataProtectionKeychain: true,
+            syncModeOverride: .synchronizable
+        )
     }
 
     private func readKeychainData(account: String, useDataProtectionKeychain: Bool) throws -> Data? {
@@ -201,12 +221,14 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
     private func readKeychainData(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncModeOverride: KeychainItemSyncMode? = nil
     ) throws -> Data? {
         var query = baseQuery(
             account: account,
             accessGroup: accessGroup,
-            useDataProtectionKeychain: useDataProtectionKeychain
+            useDataProtectionKeychain: useDataProtectionKeychain,
+            syncModeOverride: syncModeOverride
         )
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -225,12 +247,14 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
     private func deleteKeychainData(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncModeOverride: KeychainItemSyncMode? = nil
     ) throws {
         let query = baseQuery(
             account: account,
             accessGroup: accessGroup,
-            useDataProtectionKeychain: useDataProtectionKeychain
+            useDataProtectionKeychain: useDataProtectionKeychain,
+            syncModeOverride: syncModeOverride
         )
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -241,7 +265,8 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
     private func baseQuery(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncModeOverride: KeychainItemSyncMode? = nil
     ) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -254,7 +279,7 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
         if useDataProtectionKeychain {
             query[kSecUseDataProtectionKeychain as String] = true
         }
-        switch syncMode {
+        switch syncModeOverride ?? syncMode {
         case .local:
             query[kSecAttrSynchronizable as String] = kCFBooleanFalse
         case .synchronizable:

@@ -125,7 +125,11 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     private static let bootstrapTransientRetryDelayNanoseconds: UInt64 = 750_000_000
     private static let contentCacheStoreRetryCount = 2
     private static let streamedReadChunkSize: UInt32 = 1_048_576
-    private static let sharedCredentialStore = SharedCredentialStore()
+    private static var sharedCredentialStore: SharedCredentialStore {
+        SharedCredentialStore(
+            syncMode: SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
+        )
+    }
     private static let registerBackendsOnce: Void = {
         BackendRegistry.shared.registerAllBuiltIns(
             sftpFactory: { config, credential in

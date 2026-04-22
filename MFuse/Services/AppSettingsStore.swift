@@ -144,6 +144,24 @@ final class AppSettingsStore: ObservableObject {
         setPersistedICloudSyncEnabled(recoveredEnabled)
     }
 
+    private func recoverICloudSyncStateAfterEnableRollbackFailure(connectionIDs: [UUID]) async {
+        let recoveredEnabled: Bool
+
+        do {
+            let credentialSyncState = try await credentialProvider.credentialSyncState(for: connectionIDs)
+            switch credentialSyncState {
+            case .synchronizable:
+                recoveredEnabled = true
+            case .local, .mixed:
+                recoveredEnabled = false
+            }
+        } catch {
+            recoveredEnabled = false
+        }
+
+        setPersistedICloudSyncEnabled(recoveredEnabled)
+    }
+
     private func applyICloudSync(_ enabled: Bool) async {
         guard !isUpdatingICloudSync else {
             return
@@ -186,6 +204,7 @@ final class AppSettingsStore: ObservableObject {
                     let rollbackErrorDescription = error.localizedDescription
                     let combinedErrorDescription =
                         "Failed to enable iCloud Sync: \(syncErrorDescription) Rollback failed: \(rollbackErrorDescription)"
+                    await recoverICloudSyncStateAfterEnableRollbackFailure(connectionIDs: connectionIDs)
                     NSLog("%@", combinedErrorDescription)
                     errorMessage = combinedErrorDescription
                 }
