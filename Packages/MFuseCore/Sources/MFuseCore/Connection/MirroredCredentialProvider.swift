@@ -26,6 +26,14 @@ public struct ModeTransitionError: Error, LocalizedError {
     }
 }
 
+private struct ModeTransitionRollbackError: Error, LocalizedError {
+    let failures: [String]
+
+    var errorDescription: String? {
+        failures.joined(separator: " ")
+    }
+}
+
 public enum MirroredCredentialSyncState: Sendable, Equatable {
     case local
     case synchronizable
@@ -254,14 +262,46 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     }
 
     private func rollbackModeTransition(context: ModeTransitionContext) async throws {
+        var failures: [String] = []
+
         for (connectionID, credential) in context.credentialsToMove {
-            try? await context.sourcePrimary.store(credential, for: connectionID)
-            try? context.sourceSharedStore.store(credential, for: connectionID)
+            do {
+                try await context.sourcePrimary.store(credential, for: connectionID)
+            } catch {
+                failures.append(
+                    "rollbackModeTransition sourcePrimary.store failed for \(connectionID.uuidString): \(error.localizedDescription)"
+                )
+            }
+
+            do {
+                try context.sourceSharedStore.store(credential, for: connectionID)
+            } catch {
+                failures.append(
+                    "rollbackModeTransition sourceSharedStore.store failed for \(connectionID.uuidString): \(error.localizedDescription)"
+                )
+            }
         }
 
         for connectionID in context.connectionIDs {
-            try? await context.targetPrimary.delete(for: connectionID)
-            try? context.targetSharedStore.delete(for: connectionID)
+            do {
+                try await context.targetPrimary.delete(for: connectionID)
+            } catch {
+                failures.append(
+                    "rollbackModeTransition targetPrimary.delete failed for \(connectionID.uuidString): \(error.localizedDescription)"
+                )
+            }
+
+            do {
+                try context.targetSharedStore.delete(for: connectionID)
+            } catch {
+                failures.append(
+                    "rollbackModeTransition targetSharedStore.delete failed for \(connectionID.uuidString): \(error.localizedDescription)"
+                )
+            }
+        }
+
+        if !failures.isEmpty {
+            throw ModeTransitionRollbackError(failures: failures)
         }
     }
 
