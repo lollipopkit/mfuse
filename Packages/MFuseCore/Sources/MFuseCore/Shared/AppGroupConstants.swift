@@ -13,6 +13,9 @@ public enum AppGroupConstants {
     /// Key for marking File Provider extension onboarding as completed.
     public static let extensionOnboardedKey = "extensionOnboarded"
 
+    /// Key for persisting whether iCloud sync is enabled.
+    public static let iCloudSyncEnabledKey = "iCloudSyncEnabled"
+
     /// Shared container directory name for databases.
     public static let databasesDir = "Databases"
 
@@ -21,6 +24,9 @@ public enum AppGroupConstants {
 
     /// Filename for the sync anchor store database.
     public static let syncAnchorDB = "sync_anchors.sqlite"
+
+    /// The iCloud ubiquity container used by the main app.
+    public static let ubiquityContainerIdentifier = "iCloud.com.lollipopkit.mfuse"
 
     /// Keychain access group shared between the app and the File Provider extension.
     public static var keychainAccessGroup: String? {

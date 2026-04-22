@@ -330,7 +330,7 @@ final class ConnectionManagerTests: XCTestCase {
 
         XCTAssertEqual(manager.connections, [config])
         XCTAssertEqual(manager.state(for: config.id), .disconnected)
-        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(try storage.loadConnections(), [config])
         XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
         XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
     }
@@ -355,7 +355,7 @@ final class ConnectionManagerTests: XCTestCase {
         }
 
         XCTAssertEqual(manager.connections, [config])
-        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(try storage.loadConnections(), [config])
         XCTAssertEqual(credentialProvider.credentials[config.id], credential)
         XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
         XCTAssertEqual(credentialProvider.storedConnectionIDs, [config.id])
@@ -389,7 +389,7 @@ final class ConnectionManagerTests: XCTestCase {
         }
 
         XCTAssertEqual(manager.connections, [config])
-        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(try storage.loadConnections(), [config])
         XCTAssertNil(credentialProvider.credentials[config.id])
         XCTAssertEqual(credentialProvider.deletedConnectionIDs, [config.id])
         XCTAssertEqual(credentialProvider.storedConnectionIDs, [config.id])
@@ -459,7 +459,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNotNil(manager.fileSystem(for: config.id))
         XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
         XCTAssertTrue(credentialProvider.deletedConnectionIDs.isEmpty)
-        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(try storage.loadConnections(), [config])
     }
 
     func testRemoveConnectionAbortsWhenUnmountLeavesMountStateError() async throws {
@@ -502,7 +502,60 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNil(manager.fileSystem(for: config.id))
         XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
         XCTAssertTrue(credentialProvider.deletedConnectionIDs.isEmpty)
-        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(try storage.loadConnections(), [config])
+    }
+
+    func testReloadConnectionsFromStorageSkipsCleanupWhenReloadFails() async throws {
+        let config = ConnectionConfig(
+            name: "ReloadFailure",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await manager.connect(config.id)
+        guard let fileSystem = lastCreatedFileSystem else {
+            return XCTFail("Expected file system to be created")
+        }
+
+        try Data("not-json".utf8).write(to: storage.connectionsFileURL, options: .atomic)
+
+        await manager.reloadConnectionsFromStorage()
+
+        XCTAssertEqual(manager.connections, [config])
+        XCTAssertEqual(manager.state(for: config.id), .connected)
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+        let disconnectCalled = await fileSystem.disconnectCalled
+        XCTAssertFalse(disconnectCalled)
+    }
+
+    func testReloadConnectionsFromStoragePreservesRuntimeStateWhenDisconnectCleanupFails() async throws {
+        let config = ConnectionConfig(
+            name: "ReloadCleanupFailure",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await manager.connect(config.id)
+        guard let fileSystem = lastCreatedFileSystem else {
+            return XCTFail("Expected file system to be created")
+        }
+        await fileSystem.setDisconnectShouldFail(true)
+        try storage.saveConnections([])
+
+        await manager.reloadConnectionsFromStorage()
+
+        XCTAssertEqual(manager.connections, [config])
+        guard case .error(let message) = manager.state(for: config.id) else {
+            return XCTFail("Expected connection error state after failed cleanup during reload")
+        }
+        XCTAssertTrue(message.contains("mock disconnect failure"))
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+        let disconnectCalled = await fileSystem.disconnectCalled
+        XCTAssertTrue(disconnectCalled)
     }
 
     func testConnectSuccess() async throws {

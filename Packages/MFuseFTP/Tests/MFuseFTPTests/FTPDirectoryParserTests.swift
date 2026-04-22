@@ -89,6 +89,29 @@ final class FTPDirectoryParserTests: XCTestCase {
         XCTAssertNotNil(entries[0].modificationDate)
     }
 
+    func testParseDateWithTimeUsesUTCForParsingAndInference() {
+        let originalTimeZone = NSTimeZone.default
+        NSTimeZone.default = TimeZone(secondsFromGMT: 5 * 60 * 60)!
+        defer { NSTimeZone.default = originalTimeZone }
+
+        let listing = "-rw-r--r--  1 user group  0 Jan 01 00:30 boundary.txt"
+        let entries = FTPDirectoryParser.parse(listing)
+
+        XCTAssertEqual(entries.count, 1)
+        guard let modificationDate = entries[0].modificationDate else {
+            return XCTFail("Expected modification date")
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let components = calendar.dateComponents([.month, .day, .hour, .minute], from: modificationDate)
+
+        XCTAssertEqual(components.month, 1)
+        XCTAssertEqual(components.day, 1)
+        XCTAssertEqual(components.hour, 0)
+        XCTAssertEqual(components.minute, 30)
+    }
+
     func testParseDateWithYear() {
         let listing = "-rw-r--r--  1 user group  0 Jan 01  2023 old_file.txt"
         let entries = FTPDirectoryParser.parse(listing)

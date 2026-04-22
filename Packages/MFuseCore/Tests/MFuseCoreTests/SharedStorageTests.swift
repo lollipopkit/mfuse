@@ -56,7 +56,7 @@ final class SharedStorageTests: XCTestCase {
 
         try storage.saveConnections([config])
 
-        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(try storage.loadConnections(), [config])
         XCTAssertTrue(FileManager.default.fileExists(atPath: storage.connectionsFileURL.path))
     }
 
@@ -79,7 +79,7 @@ final class SharedStorageTests: XCTestCase {
         try storage.saveConnections([first, second])
         try storage.saveConnections([first])
 
-        XCTAssertEqual(storage.loadConnections(), [first])
+        XCTAssertEqual(try storage.loadConnections(), [first])
     }
 
     func testLoadConnectionsMigratesLegacyDefaultsIntoFile() throws {
@@ -96,7 +96,7 @@ final class SharedStorageTests: XCTestCase {
             containerURL: containerURL
         )
 
-        XCTAssertEqual(storage.loadConnections(), [config])
+        XCTAssertEqual(try storage.loadConnections(), [config])
         let fileData = try Data(contentsOf: storage.connectionsFileURL)
         XCTAssertEqual(try JSONDecoder().decode([ConnectionConfig].self, from: fileData), [config])
     }
@@ -115,7 +115,7 @@ final class SharedStorageTests: XCTestCase {
             containerURL: containerURL
         )
 
-        XCTAssertEqual(storage.loadConnections(), [])
+        XCTAssertEqual(try storage.loadConnections(), [])
         XCTAssertFalse(FileManager.default.fileExists(atPath: storage.connectionsFileURL.path))
     }
 
@@ -147,10 +147,25 @@ final class SharedStorageTests: XCTestCase {
         )
         try Data(rawJSON.utf8).write(to: storage.connectionsFileURL, options: .atomic)
 
-        let configs = storage.loadConnections()
+        let configs = try storage.loadConnections()
 
         XCTAssertEqual(configs.count, 1)
         XCTAssertFalse(configs[0].autoMountOnLaunch)
+    }
+
+    func testLoadConnectionsThrowsForCorruptedConnectionsFile() throws {
+        let storage = SharedStorage(
+            legacyDefaults: legacyDefaults,
+            containerURL: containerURL
+        )
+        try FileManager.default.createDirectory(
+            at: storage.connectionsFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try Data("not-json".utf8).write(to: storage.connectionsFileURL, options: .atomic)
+
+        XCTAssertThrowsError(try storage.loadConnections())
     }
 
     func testSharedStorageUsesStandardAppGroupSubdirectories() {
@@ -260,6 +275,51 @@ final class SharedStorageTests: XCTestCase {
 
         XCTAssertEqual(resolved, mirroredCredential)
         XCTAssertNil(primaryCredential)
+    }
+
+    func testMirroredCredentialProviderReportsLocalCredentialState() async throws {
+        let primary = InMemoryCredentialProvider()
+        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let connectionID = UUID()
+        let credential = Credential(token: "local-token")
+        let provider = MirroredCredentialProvider(
+            primary: primary,
+            sharedStore: sharedStore,
+            credentialExistenceProbe: { mode, probedConnectionID in
+                mode == .local && probedConnectionID == connectionID
+            }
+        )
+        try await primary.store(credential, for: connectionID)
+        try sharedStore.store(credential, for: connectionID)
+
+        let syncState = try await provider.credentialSyncState(for: [connectionID])
+
+        XCTAssertEqual(syncState, .local)
+    }
+
+    func testMirroredCredentialProviderReportsMixedCredentialStateAcrossModes() async throws {
+        let primary = InMemoryCredentialProvider()
+        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let localConnectionID = UUID()
+        let synchronizableConnectionID = UUID()
+        let provider = MirroredCredentialProvider(
+            primary: primary,
+            sharedStore: sharedStore,
+            credentialExistenceProbe: { mode, probedConnectionID in
+                switch (mode, probedConnectionID) {
+                case (.local, localConnectionID), (.synchronizable, synchronizableConnectionID):
+                    true
+                default:
+                    false
+                }
+            }
+        )
+
+        let syncState = try await provider.credentialSyncState(
+            for: [localConnectionID, synchronizableConnectionID]
+        )
+
+        XCTAssertEqual(syncState, .mixed)
     }
 
     func testHostKeyStorePersistsToFileAndMigratesLegacyDefaults() {

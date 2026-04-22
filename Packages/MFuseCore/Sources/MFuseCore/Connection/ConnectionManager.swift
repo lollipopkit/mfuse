@@ -46,6 +46,9 @@ public final class ConnectionManager: ObservableObject {
     /// Optional callback for mount state change notifications.
     public var onMountStateChange: ((ConnectionConfig, MountState) -> Void)?
 
+    /// Optional callback fired after local add/update/remove persistence succeeds.
+    public var onLocalConnectionsDidChange: (([ConnectionConfig]) -> Void)?
+
     private static let maxRetries = 5
     private static let baseDelay: UInt64 = 1_000_000_000 // 1 second in nanoseconds
     private static let mountURLRetryCount = 20
@@ -61,7 +64,14 @@ public final class ConnectionManager: ObservableObject {
         self.storage = storage
         self.credentialProvider = credentialProvider
         self.registry = registry
-        self.connections = storage.loadConnections()
+        do {
+            self.connections = try storage.loadConnections()
+        } catch {
+            self.connections = []
+            logger.error(
+                "Failed to load initial connections from storage: \(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     // MARK: - CRUD
@@ -71,6 +81,7 @@ public final class ConnectionManager: ObservableObject {
         states[config.id] = .disconnected
         do {
             try storage.saveConnections(connections)
+            onLocalConnectionsDidChange?(connections)
         } catch {
             connections.removeAll { $0.id == config.id }
             states.removeValue(forKey: config.id)
@@ -84,6 +95,7 @@ public final class ConnectionManager: ObservableObject {
             connections[idx] = config
             do {
                 try storage.saveConnections(connections)
+                onLocalConnectionsDidChange?(connections)
             } catch {
                 connections[idx] = previous
                 throw error
@@ -165,6 +177,7 @@ public final class ConnectionManager: ObservableObject {
             )
         }
         connectionGenerations.removeValue(forKey: config.id)
+        onLocalConnectionsDidChange?(connections)
     }
 
     // MARK: - Connection lifecycle
@@ -300,6 +313,10 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func disconnect(_ id: UUID) async {
+        await disconnect(id, using: nil)
+    }
+
+    private func disconnect(_ id: UUID, using configOverride: ConnectionConfig?) async {
         advanceConnectionGeneration(for: id)
         if inFlightConnectionIDs.contains(id) {
             interruptedConnectionIDs.insert(id)
@@ -309,7 +326,7 @@ public final class ConnectionManager: ObservableObject {
         mountResolutionTasks[id]?.cancel()
         mountResolutionTasks.removeValue(forKey: id)
 
-        let config = connections.first(where: { $0.id == id })
+        let config = configOverride ?? connections.first(where: { $0.id == id })
         var cleanupFailures: [String] = []
         var didDisconnectFileSystem = false
 
@@ -358,9 +375,7 @@ public final class ConnectionManager: ObservableObject {
         fileSystems.removeValue(forKey: id)
         states[id] = .disconnected
         if let config {
-            if mountProvider != nil {
-                setMountState(.unmounted, for: config)
-            }
+            setMountState(.unmounted, for: config)
             onStateChange?(config, .disconnected)
         }
     }
@@ -459,6 +474,46 @@ public final class ConnectionManager: ObservableObject {
                     "Failed to sync credential snapshot for \(config.domainIdentifier, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
             }
+        }
+    }
+
+    public func reloadConnectionsFromStorage() async {
+        let reloadedConnections: [ConnectionConfig]
+        do {
+            reloadedConnections = try storage.loadConnections()
+        } catch {
+            logger.error(
+                "Failed to reload connections from storage: \(String(describing: error), privacy: .public)"
+            )
+            return
+        }
+        let currentConnections = connections
+        let currentIDs = Set(currentConnections.map(\.id))
+        let reloadedIDs = Set(reloadedConnections.map(\.id))
+        var nextConnections = reloadedConnections
+
+        for removedConfig in currentConnections where !reloadedIDs.contains(removedConfig.id) {
+            await disconnect(removedConfig.id, using: removedConfig)
+            guard isCleanupComplete(for: removedConfig.id) else {
+                nextConnections.append(removedConfig)
+                continue
+            }
+
+            states.removeValue(forKey: removedConfig.id)
+            mountStates.removeValue(forKey: removedConfig.id)
+            fileSystems.removeValue(forKey: removedConfig.id)
+            connectionGenerations.removeValue(forKey: removedConfig.id)
+            inFlightConnectionIDs.remove(removedConfig.id)
+            interruptedConnectionIDs.remove(removedConfig.id)
+            reconnectTasks[removedConfig.id]?.cancel()
+            reconnectTasks.removeValue(forKey: removedConfig.id)
+            mountResolutionTasks[removedConfig.id]?.cancel()
+            mountResolutionTasks.removeValue(forKey: removedConfig.id)
+        }
+
+        connections = nextConnections
+        for config in nextConnections where !currentIDs.contains(config.id) {
+            states[config.id] = .disconnected
         }
     }
 
@@ -733,7 +788,7 @@ public final class ConnectionManager: ObservableObject {
 
     private func isCleanupComplete(for id: UUID) -> Bool {
         let connectionIsDisconnected = states[id]?.isConnected != true
-        let mountIsStopped = mountState(for: id) == .unmounted
+        let mountIsStopped = mountProvider == nil || mountState(for: id) == .unmounted
 
         return connectionIsDisconnected
             && mountIsStopped

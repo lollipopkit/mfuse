@@ -65,6 +65,7 @@ struct FTPDirectoryParser {
         // Try "Jan 01 12:00" (current year) or "Jan 01  2025"
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
 
         // With time
         formatter.dateFormat = "MMM dd HH:mm"

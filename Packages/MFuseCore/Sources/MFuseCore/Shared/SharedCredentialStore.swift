@@ -17,6 +17,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
     private let accessGroup: String?
     private let allowLegacyKeychainMigration: Bool
     private let legacyAccessGroups: [String]
+    public let syncMode: KeychainItemSyncMode
     private var usesDataProtectionKeychain: Bool { accessGroup != nil }
 
     public init(
@@ -25,6 +26,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
             forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
         ),
         accessGroup: String? = AppGroupConstants.keychainAccessGroup,
+        syncMode: KeychainItemSyncMode = SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local,
         allowLegacyKeychainMigration: Bool = true,
         legacyAccessGroups: [String] = [AppGroupConstants.legacyKeychainAccessGroup].compactMap { $0 }
     ) {
@@ -40,6 +42,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
             )
         }
         self.accessGroup = accessGroup
+        self.syncMode = syncMode
         self.allowLegacyKeychainMigration = allowLegacyKeychainMigration
         self.legacyAccessGroups = legacyAccessGroups.filter { $0 != accessGroup }
     }
@@ -324,6 +327,9 @@ public final class SharedCredentialStore: @unchecked Sendable {
         }
         if useDataProtectionKeychain {
             query[kSecUseDataProtectionKeychain as String] = true
+        }
+        if syncMode == .synchronizable {
+            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
         }
         return query
     }

@@ -61,18 +61,23 @@ public final class SharedStorage: Sendable {
 
     // MARK: - Connections
 
-    public func loadConnections() -> [ConnectionConfig] {
-        let connectionsFileExists = FileManager.default.fileExists(atPath: connectionsFileURL.path)
-        if let connections = readConnectionsFromDisk(at: connectionsFileURL) {
+    public func loadConnections() throws -> [ConnectionConfig] {
+        if let connections = try readConnectionsFromDisk(at: connectionsFileURL) {
             return connections
         }
-        guard !connectionsFileExists else {
+
+        guard let data = legacyDefaults?.data(forKey: AppGroupConstants.connectionsKey) else {
             return []
         }
 
-        guard let data = legacyDefaults?.data(forKey: AppGroupConstants.connectionsKey),
-              let connections = try? JSONDecoder().decode([ConnectionConfig].self, from: data) else {
-            return []
+        let connections: [ConnectionConfig]
+        do {
+            connections = try JSONDecoder().decode([ConnectionConfig].self, from: data)
+        } catch {
+            Self.logger.error(
+                "Failed to decode legacy connections from UserDefaults: \(String(describing: error), privacy: .public)"
+            )
+            throw error
         }
 
         try? persistConnections(connections)
@@ -85,7 +90,14 @@ public final class SharedStorage: Sendable {
 
     /// Find a single connection by its domain identifier.
     public func connection(forDomain domainID: String) -> ConnectionConfig? {
-        loadConnections().first { $0.domainIdentifier == domainID }
+        do {
+            return try loadConnections().first { $0.domainIdentifier == domainID }
+        } catch {
+            Self.logger.error(
+                "Failed to load connections for domain lookup \(domainID, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
     }
 
     // MARK: - Database Paths
@@ -172,7 +184,11 @@ public final class SharedStorage: Sendable {
         }
     }
 
-    private func readConnectionsFromDisk(at url: URL) -> [ConnectionConfig]? {
+    private func readConnectionsFromDisk(at url: URL) throws -> [ConnectionConfig]? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+
         var coordinationError: NSError?
         var readError: Error?
         var connections: [ConnectionConfig]?
@@ -190,23 +206,21 @@ public final class SharedStorage: Sendable {
             Self.logger.error(
                 "Failed to coordinate reading connections from \(url.path, privacy: .public): \(String(describing: coordinationError), privacy: .public)"
             )
-            return nil
+            throw coordinationError
         }
 
         if let readError {
             Self.logger.error(
                 "Failed to read connections from \(url.path, privacy: .public): \(String(describing: readError), privacy: .public)"
             )
-            return nil
+            throw readError
         }
 
         return connections
     }
 
-    private func decodeConnectionsFromDisk(at url: URL) throws -> [ConnectionConfig]? {
-        guard let data = try? Data(contentsOf: url) else {
-            return nil
-        }
+    private func decodeConnectionsFromDisk(at url: URL) throws -> [ConnectionConfig] {
+        let data = try Data(contentsOf: url)
         return try JSONDecoder().decode([ConnectionConfig].self, from: data)
     }
 }

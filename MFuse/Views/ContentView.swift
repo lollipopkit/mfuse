@@ -75,6 +75,19 @@ struct ContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .connectionStorageDidRefresh)) { _ in
+            Task { @MainActor in
+                let selectedConnectionID = selectedConnection?.id
+                await connectionManager.reloadConnectionsFromStorage()
+                if let selectedConnectionID {
+                    selectedConnection = connectionManager.connections.first(where: {
+                        $0.id == selectedConnectionID
+                    })
+                } else {
+                    selectedConnection = nil
+                }
+            }
+        }
     }
 
     private var emptyState: some View {

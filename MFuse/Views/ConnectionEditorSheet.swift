@@ -439,10 +439,10 @@ struct ConnectionEditorSheet: View {
         case .password:
             oauthToken = ""
             privateKeyPath = ""
+            privateKeyBookmark = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .publicKey:
-            password = ""
             oauthToken = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
@@ -450,15 +450,18 @@ struct ConnectionEditorSheet: View {
             password = ""
             oauthToken = ""
             privateKeyPath = ""
+            privateKeyBookmark = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .accessKey:
             password = ""
             oauthToken = ""
             privateKeyPath = ""
+            privateKeyBookmark = ""
         case .oauth:
             password = ""
             privateKeyPath = ""
+            privateKeyBookmark = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         }

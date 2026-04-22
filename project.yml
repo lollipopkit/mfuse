@@ -59,6 +59,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lollipopkit.mfuse
         INFOPLIST_FILE: MFuse/Info.plist
+        # Keep this entitlements file aligned with App Group and iCloud container capabilities.
         CODE_SIGN_ENTITLEMENTS: MFuse/MFuse.entitlements
         ENABLE_APP_SANDBOX: true
         COMBINE_HIDPI_IMAGES: true
