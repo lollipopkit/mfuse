@@ -2,7 +2,12 @@
 
 [中文说明](README.zh-CN.md) | [License](LICENSE) | [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
+> Warning
+> This project is currently under active development. Behavior, APIs, and supported workflows may change.
+
 MFuse is a macOS app that exposes remote storage in Finder through File Provider, with a modular backend layer for multiple protocols.
+
+Saved mounts can optionally enable `Auto-Mount on App Launch`. When combined with `Launch at Login`, those mounts will reconnect automatically after you sign in or restart your Mac.
 
 ## Screenshots
 
@@ -22,12 +27,6 @@ MFuse is a macOS app that exposes remote storage in Finder through File Provider
   </tr>
 </table>
 
-## What MFuse Is
-
-MFuse combines a macOS app, a File Provider extension, and a set of protocol-specific Swift packages into one remote filesystem client.
-
-The app manages connection definitions, credentials, and user actions. The File Provider extension bridges those connections into Finder-visible domains. Each remote protocol is implemented as an independent backend package behind a shared virtual filesystem interface.
-
 ## Supported Backends
 
 - SFTP
@@ -38,16 +37,9 @@ The app manages connection definitions, credentials, and user actions. The File 
 - NFS
 - Google Drive
 
-## How It Works
+## Backend Notes
 
-MFuse is split into three main layers:
-
-- `MFuse/`: the macOS SwiftUI app for managing connections and user workflows.
-- `MFuseProvider/`: the File Provider extension that exposes remote content to Finder.
-- `Packages/`: reusable Swift packages, including `MFuseCore` plus protocol backends such as `MFuseSFTP`, `MFuseS3`, and `MFuseWebDAV`.
-
-Shared connection metadata is stored through `SharedStorage`, while secrets are handled by `KeychainService`. Mounting is handled through `FileProviderMountProvider`, and mounted domains become visible through macOS File Provider.
-Mounted domains are persistent across app relaunches as long as the connection config still exists. MFuse also recreates a convenience symlink at `~/MFuse/<name>` for active mounts. A manual disconnect removes both the File Provider domain and the symlink, so it will not be restored automatically on the next launch.
+- SFTP directory enumeration has a compatibility fallback: when the normal SFTP listing path times out or hits certain connection-level failures, MFuse may execute a small `python3` snippet on the remote host over the existing SSH session to enumerate the directory. This fallback is not used for normal successful listings, permission-denied errors, or missing-path errors. Remote hosts that hit this fallback must have `python3` available, otherwise enumeration fails.
 
 ## Project Structure
 
@@ -90,6 +82,9 @@ make generate
 make test
 ```
 
+`make test` currently maps to `test-stable` and runs the stable local package subset.
+Use `make test-all` when you want the full package test matrix.
+
 ### Lint
 
 ```bash
@@ -102,14 +97,43 @@ make lint
 make build
 ```
 
+### Local Xcode builds
+
+If you build `MFuse.app` from Xcode and copy it into `/Applications`, use a valid Apple development team for both the app target and the File Provider extension target.
+
+Do not rely on changing the generated Xcode project by hand. `MFuse.xcodeproj` is regenerated from `project.yml`, so manual signing edits in Xcode can be lost the next time you run `make generate`.
+
+For stable local signing, copy `project.local.example.yml` to `project.local.yml`, fill in the signing values that match your local setup, and regenerate the project. `project.local.yml` is ignored by Git and is automatically merged by `make generate`.
+
+`project.local.example.yml` now covers both local override paths:
+
+- inject only `DEVELOPMENT_TEAM` and keep Automatic signing
+- pin per-target Debug/Release `CODE_SIGN_STYLE`, `CODE_SIGN_IDENTITY`, and `PROVISIONING_PROFILE_SPECIFIER` values when your local machine uses explicit provisioning profiles
+
+Unsigned or ad hoc signed builds can still launch, but macOS may ignore the File Provider extension because the App Group entitlement is not accepted at runtime. When that happens, mounts fail and Finder may show missing-file errors for the generated convenience shortcut.
+
 ## Common Commands
 
 ```bash
 make generate   # regenerate MFuse.xcodeproj from project.yml
-make test       # run package tests
+make test       # run the stable package test subset (alias of test-stable)
+make test-all   # run the full package test matrix
 make lint       # run SwiftLint
 make build      # build the app scheme
+make debug-install-app  # build a signed Debug app and install it to /Applications/MFuse.app
 make clean      # remove build outputs
+```
+
+`make debug-install-app` runs `scripts/release/build-and-install-app.sh`, archives the `MFuse` scheme in `Debug` using the signing settings already configured in the current `MFuse.xcodeproj`, validates that the archived app and extension embed profiles authorizing the shared App Group, and then installs the archived app to `/Applications/MFuse.app`.
+
+This local install flow now follows the signing configuration that Xcode is already using for the targets. If the current project settings point to explicit provisioning profiles, those profiles still need to authorize `group.com.lollipopkit.mfuse.shared` in `com.apple.security.application-groups`.
+
+The generic `Mac Team Provisioning Profile: *` is not sufficient. It omits the App Group entitlement, which causes macOS Sequoia to show the “would like to access data from other apps” launch prompt, prevents the File Provider extension from appearing in System Settings, and leaves Finder mounts empty or redirected into the shared container. The install script still refuses to copy that broken build into `/Applications`.
+
+If you want to install somewhere else during local verification, override the target path:
+
+```bash
+INSTALL_PATH=/tmp/MFuse.app make debug-install-app
 ```
 
 ## Local Release DMG
@@ -166,10 +190,6 @@ Current test coverage is centered on Swift packages, especially:
 - `MFuseWebDAV` XML parsing
 
 Some backend tests are placeholders or integration-oriented, so protocol coverage is not uniform yet.
-
-## ADRs
-
-- [ADR 0001: Diagnose empty File Provider mounts caused by missing domain config](docs/adr/0001-file-provider-empty-mount-diagnosis.md)
 
 ## License
 

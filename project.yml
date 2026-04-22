@@ -1,3 +1,8 @@
+include:
+  - path: project.local.yml
+    relativePaths: false
+    enable: ${INCLUDE_PROJECT_LOCAL_YML}
+
 name: MFuse
 
 options:
@@ -12,9 +17,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: ""
 
 packages:
   MFuseCore:
@@ -62,8 +65,11 @@ targets:
         PRODUCT_NAME: MFuse
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
+        Debug:
+          ENABLE_HARDENED_RUNTIME: true
         Release:
           ENABLE_HARDENED_RUNTIME: true
+          ENABLE_DEBUG_DYLIB: false
 
   MFuseProvider:
     type: app-extension
@@ -88,5 +94,8 @@ targets:
         ENABLE_APP_SANDBOX: true
         PRODUCT_NAME: MFuseProvider
       configs:
+        Debug:
+          ENABLE_HARDENED_RUNTIME: true
         Release:
           ENABLE_HARDENED_RUNTIME: true
+          ENABLE_DEBUG_DYLIB: false

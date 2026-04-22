@@ -2,7 +2,12 @@
 
 [English README](README.md) | [License](LICENSE) | [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
+> 提示
+> 当前项目仍在积极开发中，行为、接口和支持的工作流都可能发生变化。
+
 MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Finder 中，并用模块化后端支持多种协议。
+
+已保存的挂载现在可以单独勾选 `Auto-Mount on App Launch`。配合 `Launch at Login` 后，这些挂载会在你登录或重启 Mac 后自动重新连接。
 
 ## 截图
 
@@ -22,12 +27,6 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
   </tr>
 </table>
 
-## 项目简介
-
-MFuse 由三部分组成：macOS 主应用、File Provider extension，以及一组按协议拆分的 Swift Package。
-
-主应用负责连接配置、凭证管理和用户操作；File Provider extension 负责把远端内容接入 Finder；各类远端协议则通过统一的虚拟文件系统接口接入，形成一致的使用方式。
-
 ## 当前支持的后端
 
 - SFTP
@@ -38,16 +37,9 @@ MFuse 由三部分组成：macOS 主应用、File Provider extension，以及一
 - NFS
 - Google Drive
 
-## 工作原理
+## 后端说明
 
-项目主要分为三层：
-
-- `MFuse/`：macOS SwiftUI 主应用，负责连接管理与交互界面。
-- `MFuseProvider/`：File Provider extension，负责把远端内容暴露给 Finder。
-- `Packages/`：可复用 Swift Package，包括 `MFuseCore` 和多个协议后端实现。
-
-连接配置通过 `SharedStorage` 在主应用和扩展之间共享，敏感凭证通过 `KeychainService` 管理。挂载逻辑由 `FileProviderMountProvider` 处理，最终以 macOS File Provider domain 的形式出现在 Finder 中。
-只要连接配置仍然存在，已挂载的 domain 在应用重启后会继续保留，MFuse 也会重建对应的 `~/MFuse/<name>` 便捷链接。用户手动执行 Disconnect 时，会同时移除 File Provider domain 和该链接，后续启动不会自动恢复。
+- SFTP 的目录枚举带有一个兼容性 fallback：当常规 SFTP 列表请求超时，或遇到某些连接级错误时，MFuse 可能会复用现有 SSH 会话，在远端主机上执行一小段 `python3` 脚本来完成目录枚举。这个 fallback 不会用于正常成功的列表请求，也不会用于权限不足或路径不存在这类错误。触发该 fallback 的远端主机需要提供 `python3`，否则目录枚举会失败。
 
 ## 仓库结构
 
@@ -90,6 +82,9 @@ make generate
 make test
 ```
 
+当前 `make test` 实际映射到 `test-stable`，只运行本地稳定的 package 测试子集。
+如果需要执行完整测试矩阵，请使用 `make test-all`。
+
 ### 运行 lint
 
 ```bash
@@ -102,14 +97,43 @@ make lint
 make build
 ```
 
+### 本地 Xcode 构建
+
+如果你是在 Xcode 里直接构建 `MFuse.app`，然后再复制到 `/Applications`，主应用 target 和 File Provider extension target 都需要使用有效的 Apple development team 签名。
+
+不要依赖直接修改生成后的 Xcode 工程。`MFuse.xcodeproj` 是从 `project.yml` 重新生成的，所以你在 Xcode 里手动改的签名设置，下一次执行 `make generate` 时可能会丢失。
+
+如果你要稳定保留本机签名配置，复制 `project.local.example.yml` 为 `project.local.yml`，按你的本机情况填写签名参数后重新生成工程。`project.local.yml` 已被 Git 忽略，`make generate` 会自动把它合并进去。
+
+`project.local.example.yml` 现在同时包含两类本地覆盖方式：
+
+- 只注入 `DEVELOPMENT_TEAM`，继续使用 Automatic signing
+- 为 app 和 File Provider extension 分别指定 Debug/Release 的 `CODE_SIGN_STYLE`、`CODE_SIGN_IDENTITY` 和 `PROVISIONING_PROFILE_SPECIFIER`，稳定复现本机显式 provisioning profile 配置
+
+未签名或 ad hoc 签名的构建虽然可以启动，但 macOS 可能会在运行时忽略 File Provider extension，因为 App Group entitlement 不会被系统接受。出现这种情况时，mount 会失败，Finder 还可能对自动生成的便捷链接报“文件不存在”。
+
 ## 常用命令
 
 ```bash
 make generate   # 根据 project.yml 重新生成 MFuse.xcodeproj
-make test       # 运行 package 测试
+make test       # 运行稳定的 package 测试子集（test-stable 别名）
+make test-all   # 运行完整 package 测试矩阵
 make lint       # 运行 SwiftLint
 make build      # 构建应用 scheme
+make debug-install-app     # 构建已签名 Debug 并安装到 /Applications/MFuse.app
 make clean      # 清理构建产物
+```
+
+`make debug-install-app` 会执行 `scripts/release/build-and-install-app.sh`：按当前 `MFuse.xcodeproj` 已配置好的签名设置，以 `Debug` 配置归档 `MFuse` scheme，校验归档里的主应用和扩展都嵌入了已授权共享 App Group 的 profile，然后把归档产物安装到 `/Applications/MFuse.app`。
+
+这个本地安装流程现在直接遵循你在 Xcode 工程里已经配置好的签名方式。如果当前 target 走的是显式 provisioning profile，那么这些 profile 仍然需要在 `com.apple.security.application-groups` 里包含 `group.com.lollipopkit.mfuse.shared`。
+
+通用的 `Mac Team Provisioning Profile: *` 仍然不够用。它不包含 App Group entitlement，在 macOS Sequoia 上会导致 “would like to access data from other apps” 启动弹窗、系统设置里看不到 File Provider 扩展，以及 Finder 挂载为空或被带到共享容器。安装脚本依然会拒绝把这种损坏签名的构建复制到 `/Applications`。
+
+如果你只是想本地验证而不覆盖系统 Applications，可以改写安装目标：
+
+```bash
+INSTALL_PATH=/tmp/MFuse.app make debug-install-app
 ```
 
 ## 本机构建 DMG

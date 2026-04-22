@@ -1,0 +1,150 @@
+import SwiftUI
+import MFuseCore
+
+struct ContentView: View {
+
+    @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.credentialProvider) private var credentialProvider
+    @State private var selectedConnection: ConnectionConfig?
+    @State private var editorPresentation: EditorPresentation?
+    @State private var showingExtensionGuide = false
+    @State private var saveErrorMessage: String?
+
+    var body: some View {
+        NavigationSplitView {
+            SidebarView(
+                selectedConnection: $selectedConnection,
+                onAdd: { showNewEditor() },
+                onEdit: { config in showEditEditor(config) }
+            )
+            .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 350)
+        } detail: {
+            if let config = selectedConnection {
+                ConnectionDetailView(config: config)
+            } else {
+                emptyState
+            }
+        }
+        .sheet(item: $editorPresentation) { presentation in
+            ConnectionEditorSheet(
+                config: presentation.config,
+                onSave: { config, credential in
+                    saveConnection(config, credential: credential)
+                }
+            )
+            .frame(minWidth: 480, minHeight: 400)
+        }
+        .sheet(
+            isPresented: $showingExtensionGuide,
+            onDismiss: {
+                connectionManager.needsExtensionSetup = false
+            },
+            content: {
+                ExtensionGuideView()
+            }
+        )
+        .alert("Unable to Save Mount", isPresented: saveErrorIsPresented) {
+            Button("OK", role: .cancel) {
+                saveErrorMessage = nil
+            }
+        } message: {
+            Text(saveErrorMessage ?? "An unknown error occurred.")
+        }
+        .onReceive(connectionManager.$needsExtensionSetup) { needs in
+            if needs {
+                showingExtensionGuide = true
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: showNewEditor) {
+                    Label("Add Mount", systemImage: "plus")
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .newConnection)) { _ in
+            showNewEditor()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .refreshConnections)) { _ in
+            if let config = selectedConnection {
+                let mountState = connectionManager.effectiveMountState(for: config.id)
+                if connectionManager.mountProvider != nil && mountState.isMounted {
+                    Task {
+                        try? await connectionManager.mountProvider?.signalEnumerator(for: config)
+                    }
+                }
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "externaldrive.connected.to.line.below")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("No Mount Selected")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("Select a saved mount from the sidebar or add a new one.")
+                .foregroundStyle(.tertiary)
+            Button("Add Mount") { showNewEditor() }
+                .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func showNewEditor() {
+        editorPresentation = EditorPresentation(config: nil)
+    }
+
+    private func showEditEditor(_ config: ConnectionConfig) {
+        editorPresentation = EditorPresentation(config: config)
+    }
+
+    private func saveConnection(_ config: ConnectionConfig, credential: Credential) {
+        Task {
+            do {
+                let previousCredential = try await credentialProvider.credential(for: config.id)
+                try await credentialProvider.store(credential, for: config.id)
+                do {
+                    if connectionManager.connections.contains(where: { $0.id == config.id }) {
+                        try connectionManager.update(config)
+                    } else {
+                        try connectionManager.add(config)
+                    }
+                } catch {
+                    if let previousCredential {
+                        try? await credentialProvider.store(previousCredential, for: config.id)
+                    } else {
+                        try? await credentialProvider.delete(for: config.id)
+                    }
+                    throw error
+                }
+                await MainActor.run {
+                    selectedConnection = config
+                    editorPresentation = nil
+                }
+            } catch {
+                await MainActor.run {
+                    saveErrorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private var saveErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { saveErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    saveErrorMessage = nil
+                }
+            }
+        )
+    }
+}
+
+private struct EditorPresentation: Identifiable {
+    let id = UUID()
+    let config: ConnectionConfig?
+}

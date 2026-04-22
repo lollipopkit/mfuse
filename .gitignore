@@ -30,6 +30,7 @@ Package.resolved
 
 # Local release config
 .env
+project.local.yml
 
 # Compiled
 *.o
