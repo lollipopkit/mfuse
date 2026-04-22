@@ -173,7 +173,7 @@ public actor ICloudConnectionSyncService {
     public func synchronize() throws -> ICloudConnectionSyncResult {
         guard SharedAppSettings.iCloudSyncEnabled else {
             throw NSError(
-                domain: "ICloudConnectionSyncService",
+                domain: Self.errorDomain,
                 code: 0,
                 userInfo: [
                     NSLocalizedDescriptionKey: MFuseCoreL10n.string(
@@ -186,7 +186,7 @@ public actor ICloudConnectionSyncService {
 
         guard let cloudRootURL = ubiquityContainerURLProvider() else {
             throw NSError(
-                domain: "ICloudConnectionSyncService",
+                domain: Self.errorDomain,
                 code: 1,
                 userInfo: [
                     NSLocalizedDescriptionKey: MFuseCoreL10n.string(
