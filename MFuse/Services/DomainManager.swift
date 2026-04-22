@@ -82,11 +82,18 @@ public final class DomainManager: ObservableObject {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
         let domainStates = try await mountProvider.domainStates()
         var errors: [(id: String, error: Error)] = []
+        let domains: [NSFileProviderDomain]
+
+        do {
+            domains = try await NSFileProviderManager.domains()
+        } catch {
+            errors.append((id: "__domains__", error: error))
+            throw SyncDomainsError(errors: errors)
+        }
 
         // Remove stale domains
         for domainState in domainStates where !knownIDs.contains(domainState.identifier) {
             do {
-                let domains = try await NSFileProviderManager.domains()
                 if let domain = domains.first(where: { $0.identifier.rawValue == domainState.identifier }) {
                     try await NSFileProviderManager.remove(domain)
                 }
