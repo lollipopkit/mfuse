@@ -14,6 +14,7 @@ struct MFuseApp: App {
     private static let cleanupFileProviderStateArgument = "--cleanup-file-provider-state"
     static let mainWindowID = "main"
 
+    @Environment(\.scenePhase) private var scenePhase
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var connectionManager: ConnectionManager
     @StateObject private var appSettings: AppSettingsStore
@@ -22,14 +23,18 @@ struct MFuseApp: App {
     private let mountProvider: FileProviderMountProvider
     private let storage: SharedStorage
     private let credentialProvider: MirroredCredentialProvider
+    private let iCloudSyncService: ICloudConnectionSyncService
     private let isCleanupLaunch: Bool
 
     init() {
         self.isCleanupLaunch = ProcessInfo.processInfo.arguments.contains(Self.cleanupFileProviderStateArgument)
-        self.storage = SharedStorage.withLegacyMigration()
-        self.credentialProvider = MirroredCredentialProvider(primary: KeychainService())
+        let storage = SharedStorage.withLegacyMigration()
+        let credentialProvider = MirroredCredentialProvider(primary: KeychainService())
+        let iCloudSyncService = ICloudConnectionSyncService(storage: storage)
+        self.storage = storage
+        self.credentialProvider = credentialProvider
+        self.iCloudSyncService = iCloudSyncService
         self.mountProvider = FileProviderMountProvider()
-        let credentialProvider = self.credentialProvider
         let registry = BackendRegistry.shared
         registry.registerAllBuiltIns(
             sftpFactory: { config, credential in
@@ -60,10 +65,25 @@ struct MFuseApp: App {
             }
         )
         let manager = ConnectionManager(
-            storage: self.storage,
-            credentialProvider: self.credentialProvider,
+            storage: storage,
+            credentialProvider: credentialProvider,
             registry: registry
         )
+        manager.onLocalConnectionsDidChange = { _ in
+            guard SharedAppSettings.iCloudSyncEnabled else {
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let result = try await iCloudSyncService.synchronize()
+                    if result.didUpdateLocalSnapshot {
+                        await manager.reloadConnectionsFromStorage()
+                    }
+                } catch {
+                    NSLog("MFuse iCloud sync failed after local config change: %@", error.localizedDescription)
+                }
+            }
+        }
         AppDelegate.shutdownHandler = { [manager] in
             await manager.shutdown()
         }
@@ -85,7 +105,11 @@ struct MFuseApp: App {
             }
         }
         _connectionManager = StateObject(wrappedValue: manager)
-        _appSettings = StateObject(wrappedValue: AppSettingsStore())
+        _appSettings = StateObject(wrappedValue: AppSettingsStore(
+            storage: storage,
+            credentialProvider: credentialProvider,
+            iCloudSyncService: iCloudSyncService
+        ))
     }
 
     var body: some Scene {
@@ -98,6 +122,15 @@ struct MFuseApp: App {
                 .frame(minWidth: 700, minHeight: 450)
                 .task {
                     await performInitialSetupIfNeeded()
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    guard newPhase == .active else { return }
+                    Task {
+                        await appSettings.refreshICloudSyncStatus()
+                        if await appSettings.performBackgroundSyncIfNeeded() {
+                            await connectionManager.reloadConnectionsFromStorage()
+                        }
+                    }
                 }
         }
         .windowStyle(.titleBar)
@@ -137,6 +170,10 @@ struct MFuseApp: App {
         didPerformInitialSetup = true
 
         guard isCleanupLaunch else {
+            await appSettings.refreshICloudSyncStatus()
+            if await appSettings.performBackgroundSyncIfNeeded() {
+                await connectionManager.reloadConnectionsFromStorage()
+            }
             await connectionManager.syncCredentialSnapshots()
             do {
                 try await domainManager.syncDomains()
@@ -249,4 +286,5 @@ extension EnvironmentValues {
 extension Notification.Name {
     static let newConnection = Notification.Name("com.lollipopkit.mfuse.newConnection")
     static let refreshConnections = Notification.Name("com.lollipopkit.mfuse.refreshConnections")
+    static let connectionStorageDidRefresh = Notification.Name("com.lollipopkit.mfuse.connectionStorageDidRefresh")
 }

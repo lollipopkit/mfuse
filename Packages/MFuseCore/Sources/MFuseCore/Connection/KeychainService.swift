@@ -1,6 +1,11 @@
 import Foundation
 import Security
 
+public enum KeychainItemSyncMode: Sendable, Equatable {
+    case local
+    case synchronizable
+}
+
 /// Keychain-backed credential storage using the shared access group
 /// so both the app and File Provider extension can access credentials.
 public final class KeychainService: CredentialProvider, @unchecked Sendable {
@@ -9,14 +14,17 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
     private let accessGroup: String?
     private let allowLegacyMigration: Bool
     private let legacyAccessGroups: [String]
+    public let syncMode: KeychainItemSyncMode
     private var usesDataProtectionKeychain: Bool { accessGroup != nil }
 
     public init(
         accessGroup: String? = AppGroupConstants.keychainAccessGroup,
+        syncMode: KeychainItemSyncMode = SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local,
         allowLegacyMigration: Bool = true,
         legacyAccessGroups: [String] = [AppGroupConstants.legacyKeychainAccessGroup].compactMap { $0 }
     ) {
         self.accessGroup = accessGroup
+        self.syncMode = syncMode
         self.allowLegacyMigration = allowLegacyMigration
         self.legacyAccessGroups = legacyAccessGroups.filter { $0 != accessGroup }
     }
@@ -246,6 +254,9 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
         if useDataProtectionKeychain {
             query[kSecUseDataProtectionKeychain as String] = true
         }
+        if syncMode == .synchronizable {
+            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
+        }
         return query
     }
 
@@ -253,6 +264,41 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
         let msg = SecCopyErrorMessageString(status, nil) as String? ?? "Unknown Keychain error (\(status))"
         return NSError(domain: NSOSStatusErrorDomain, code: Int(status),
                        userInfo: [NSLocalizedDescriptionKey: msg])
+    }
+
+    public static func isSynchronizableKeychainAvailable(
+        accessGroup: String? = AppGroupConstants.keychainAccessGroup
+    ) -> Bool {
+        let probeAccount = "probe.\(UUID().uuidString)"
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.lollipopkit.mfuse.credentials.probe",
+            kSecAttrAccount as String: probeAccount,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
+            kSecValueData as String: Data("probe".utf8),
+        ]
+        if let accessGroup {
+            query[kSecAttrAccessGroup as String] = accessGroup
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+
+        let addStatus = SecItemAdd(query as CFDictionary, nil)
+        guard addStatus == errSecSuccess || addStatus == errSecDuplicateItem else {
+            return false
+        }
+
+        var readQuery = query
+        readQuery[kSecValueData as String] = nil
+        readQuery[kSecReturnData as String] = true
+        readQuery[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, &result)
+
+        let deleteStatus = SecItemDelete(query as CFDictionary)
+        let deleteSucceeded = deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound
+
+        return readStatus == errSecSuccess && deleteSucceeded && result as? Data != nil
     }
 }
 

@@ -19,16 +19,41 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Sync") {
+                Toggle(
+                    "iCloud Sync",
+                    isOn: Binding(
+                        get: { appSettings.iCloudSyncEnabled },
+                        set: { appSettings.setICloudSyncEnabled($0) }
+                    )
+                )
+                .disabled(appSettings.iCloudSyncToggleDisabled)
+
+                Text(appSettings.iCloudSyncStatusDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text(appSettings.iCloudSyncAvailabilityDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if appSettings.isUpdatingICloudSync {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
             Section("About") {
                 LabeledContent("Version", value: appSettings.versionString)
                 LabeledContent("Build", value: appSettings.buildString)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 220)
+        .frame(width: 460, height: 340)
         .padding(20)
         .task {
             appSettings.refreshLaunchAtLoginStatus()
+            await appSettings.refreshICloudSyncStatus()
         }
         .alert("Unable to Update Settings", isPresented: errorIsPresented) {
             Button("OK", role: .cancel) {

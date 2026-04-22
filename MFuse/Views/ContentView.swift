@@ -75,6 +75,11 @@ struct ContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .connectionStorageDidRefresh)) { _ in
+            Task {
+                await connectionManager.reloadConnectionsFromStorage()
+            }
+        }
     }
 
     private var emptyState: some View {

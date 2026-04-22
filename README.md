@@ -9,6 +9,8 @@ MFuse is a macOS app that exposes remote storage in Finder through File Provider
 
 Saved mounts can optionally enable `Auto-Mount on App Launch`. When combined with `Launch at Login`, those mounts will reconnect automatically after you sign in or restart your Mac.
 
+MFuse also includes an optional `iCloud Sync` toggle in Settings. When both `iCloud Drive` and `iCloud Keychain` are available, MFuse can sync saved connection configs and credentials across devices. Host keys are still local-only in v1.
+
 ## Screenshots
 
 <table>
@@ -112,6 +114,8 @@ For stable local signing, copy `project.local.example.yml` to `project.local.yml
 
 Unsigned or ad hoc signed builds can still launch, but macOS may ignore the File Provider extension because the App Group entitlement is not accepted at runtime. When that happens, mounts fail and Finder may show missing-file errors for the generated convenience shortcut.
 
+If you want to use `iCloud Sync`, the app target also needs a signing profile that authorizes the `iCloud.com.lollipopkit.mfuse` container and `CloudDocuments`. The File Provider extension does not access the ubiquity container directly, so its entitlement requirements stay limited to the shared App Group and Keychain access group.
+
 ## Common Commands
 
 ```bash
@@ -127,6 +131,8 @@ make clean      # remove build outputs
 `make debug-install-app` runs `scripts/release/build-and-install-app.sh`, archives the `MFuse` scheme in `Debug` using the signing settings already configured in the current `MFuse.xcodeproj`, validates that the archived app and extension embed profiles authorizing the shared App Group, and then installs the archived app to `/Applications/MFuse.app`.
 
 This local install flow now follows the signing configuration that Xcode is already using for the targets. If the current project settings point to explicit provisioning profiles, those profiles still need to authorize `group.com.lollipopkit.mfuse.shared` in `com.apple.security.application-groups`.
+
+When testing `iCloud Sync`, make sure the app target profile also authorizes `iCloud.com.lollipopkit.mfuse`. Regenerate the project from `project.yml` after local signing changes so the checked-in entitlements and your local provisioning setup stay aligned.
 
 The generic `Mac Team Provisioning Profile: *` is not sufficient. It omits the App Group entitlement, which causes macOS Sequoia to show the “would like to access data from other apps” launch prompt, prevents the File Provider extension from appearing in System Settings, and leaves Finder mounts empty or redirected into the shared container. The install script still refuses to copy that broken build into `/Applications`.
 
