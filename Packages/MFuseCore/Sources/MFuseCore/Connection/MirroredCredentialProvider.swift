@@ -80,7 +80,7 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
         let sourceSharedStore: SharedCredentialStore
         let targetPrimary: KeychainService
         let targetSharedStore: SharedCredentialStore
-        let connectionIDs: [UUID]
+        let writtenConnectionIDs: Set<UUID>
     }
 
     private let lock = NSLock()
@@ -139,8 +139,8 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     public func delete(for connectionID: UUID) async throws {
         try await operationBarrier.withExclusive {
             let (primary, sharedStore) = storesSnapshot()
-            try await primary.delete(for: connectionID)
             try sharedStore.delete(for: connectionID)
+            try await primary.delete(for: connectionID)
         }
     }
 
@@ -194,6 +194,7 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
             let targetSharedStore = sharedStoreFactory(targetMode)
 
             var credentialsToMove: [UUID: Credential] = [:]
+            var writtenConnectionIDs: Set<UUID> = []
             for connectionID in connectionIDs {
                 if let credential = try await resolveCredential(
                     for: connectionID,
@@ -207,7 +208,9 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
             do {
                 for (connectionID, credential) in credentialsToMove {
                     try await targetPrimary.store(credential, for: connectionID)
+                    writtenConnectionIDs.insert(connectionID)
                     try targetSharedStore.store(credential, for: connectionID)
+                    writtenConnectionIDs.insert(connectionID)
                 }
             } catch {
                 let originalError = error
@@ -217,7 +220,7 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
                     sourceSharedStore: sourceSharedStore,
                     targetPrimary: targetPrimary,
                     targetSharedStore: targetSharedStore,
-                    connectionIDs: connectionIDs
+                    writtenConnectionIDs: writtenConnectionIDs
                 )
 
                 do {
@@ -282,7 +285,7 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
             }
         }
 
-        for connectionID in context.connectionIDs {
+        for connectionID in context.writtenConnectionIDs {
             do {
                 try await context.targetPrimary.delete(for: connectionID)
             } catch {
