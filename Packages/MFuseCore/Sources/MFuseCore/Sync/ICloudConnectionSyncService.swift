@@ -266,6 +266,9 @@ public actor ICloudConnectionSyncService {
                 mergedByID[record.id] = record
                 continue
             }
+            // In mergedByID, `record.eventDate >= existing.eventDate` makes cloud win ties.
+            // When timestamps are equal, prefer the cloud record so sync converges to the
+            // latest shared snapshot instead of reasserting stale local state.
             if record.eventDate >= existing.eventDate {
                 mergedByID[record.id] = record
             }

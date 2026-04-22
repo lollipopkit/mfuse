@@ -20,6 +20,14 @@ public enum MirroredCredentialSyncState: Sendable, Equatable {
 /// Uses Keychain as the app-facing credential store while mirroring credentials
 /// into the shared credential store used by the File Provider extension.
 public final class MirroredCredentialProvider: CredentialProvider, @unchecked Sendable {
+    private struct ModeTransitionContext {
+        let credentialsToMove: [UUID: Credential]
+        let sourcePrimary: CredentialProvider
+        let sourceSharedStore: SharedCredentialStore
+        let targetPrimary: KeychainService
+        let targetSharedStore: SharedCredentialStore
+        let connectionIDs: [UUID]
+    }
 
     private let lock = NSLock()
     private let primaryFactory: @Sendable (KeychainItemSyncMode) -> KeychainService
@@ -150,14 +158,14 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
                 try targetSharedStore.store(credential, for: connectionID)
             }
         } catch {
-            try? await rollbackModeTransition(
+            try? await rollbackModeTransition(context: ModeTransitionContext(
                 credentialsToMove: credentialsToMove,
                 sourcePrimary: sourcePrimary,
                 sourceSharedStore: sourceSharedStore,
                 targetPrimary: targetPrimary,
                 targetSharedStore: targetSharedStore,
                 connectionIDs: connectionIDs
-            )
+            ))
             throw error
         }
 
@@ -189,22 +197,15 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
         }
     }
 
-    private func rollbackModeTransition(
-        credentialsToMove: [UUID: Credential],
-        sourcePrimary: CredentialProvider,
-        sourceSharedStore: SharedCredentialStore,
-        targetPrimary: KeychainService,
-        targetSharedStore: SharedCredentialStore,
-        connectionIDs: [UUID]
-    ) async throws {
-        for (connectionID, credential) in credentialsToMove {
-            try? await sourcePrimary.store(credential, for: connectionID)
-            try? sourceSharedStore.store(credential, for: connectionID)
+    private func rollbackModeTransition(context: ModeTransitionContext) async throws {
+        for (connectionID, credential) in context.credentialsToMove {
+            try? await context.sourcePrimary.store(credential, for: connectionID)
+            try? context.sourceSharedStore.store(credential, for: connectionID)
         }
 
-        for connectionID in connectionIDs {
-            try? await targetPrimary.delete(for: connectionID)
-            try? targetSharedStore.delete(for: connectionID)
+        for connectionID in context.connectionIDs {
+            try? await context.targetPrimary.delete(for: connectionID)
+            try? context.targetSharedStore.delete(for: connectionID)
         }
     }
 

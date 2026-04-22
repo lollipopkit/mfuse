@@ -125,12 +125,20 @@ final class AppSettingsStore: ObservableObject {
 
     private func recoverICloudSyncStateAfterDisableFailure(connectionIDs: [UUID]) async {
         let recoveredEnabled: Bool
+        let persistedEnabled = SharedAppSettings.iCloudSyncEnabled
 
         do {
             let credentialSyncState = try await credentialProvider.credentialSyncState(for: connectionIDs)
-            recoveredEnabled = credentialSyncState == .synchronizable
+            switch credentialSyncState {
+            case .synchronizable:
+                recoveredEnabled = true
+            case .local:
+                recoveredEnabled = false
+            case .mixed:
+                recoveredEnabled = persistedEnabled
+            }
         } catch {
-            recoveredEnabled = false
+            recoveredEnabled = persistedEnabled
         }
 
         setPersistedICloudSyncEnabled(recoveredEnabled)
@@ -140,6 +148,7 @@ final class AppSettingsStore: ObservableObject {
         guard !isUpdatingICloudSync else {
             return
         }
+        errorMessage = nil
         isUpdatingICloudSync = true
         defer { isUpdatingICloudSync = false }
 
@@ -167,9 +176,19 @@ final class AppSettingsStore: ObservableObject {
                     NotificationCenter.default.post(name: .connectionStorageDidRefresh, object: nil)
                 }
             } catch {
-                try? await credentialProvider.setSynchronizableEnabled(false, connectionIDs: connectionIDs)
-                setPersistedICloudSyncEnabled(false)
-                errorMessage = error.localizedDescription
+                let syncErrorDescription = error.localizedDescription
+
+                do {
+                    try await credentialProvider.setSynchronizableEnabled(false, connectionIDs: connectionIDs)
+                    setPersistedICloudSyncEnabled(false)
+                    errorMessage = syncErrorDescription
+                } catch {
+                    let rollbackErrorDescription = error.localizedDescription
+                    let combinedErrorDescription =
+                        "Failed to enable iCloud Sync: \(syncErrorDescription) Rollback failed: \(rollbackErrorDescription)"
+                    NSLog("%@", combinedErrorDescription)
+                    errorMessage = combinedErrorDescription
+                }
             }
         } else {
             do {

@@ -301,7 +301,7 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
         let deleteStatus = SecItemDelete(query as CFDictionary)
         let deleteSucceeded = deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound
 
-        return readStatus == errSecSuccess && deleteSucceeded && result as? Data != nil
+        return readStatus == errSecSuccess && deleteSucceeded && result is Data
     }
 }
 
