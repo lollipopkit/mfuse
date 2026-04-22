@@ -10,7 +10,11 @@ public enum ConnectionManagerError: Error, LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .cleanupFailed(let id):
-            return "Failed to clean up connection \(id.uuidString) before removal"
+            return MFuseCoreL10n.string(
+                "connectionManager.error.cleanupFailed",
+                fallback: "Failed to clean up connection %@ before removal",
+                id.uuidString
+            )
         }
     }
 }
@@ -157,23 +161,46 @@ public final class ConnectionManager: ObservableObject {
                     fileSystem: previousFileSystem
                 )
             } catch {
-                restoreFailures.append("Failed to restore the removed connection: \(error.localizedDescription)")
+                restoreFailures.append(
+                    MFuseCoreL10n.string(
+                        "connectionManager.error.restoreRemovedConnection",
+                        fallback: "Failed to restore the removed connection: %@",
+                        error.localizedDescription
+                    )
+                )
             }
             if let savedCredential {
                 do {
                     try await credentialProvider.store(savedCredential, for: config.id)
                 } catch {
-                    restoreFailures.append("Failed to restore the credential: \(error.localizedDescription)")
+                    restoreFailures.append(
+                        MFuseCoreL10n.string(
+                            "connectionManager.error.restoreCredential",
+                            fallback: "Failed to restore the credential: %@",
+                            error.localizedDescription
+                        )
+                    )
                 }
             }
             if !restoreFailures.isEmpty {
                 let restoreFailureSummary = restoreFailures.joined(separator: " ")
                 throw RemoteFileSystemError.operationFailed(
-                    "Failed to delete credential for connection \(config.id.uuidString): \(credentialDeleteError.localizedDescription). \(restoreFailureSummary)"
+                    MFuseCoreL10n.string(
+                        "connectionManager.error.deleteCredentialWithRestoreFailures",
+                        fallback: "Failed to delete credential for connection %@: %@. %@",
+                        config.id.uuidString,
+                        credentialDeleteError.localizedDescription,
+                        restoreFailureSummary
+                    )
                 )
             }
             throw RemoteFileSystemError.operationFailed(
-                "Failed to delete credential for connection \(config.id.uuidString); restored the connection and credential so removal can be retried: \(credentialDeleteError.localizedDescription)"
+                MFuseCoreL10n.string(
+                    "connectionManager.error.deleteCredentialRecovered",
+                    fallback: "Failed to delete credential for connection %@; restored the connection and credential so removal can be retried: %@",
+                    config.id.uuidString,
+                    credentialDeleteError.localizedDescription
+                )
             )
         }
         connectionGenerations.removeValue(forKey: config.id)
@@ -215,7 +242,13 @@ public final class ConnectionManager: ObservableObject {
                       !interruptedConnectionIDs.contains(id) else {
                     return
                 }
-                let errorState = ConnectionState.error("Unsupported backend: \(config.backendType.displayName)")
+                let errorState = ConnectionState.error(
+                    MFuseCoreL10n.string(
+                        "connectionManager.error.unsupportedBackend",
+                        fallback: "Unsupported backend: %@",
+                        config.backendType.displayName
+                    )
+                )
                 states[id] = errorState
                 onStateChange?(config, errorState)
                 return

@@ -15,7 +15,11 @@ public final class DomainManager: ObservableObject {
 
         var errorDescription: String? {
             let details = errors.map { "\($0.id): \($0.error.localizedDescription)" }.joined(separator: "; ")
-            return "Failed to remove one or more stale File Provider domains: \(details)"
+            return AppL10n.string(
+                "domain.sync.error.removeStaleDomains",
+                fallback: "Failed to remove one or more stale File Provider domains: %@",
+                details
+            )
         }
     }
 

@@ -1,0 +1,19 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "fileprovider.timeout" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Timed out while %@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "执行“%@”时超时" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "執行「%@」時逾時" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Tiempo de espera agotado durante %@ " } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ の処理中にタイムアウトしました" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "%@ 중 시간 초과" } },
+        "it" : { "stringUnit" : { "state" : "translated", "value" : "Tempo scaduto durante %@ " } },
+        "id" : { "stringUnit" : { "state" : "translated", "value" : "Waktu habis saat %@ " } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Délai dépassé pendant %@ " } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

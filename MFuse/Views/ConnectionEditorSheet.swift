@@ -176,7 +176,7 @@ struct ConnectionEditorSheet: View {
                     if methods.count > 1 {
                         Picker("Method", selection: $authMethod) {
                             ForEach(methods, id: \.self) { method in
-                                Text(method.rawValue.capitalized).tag(method)
+                                Text(method.displayName).tag(method)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -385,7 +385,12 @@ struct ConnectionEditorSheet: View {
                 )
             } catch {
                 throw RemoteFileSystemError.operationFailed(
-                    "Unable to read private key at \(privateKeyPath): \(error.localizedDescription)"
+                    AppL10n.string(
+                        "editor.error.readPrivateKey",
+                        fallback: "Unable to read private key at %@: %@",
+                        privateKeyPath,
+                        error.localizedDescription
+                    )
                 )
             }
         case .agent:
@@ -486,7 +491,10 @@ struct ConnectionEditorSheet: View {
         case .googleDrive:
             guard !gdClientID.isEmpty, !gdRedirectURI.isEmpty else {
                 throw RemoteFileSystemError.operationFailed(
-                    "Google Drive requires both OAuth Client ID and Redirect URI"
+                    AppL10n.string(
+                        "editor.error.googleDriveOAuthFieldsRequired",
+                        fallback: "Google Drive requires both OAuth Client ID and Redirect URI"
+                    )
                 )
             }
             params["clientID"] = gdClientID

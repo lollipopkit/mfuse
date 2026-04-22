@@ -28,7 +28,7 @@ struct ConnectionDetailView: View {
                     LabeledContent("Port", value: "\(config.port)")
                     LabeledContent("Username", value: config.username)
                     LabeledContent("Remote Path", value: config.remotePath)
-                    LabeledContent("Auth", value: config.authMethod.rawValue.capitalized)
+                    LabeledContent("Auth", value: config.authMethod.displayName)
                 }
 
                 Section("Mount") {

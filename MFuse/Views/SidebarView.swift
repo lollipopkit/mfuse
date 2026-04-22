@@ -154,7 +154,12 @@ struct SidebarView: View {
                         }
                     }
                 } catch {
-                    let message = "Failed to remove mount \(config.id.uuidString): \(String(describing: error))"
+                    let message = AppL10n.string(
+                        "sidebar.error.removeMount",
+                        fallback: "Failed to remove mount %@: %@",
+                        config.id.uuidString,
+                        String(describing: error)
+                    )
                     logger.error(
                         "\(message, privacy: .public)"
                     )

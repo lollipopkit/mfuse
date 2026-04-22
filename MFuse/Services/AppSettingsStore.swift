@@ -37,11 +37,13 @@ final class AppSettingsStore: ObservableObject {
     }
 
     var versionString: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? AppL10n.string("settings.unknown", fallback: "Unknown")
     }
 
     var buildString: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? AppL10n.string("settings.unknown", fallback: "Unknown")
     }
 
     var iCloudSyncToggleDisabled: Bool {
@@ -54,15 +56,30 @@ final class AppSettingsStore: ObservableObject {
 
         switch status {
         case .enabled:
-            launchAtLoginStatusDescription = "MFuse will launch automatically after you sign in."
+            launchAtLoginStatusDescription = AppL10n.string(
+                "settings.launchAtLogin.enabled",
+                fallback: "MFuse will launch automatically after you sign in."
+            )
         case .notRegistered:
-            launchAtLoginStatusDescription = "Launch at login is off."
+            launchAtLoginStatusDescription = AppL10n.string(
+                "settings.launchAtLogin.notRegistered",
+                fallback: "Launch at login is off."
+            )
         case .requiresApproval:
-            launchAtLoginStatusDescription = "Launch at login needs approval in System Settings."
+            launchAtLoginStatusDescription = AppL10n.string(
+                "settings.launchAtLogin.requiresApproval",
+                fallback: "Launch at login needs approval in System Settings."
+            )
         case .notFound:
-            launchAtLoginStatusDescription = "Move MFuse into /Applications before enabling launch at login."
+            launchAtLoginStatusDescription = AppL10n.string(
+                "settings.launchAtLogin.notFound",
+                fallback: "Move MFuse into /Applications before enabling launch at login."
+            )
         @unknown default:
-            launchAtLoginStatusDescription = "Launch at login status is unavailable."
+            launchAtLoginStatusDescription = AppL10n.string(
+                "settings.launchAtLogin.unavailable",
+                fallback: "Launch at login status is unavailable."
+            )
         }
     }
 
@@ -72,13 +89,22 @@ final class AppSettingsStore: ObservableObject {
         iCloudSyncCanBeEnabled = currentICloudAvailability.canEnableSync
 
         if iCloudSyncEnabled {
-            iCloudSyncStatusDescription = "Syncs connection configs and credentials across devices with iCloud."
+            iCloudSyncStatusDescription = AppL10n.string(
+                "settings.icloud.enabled",
+                fallback: "Syncs connection configs and credentials across devices with iCloud."
+            )
         } else {
-            iCloudSyncStatusDescription = "Keep connection configs and credentials in sync across devices with iCloud."
+            iCloudSyncStatusDescription = AppL10n.string(
+                "settings.icloud.disabled",
+                fallback: "Keep connection configs and credentials in sync across devices with iCloud."
+            )
         }
 
         if currentICloudAvailability.canEnableSync {
-            iCloudSyncAvailabilityDescription = "Requires both iCloud Drive and iCloud Keychain."
+            iCloudSyncAvailabilityDescription = AppL10n.string(
+                "settings.icloud.requirements",
+                fallback: "Requires both iCloud Drive and iCloud Keychain."
+            )
         } else {
             iCloudSyncAvailabilityDescription = currentICloudAvailability.unavailableReasons.joined(separator: " ")
         }
@@ -202,8 +228,12 @@ final class AppSettingsStore: ObservableObject {
                     errorMessage = syncErrorDescription
                 } catch {
                     let rollbackErrorDescription = error.localizedDescription
-                    let combinedErrorDescription =
-                        "Failed to enable iCloud Sync: \(syncErrorDescription) Rollback failed: \(rollbackErrorDescription)"
+                    let combinedErrorDescription = AppL10n.string(
+                        "settings.icloud.enableRollbackFailed",
+                        fallback: "Failed to enable iCloud Sync: %@ Rollback failed: %@",
+                        syncErrorDescription,
+                        rollbackErrorDescription
+                    )
                     await recoverICloudSyncStateAfterEnableRollbackFailure(connectionIDs: connectionIDs)
                     NSLog("%@", combinedErrorDescription)
                     errorMessage = combinedErrorDescription

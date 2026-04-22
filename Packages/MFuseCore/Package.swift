@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MFuseCore",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "MFuseCore", targets: ["MFuseCore"]),
@@ -15,6 +16,9 @@ let package = Package(
             name: "MFuseCore",
             dependencies: [
                 .product(name: "BLAKE3", package: "blake3-swift"),
+            ],
+            resources: [
+                .process("Resources"),
             ],
             linkerSettings: [
                 .linkedFramework("FileProvider"),

@@ -14,10 +14,14 @@ public enum ConnectionState: Sendable, Equatable {
 
     public var statusText: String {
         switch self {
-        case .disconnected:     return "Disconnected"
-        case .connecting:       return "Connecting…"
-        case .connected:        return "Connected"
-        case .error(let msg):   return "Error: \(msg)"
+        case .disconnected:
+            return MFuseCoreL10n.string("connection.disconnected", fallback: "Disconnected")
+        case .connecting:
+            return MFuseCoreL10n.string("connection.connecting", fallback: "Connecting…")
+        case .connected:
+            return MFuseCoreL10n.string("connection.connected", fallback: "Connected")
+        case .error(let msg):
+            return MFuseCoreL10n.string("connection.error", fallback: "Error: %@", msg)
         }
     }
 

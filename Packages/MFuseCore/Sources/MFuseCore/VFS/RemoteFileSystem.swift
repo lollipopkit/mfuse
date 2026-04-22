@@ -17,21 +17,21 @@ public enum RemoteFileSystemError: Error, Sendable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .notConnected:
-            return "Not connected"
+            return MFuseCoreL10n.string("remote.notConnected", fallback: "Not connected")
         case .connectionFailed(let message):
-            return "Connection failed: \(message)"
+            return MFuseCoreL10n.string("remote.connectionFailed", fallback: "Connection failed: %@", message)
         case .authenticationFailed:
-            return "Authentication failed"
+            return MFuseCoreL10n.string("remote.authenticationFailed", fallback: "Authentication failed")
         case .notFound(let path):
-            return "Remote path not found: \(path.absoluteString)"
+            return MFuseCoreL10n.string("remote.notFound", fallback: "Remote path not found: %@", path.absoluteString)
         case .alreadyExists(let path):
-            return "Remote path already exists: \(path.absoluteString)"
+            return MFuseCoreL10n.string("remote.alreadyExists", fallback: "Remote path already exists: %@", path.absoluteString)
         case .notDirectory(let path):
-            return "Remote path is not a directory: \(path.absoluteString)"
+            return MFuseCoreL10n.string("remote.notDirectory", fallback: "Remote path is not a directory: %@", path.absoluteString)
         case .notFile(let path):
-            return "Remote path is not a file: \(path.absoluteString)"
+            return MFuseCoreL10n.string("remote.notFile", fallback: "Remote path is not a file: %@", path.absoluteString)
         case .permissionDenied(let path):
-            return "Permission denied: \(path.absoluteString)"
+            return MFuseCoreL10n.string("remote.permissionDenied", fallback: "Permission denied: %@", path.absoluteString)
         case .operationFailed(let message):
             return message
         case .unsupported(let message):
@@ -113,25 +113,50 @@ public extension RemoteFileSystem {
 
     func readFile(at path: RemotePath, offset: UInt64, length: UInt32) async throws -> Data {
         _ = (path, offset, length)
-        throw RemoteFileSystemError.unsupported("Range reads must be implemented by the backend")
+        throw RemoteFileSystemError.unsupported(
+            MFuseCoreL10n.string(
+                "remote.unsupported.rangeReads",
+                fallback: "Range reads must be implemented by the backend"
+            )
+        )
     }
 
     func copy(from source: RemotePath, to destination: RemotePath) async throws {
         _ = (source, destination)
-        throw RemoteFileSystemError.unsupported("Streaming copy not supported by default")
+        throw RemoteFileSystemError.unsupported(
+            MFuseCoreL10n.string(
+                "remote.unsupported.streamingCopy",
+                fallback: "Streaming copy not supported by default"
+            )
+        )
     }
 
     func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
         _ = (path, localFileURL)
-        throw RemoteFileSystemError.unsupported("Streaming writes from local files must be implemented by the backend")
+        throw RemoteFileSystemError.unsupported(
+            MFuseCoreL10n.string(
+                "remote.unsupported.streamingWrites",
+                fallback: "Streaming writes from local files must be implemented by the backend"
+            )
+        )
     }
 
     func createFile(at path: RemotePath, from localFileURL: URL) async throws {
         _ = (path, localFileURL)
-        throw RemoteFileSystemError.unsupported("Streaming creates from local files must be implemented by the backend")
+        throw RemoteFileSystemError.unsupported(
+            MFuseCoreL10n.string(
+                "remote.unsupported.streamingCreates",
+                fallback: "Streaming creates from local files must be implemented by the backend"
+            )
+        )
     }
 
     func setPermissions(_ permissions: UInt16, at path: RemotePath) async throws {
-        throw RemoteFileSystemError.unsupported("setPermissions")
+        throw RemoteFileSystemError.unsupported(
+            MFuseCoreL10n.string(
+                "remote.unsupported.setPermissions",
+                fallback: "setPermissions"
+            )
+        )
     }
 }
