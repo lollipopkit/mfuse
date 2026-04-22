@@ -50,16 +50,30 @@ public final class DomainManager: ObservableObject {
         let existingStatesByID = Dictionary(
             uniqueKeysWithValues: existingDomainStates.map { ($0.identifier, $0) }
         )
+        var errors: [(id: String, error: Error)] = []
 
         for config in connectionManager.connections {
-            try await mountProvider.ensureRegistered(config: config)
+            do {
+                try await mountProvider.ensureRegistered(config: config)
+            } catch {
+                errors.append((id: config.domainIdentifier, error: error))
+                continue
+            }
 
             if existingStatesByID[config.domainIdentifier]?.isDisconnected != false {
                 try? await mountProvider.disconnect(config: config)
             }
         }
 
-        try await removeStaleDomainsAndSymlinks()
+        do {
+            try await removeStaleDomainsAndSymlinks()
+        } catch let syncError as SyncDomainsError {
+            errors.append(contentsOf: syncError.errors)
+        }
+
+        if !errors.isEmpty {
+            throw SyncDomainsError(errors: errors)
+        }
     }
 
     private func removeStaleDomainsAndSymlinks() async throws {
