@@ -160,7 +160,6 @@ actor MockMountProvider: MountProvider {
     func ensureRegistered(config: ConnectionConfig) async throws {
         ensureRegisteredInvocations.append(config.domainIdentifier)
         registeredDomainIDs.insert(config.domainIdentifier)
-        disconnectedDomainIDs.remove(config.domainIdentifier)
     }
 
     func unregister(config: ConnectionConfig) async throws {
