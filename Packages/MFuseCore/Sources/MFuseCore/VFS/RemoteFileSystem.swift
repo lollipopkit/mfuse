@@ -155,7 +155,7 @@ public extension RemoteFileSystem {
         throw RemoteFileSystemError.unsupported(
             MFuseCoreL10n.string(
                 "remote.unsupported.setPermissions",
-                fallback: "setPermissions"
+                fallback: "Changing permissions is not supported for remote files"
             )
         )
     }

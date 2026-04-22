@@ -44,7 +44,7 @@ final class NotificationService {
             title: AppL10n.string("notification.mountError.title", fallback: "Mount Error"),
             body: AppL10n.string(
                 "notification.mountError.body",
-                fallback: "%@: %@",
+                fallback: "%1$@: %2$@",
                 name,
                 error
             ),

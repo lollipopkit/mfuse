@@ -30,7 +30,7 @@
 "remote.unsupported.streamingCopy" = "默认不支持流式复制";
 "remote.unsupported.streamingWrites" = "后端必须实现从本地文件流式写入";
 "remote.unsupported.streamingCreates" = "后端必须实现从本地文件流式创建";
-"remote.unsupported.setPermissions" = "setPermissions";
+"remote.unsupported.setPermissions" = "不支持更改远程文件的权限";
 "icloud.record.missingConfigForLiveRecord" = "iCloud 连接记录 %@ 的存活条目缺少配置。";
 "icloud.availability.driveUnavailable" = "MFuse 的 iCloud Drive 不可用。";
 "icloud.availability.keychainUnavailable" = "MFuse 的 iCloud Keychain 不可用。";

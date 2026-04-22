@@ -30,7 +30,7 @@
 "remote.unsupported.streamingCopy" = "ストリーミングコピーはデフォルトではサポートされていません";
 "remote.unsupported.streamingWrites" = "ローカルファイルからのストリーミング書き込みはバックエンドで実装する必要があります";
 "remote.unsupported.streamingCreates" = "ローカルファイルからのストリーミング作成はバックエンドで実装する必要があります";
-"remote.unsupported.setPermissions" = "setPermissions";
+"remote.unsupported.setPermissions" = "リモートファイルの権限変更はサポートされていません";
 "icloud.record.missingConfigForLiveRecord" = "iCloud 接続レコード %@ には有効な項目の設定がありません。";
 "icloud.availability.driveUnavailable" = "MFuse で iCloud Drive を利用できません。";
 "icloud.availability.keychainUnavailable" = "MFuse で iCloud キーチェーンを利用できません。";

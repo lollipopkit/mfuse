@@ -30,7 +30,7 @@
 "remote.unsupported.streamingCopy" = "La copia in streaming non è supportata per impostazione predefinita";
 "remote.unsupported.streamingWrites" = "Le scritture in streaming da file locali devono essere implementate dal backend";
 "remote.unsupported.streamingCreates" = "Le creazioni in streaming da file locali devono essere implementate dal backend";
-"remote.unsupported.setPermissions" = "setPermissions";
+"remote.unsupported.setPermissions" = "La modifica dei permessi non è supportata per i file remoti";
 "icloud.record.missingConfigForLiveRecord" = "Nel record di connessione iCloud %@ manca la configurazione per una voce attiva.";
 "icloud.availability.driveUnavailable" = "iCloud Drive non è disponibile per MFuse.";
 "icloud.availability.keychainUnavailable" = "iCloud Keychain non è disponibile per MFuse.";

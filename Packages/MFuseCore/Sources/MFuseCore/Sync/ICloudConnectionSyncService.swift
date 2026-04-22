@@ -265,7 +265,10 @@ public actor ICloudConnectionSyncService {
             domain: "ICloudConnectionSyncService",
             code: 2,
             userInfo: [
-                NSLocalizedDescriptionKey: "Local or cloud connection state changed during iCloud synchronization. Please retry."
+                NSLocalizedDescriptionKey: MFuseCoreL10n.string(
+                    "icloud.sync.stateChangedDuringSync",
+                    fallback: "Local or cloud connection state changed during iCloud synchronization. Please retry."
+                )
             ]
         )
     }

@@ -30,7 +30,7 @@
 "remote.unsupported.streamingCopy" = "스트리밍 복사는 기본적으로 지원되지 않습니다";
 "remote.unsupported.streamingWrites" = "로컬 파일에서의 스트리밍 쓰기는 백엔드에서 구현해야 합니다";
 "remote.unsupported.streamingCreates" = "로컬 파일에서의 스트리밍 생성은 백엔드에서 구현해야 합니다";
-"remote.unsupported.setPermissions" = "setPermissions";
+"remote.unsupported.setPermissions" = "원격 파일의 권한 변경은 지원되지 않습니다";
 "icloud.record.missingConfigForLiveRecord" = "iCloud 연결 레코드 %@에 활성 항목용 구성이 없습니다.";
 "icloud.availability.driveUnavailable" = "MFuse에서 iCloud Drive를 사용할 수 없습니다.";
 "icloud.availability.keychainUnavailable" = "MFuse에서 iCloud 키체인을 사용할 수 없습니다.";

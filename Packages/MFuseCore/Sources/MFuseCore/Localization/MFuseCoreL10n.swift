@@ -2,6 +2,8 @@ import Foundation
 
 enum MFuseCoreL10n {
     private static let table = "Localizable"
+    private static let cacheLock = NSLock()
+    private static var cachedStrings: [String: [String: String]] = [:]
 
     static func string(
         _ key: String,
@@ -25,23 +27,13 @@ enum MFuseCoreL10n {
 
         let candidates = localizationCandidates(for: localeIdentifier)
         for candidate in candidates {
-            guard let url = Bundle.module.url(
-                forResource: table,
-                withExtension: "strings",
-                subdirectory: nil,
-                localization: candidate
-            ) else {
-                continue
-            }
-            guard let dictionary = NSDictionary(contentsOf: url) as? [String: String],
-                  let value = dictionary[key] else {
+            guard let value = localizedStrings(for: candidate, table: table)?[key] else {
                 continue
             }
             return value
         }
 
-        let fallbackValue = Bundle.module.localizedString(forKey: key, value: nil, table: table)
-        return fallbackValue == key ? nil : fallbackValue
+        return nil
     }
 
     private static func localizationCandidates(for localeIdentifier: String) -> [String] {
@@ -55,5 +47,30 @@ enum MFuseCoreL10n {
             let languageCode = normalized.split(separator: "-").first.map(String.init)
             return [normalized, localeIdentifier, languageCode].compactMap { $0 }
         }
+    }
+
+    private static func localizedStrings(for localization: String, table: String) -> [String: String]? {
+        let cacheKey = "\(localization)|\(table)"
+
+        cacheLock.lock()
+        if let cached = cachedStrings[cacheKey] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        guard let url = Bundle.module.url(
+            forResource: table,
+            withExtension: "strings",
+            subdirectory: nil,
+            localization: localization
+        ), let dictionary = NSDictionary(contentsOf: url) as? [String: String] else {
+            return nil
+        }
+
+        cacheLock.lock()
+        cachedStrings[cacheKey] = dictionary
+        cacheLock.unlock()
+        return dictionary
     }
 }

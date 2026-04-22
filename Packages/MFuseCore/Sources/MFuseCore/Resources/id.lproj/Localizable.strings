@@ -30,7 +30,7 @@
 "remote.unsupported.streamingCopy" = "Salin streaming tidak didukung secara default";
 "remote.unsupported.streamingWrites" = "Penulisan streaming dari file lokal harus diimplementasikan oleh backend";
 "remote.unsupported.streamingCreates" = "Pembuatan streaming dari file lokal harus diimplementasikan oleh backend";
-"remote.unsupported.setPermissions" = "setPermissions";
+"remote.unsupported.setPermissions" = "Mengubah izin tidak didukung untuk file jarak jauh";
 "icloud.record.missingConfigForLiveRecord" = "Rekaman koneksi iCloud %@ tidak memiliki konfigurasi untuk entri aktif.";
 "icloud.availability.driveUnavailable" = "iCloud Drive tidak tersedia untuk MFuse.";
 "icloud.availability.keychainUnavailable" = "iCloud Keychain tidak tersedia untuk MFuse.";

@@ -116,7 +116,14 @@ final class BackendTypeTests: XCTestCase {
     }
 
     func testAuthMethodDisplayNameUsesLocalizationResources() {
-        XCTAssertEqual(AuthMethod.password.displayName, "Password")
+        XCTAssertEqual(
+            AuthMethod.password.displayName,
+            MFuseCoreL10n.string(
+                "auth.password",
+                localeIdentifier: "en",
+                fallback: "Password"
+            )
+        )
         XCTAssertEqual(
             MFuseCoreL10n.string(
                 "auth.publicKey",

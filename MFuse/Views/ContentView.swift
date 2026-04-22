@@ -43,12 +43,12 @@ struct ContentView: View {
                 ExtensionGuideView()
             }
         )
-        .alert("Unable to Save Mount", isPresented: saveErrorIsPresented) {
-            Button("OK", role: .cancel) {
+        .alert(AppL10n.string("content.error.unableToSaveMount", fallback: "Unable to Save Mount"), isPresented: saveErrorIsPresented) {
+            Button(AppL10n.string("common.action.ok", fallback: "OK"), role: .cancel) {
                 saveErrorMessage = nil
             }
         } message: {
-            Text(saveErrorMessage ?? "An unknown error occurred.")
+            Text(saveErrorMessage ?? AppL10n.string("common.error.unknown", fallback: "An unknown error occurred."))
         }
         .onReceive(connectionManager.$needsExtensionSetup) { needs in
             if needs {
@@ -58,7 +58,7 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: showNewEditor) {
-                    Label("Add Mount", systemImage: "plus")
+                    Label(AppL10n.string("content.action.addMount", fallback: "Add Mount"), systemImage: "plus")
                 }
             }
         }
@@ -95,12 +95,12 @@ struct ContentView: View {
             Image(systemName: "externaldrive.connected.to.line.below")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("No Mount Selected")
+            Text(AppL10n.string("content.empty.title", fallback: "No Mount Selected"))
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("Select a saved mount from the sidebar or add a new one.")
+            Text(AppL10n.string("content.empty.subtitle", fallback: "Select a saved mount from the sidebar or add a new one."))
                 .foregroundStyle(.tertiary)
-            Button("Add Mount") { showNewEditor() }
+            Button(AppL10n.string("content.action.addMount", fallback: "Add Mount")) { showNewEditor() }
                 .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

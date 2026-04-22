@@ -14,7 +14,7 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selectedConnection) {
-            Section("Mounts") {
+            Section(AppL10n.string("sidebar.section.mounts", fallback: "Mounts")) {
                 ForEach(connectionManager.connections) { config in
                     connectionRow(config)
                         .tag(config)
@@ -25,13 +25,13 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("MFuse")
-        .alert("Unable to Remove Mount", isPresented: removalErrorIsPresented) {
-            Button("OK", role: .cancel) {
+        .navigationTitle(AppL10n.string("sidebar.title", fallback: "MFuse"))
+        .alert(AppL10n.string("sidebar.error.unableToRemoveMount", fallback: "Unable to Remove Mount"), isPresented: removalErrorIsPresented) {
+            Button(AppL10n.string("common.action.ok", fallback: "OK"), role: .cancel) {
                 removalErrorMessage = nil
             }
         } message: {
-            Text(removalErrorMessage ?? "An unknown error occurred.")
+            Text(removalErrorMessage ?? AppL10n.string("common.error.unknown", fallback: "An unknown error occurred."))
         }
         .safeAreaInset(edge: .bottom) {
             HStack {
@@ -41,7 +41,7 @@ struct SidebarView: View {
                 .buttonStyle(.borderless)
                 Spacer()
                 Menu {
-                    Button("Mount All") {
+                    Button(AppL10n.string("common.action.mountAll", fallback: "Mount All")) {
                         Task {
                             let configsToMount = connectionManager.connections.filter {
                                 !connectionManager.effectiveMountState(for: $0.id).isMounted
@@ -55,7 +55,7 @@ struct SidebarView: View {
                             }
                         }
                     }
-                    Button("Unmount All") {
+                    Button(AppL10n.string("common.action.unmountAll", fallback: "Unmount All")) {
                         Task {
                             let configsToUnmount = connectionManager.connections.filter {
                                 connectionManager.effectiveMountState(for: $0.id).isMounted
@@ -119,19 +119,19 @@ struct SidebarView: View {
     private func contextMenu(for config: ConnectionConfig) -> some View {
         let mount = connectionManager.effectiveMountState(for: config.id)
         if case .mounting = mount {
-            Button("Mounting…") {}
+            Button(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…")) {}
                 .disabled(true)
         } else if mount.isMounted {
-            Button("Unmount") {
+            Button(AppL10n.string("common.action.unmount", fallback: "Unmount")) {
                 Task { await connectionManager.disconnect(config.id) }
             }
         } else {
-            Button("Mount") {
+            Button(AppL10n.string("common.action.mount", fallback: "Mount")) {
                 Task { await connectionManager.connect(config.id) }
             }
         }
         if mount.isMounted {
-            Button("Reveal in Finder") {
+            Button(AppL10n.string("common.action.revealInFinder", fallback: "Reveal in Finder")) {
                 Task {
                     if let targetURL = await connectionManager.resolveFinderURL(for: config) {
                         await MainActor.run {
@@ -142,8 +142,8 @@ struct SidebarView: View {
             }
         }
         Divider()
-        Button("Edit…") { onEdit(config) }
-        Button("Remove Mount", role: .destructive) {
+        Button(AppL10n.string("common.action.editEllipsis", fallback: "Edit…")) { onEdit(config) }
+        Button(AppL10n.string("sidebar.action.removeMount", fallback: "Remove Mount"), role: .destructive) {
             Task {
                 do {
                     await connectionManager.disconnect(config.id)
