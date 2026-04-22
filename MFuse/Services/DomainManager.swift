@@ -62,7 +62,16 @@ public final class DomainManager: ObservableObject {
                 continue
             }
 
-            if existingStatesByID[config.domainIdentifier]?.isDisconnected != false {
+            let shouldRemainDisconnected: Bool
+            if let existingState = existingStatesByID[config.domainIdentifier] {
+                shouldRemainDisconnected = existingState.isDisconnected
+            } else {
+                // Newly reconciled domains should stay unmounted until the user
+                // explicitly connects them or auto-mount runs.
+                shouldRemainDisconnected = true
+            }
+
+            if shouldRemainDisconnected {
                 try? await mountProvider.disconnect(config: config)
             }
         }
