@@ -32,7 +32,9 @@ public final class DomainManager: ObservableObject {
     }
 
     /// Sync current connections with File Provider domains.
-    /// Reconciles saved connections with File Provider domains.
+    /// Reconciles saved connections with File Provider domains so partial save-time
+    /// registration failures can be retried and stale system state can be cleaned up
+    /// during startup.
     public func syncDomains() async throws {
         try await repairReplicatedDomainRegistrationIfNeeded()
         try await reconcileDomainsAndSymlinks()

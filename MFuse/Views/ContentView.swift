@@ -134,13 +134,23 @@ struct ContentView: View {
                     }
                     throw error
                 }
-                try await connectionManager.syncSavedConnectionRegistration(
-                    config,
-                    previousConfig: previousConfig
-                )
                 await MainActor.run {
                     selectedConnection = config
                     editorPresentation = nil
+                }
+                do {
+                    try await connectionManager.syncSavedConnectionRegistration(
+                        config,
+                        previousConfig: previousConfig
+                    )
+                } catch {
+                    await MainActor.run {
+                        saveErrorMessage = AppL10n.string(
+                            "content.error.savedButDomainSyncFailed",
+                            fallback: "The connection was saved, but File Provider domain sync failed: %@. MFuse will retry reconciliation on the next launch.",
+                            error.localizedDescription
+                        )
+                    }
                 }
             } catch {
                 await MainActor.run {
