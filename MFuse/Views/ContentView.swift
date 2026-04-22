@@ -126,10 +126,6 @@ struct ContentView: View {
                     } else {
                         try connectionManager.add(config)
                     }
-                    try await connectionManager.syncSavedConnectionRegistration(
-                        config,
-                        previousConfig: previousConfig
-                    )
                 } catch {
                     if let previousCredential {
                         try? await credentialProvider.store(previousCredential, for: config.id)
@@ -138,6 +134,10 @@ struct ContentView: View {
                     }
                     throw error
                 }
+                try await connectionManager.syncSavedConnectionRegistration(
+                    config,
+                    previousConfig: previousConfig
+                )
                 await MainActor.run {
                     selectedConnection = config
                     editorPresentation = nil
