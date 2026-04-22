@@ -37,10 +37,10 @@
 "icloud.sync.disabled" = "iCloud 同期は無効です。";
 "icloud.sync.stateChangedDuringSync" = "iCloud 同期中にローカルまたはクラウドの接続状態が変更されました。再試行してください。";
 "credential.error.unsupportedPrimaryProvider" = "現在の認証情報プロバイダは iCloud キーチェーン移行をサポートしていません。";
-"credential.error.modeTransitionFailed" = "認証情報モードの切り替えに失敗しました: %@。ロールバックにも失敗しました: %@";
+"credential.error.modeTransitionFailed" = "認証情報モードの切り替えに失敗しました: %1$@。ロールバックにも失敗しました: %2$@";
 "connectionManager.error.cleanupFailed" = "削除前の接続 %@ のクリーンアップに失敗しました";
 "connectionManager.error.restoreRemovedConnection" = "削除した接続の復元に失敗しました: %@";
 "connectionManager.error.restoreCredential" = "認証情報の復元に失敗しました: %@";
-"connectionManager.error.deleteCredentialWithRestoreFailures" = "接続 %@ の認証情報の削除に失敗しました: %@。%@";
-"connectionManager.error.deleteCredentialRecovered" = "接続 %@ の認証情報の削除に失敗しました。再試行できるよう接続と認証情報を復元しました: %@";
+"connectionManager.error.deleteCredentialWithRestoreFailures" = "接続 %1$@ の認証情報の削除に失敗しました: %2$@。%3$@";
+"connectionManager.error.deleteCredentialRecovered" = "接続 %1$@ の認証情報の削除に失敗しました。再試行できるよう接続と認証情報を復元しました: %2$@";
 "connectionManager.error.unsupportedBackend" = "未対応のバックエンド: %@";

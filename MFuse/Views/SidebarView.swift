@@ -161,7 +161,7 @@ struct SidebarView: View {
                         String(describing: error)
                     )
                     logger.error(
-                        "\(message, privacy: .public)"
+                        "Failed to remove mount for connection \(config.id.uuidString, privacy: .private): \(String(describing: error), privacy: .private)"
                     )
                     await MainActor.run {
                         removalErrorMessage = message

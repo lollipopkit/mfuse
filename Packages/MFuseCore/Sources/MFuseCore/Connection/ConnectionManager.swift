@@ -368,7 +368,9 @@ public final class ConnectionManager: ObservableObject {
                 try await mp.removeSymlink(for: config)
             } catch {
                 let message = "Failed to remove symlink for \(config.name): \(describe(error))"
-                logger.error("\(message, privacy: .public)")
+                logger.error(
+                    "Failed to remove symlink for connection \(config.name, privacy: .private): \(self.describe(error), privacy: .private)"
+                )
                 cleanupFailures.append(message)
             }
 
@@ -376,7 +378,9 @@ public final class ConnectionManager: ObservableObject {
                 try await mp.unmount(config: config)
             } catch {
                 let message = "Failed to unmount \(config.name): \(describe(error))"
-                logger.error("\(message, privacy: .public)")
+                logger.error(
+                    "Failed to unmount connection \(config.name, privacy: .private): \(self.describe(error), privacy: .private)"
+                )
                 cleanupFailures.append(message)
             }
         }
@@ -388,7 +392,9 @@ public final class ConnectionManager: ObservableObject {
             } catch {
                 let targetName = config?.name ?? id.uuidString
                 let message = "Failed to disconnect filesystem for \(targetName): \(describe(error))"
-                logger.error("\(message, privacy: .public)")
+                logger.error(
+                    "Failed to disconnect filesystem for target \(targetName, privacy: .private): \(self.describe(error), privacy: .private)"
+                )
                 cleanupFailures.append(message)
             }
         }
@@ -853,7 +859,9 @@ public final class ConnectionManager: ObservableObject {
             return nil
         } catch {
             let message = "Failed to disconnect filesystem for \(config.name) \(context): \(describe(error))"
-            logger.error("\(message, privacy: .public)")
+            logger.error(
+                "Failed to disconnect filesystem for connection \(config.name, privacy: .private) \(context, privacy: .private): \(self.describe(error), privacy: .private)"
+            )
             return message
         }
     }

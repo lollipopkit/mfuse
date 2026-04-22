@@ -69,6 +69,10 @@ enum MFuseCoreL10n {
         }
 
         cacheLock.lock()
+        if let cached = cachedStrings[cacheKey] {
+            cacheLock.unlock()
+            return cached
+        }
         cachedStrings[cacheKey] = dictionary
         cacheLock.unlock()
         return dictionary

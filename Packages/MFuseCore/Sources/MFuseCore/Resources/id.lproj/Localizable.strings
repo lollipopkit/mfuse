@@ -37,10 +37,10 @@
 "icloud.sync.disabled" = "Sinkronisasi iCloud dinonaktifkan.";
 "icloud.sync.stateChangedDuringSync" = "Status koneksi lokal atau cloud berubah saat sinkronisasi iCloud. Coba lagi.";
 "credential.error.unsupportedPrimaryProvider" = "Penyedia kredensial saat ini tidak mendukung migrasi iCloud Keychain.";
-"credential.error.modeTransitionFailed" = "Transisi mode kredensial gagal: %@. Rollback juga gagal: %@";
+"credential.error.modeTransitionFailed" = "Transisi mode kredensial gagal: %1$@. Rollback juga gagal: %2$@";
 "connectionManager.error.cleanupFailed" = "Gagal membersihkan koneksi %@ sebelum dihapus";
 "connectionManager.error.restoreRemovedConnection" = "Gagal memulihkan koneksi yang dihapus: %@";
 "connectionManager.error.restoreCredential" = "Gagal memulihkan kredensial: %@";
-"connectionManager.error.deleteCredentialWithRestoreFailures" = "Gagal menghapus kredensial untuk koneksi %@: %@. %@";
-"connectionManager.error.deleteCredentialRecovered" = "Gagal menghapus kredensial untuk koneksi %@; koneksi dan kredensial dipulihkan agar bisa dicoba lagi: %@";
+"connectionManager.error.deleteCredentialWithRestoreFailures" = "Gagal menghapus kredensial untuk koneksi %1$@: %2$@. %3$@";
+"connectionManager.error.deleteCredentialRecovered" = "Gagal menghapus kredensial untuk koneksi %1$@; koneksi dan kredensial dipulihkan agar bisa dicoba lagi: %2$@";
 "connectionManager.error.unsupportedBackend" = "Backend tidak didukung: %@";

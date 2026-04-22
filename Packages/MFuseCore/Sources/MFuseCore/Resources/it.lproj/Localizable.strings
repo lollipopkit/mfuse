@@ -37,10 +37,10 @@
 "icloud.sync.disabled" = "La sincronizzazione iCloud è disattivata.";
 "icloud.sync.stateChangedDuringSync" = "Lo stato delle connessioni locali o cloud è cambiato durante la sincronizzazione iCloud. Riprova.";
 "credential.error.unsupportedPrimaryProvider" = "L'attuale provider di credenziali non supporta la migrazione di iCloud Keychain.";
-"credential.error.modeTransitionFailed" = "Transizione della modalità credenziali non riuscita: %@. Ripristino non riuscito: %@";
+"credential.error.modeTransitionFailed" = "Transizione della modalità credenziali non riuscita: %1$@. Ripristino non riuscito: %2$@";
 "connectionManager.error.cleanupFailed" = "Impossibile ripulire la connessione %@ prima della rimozione";
 "connectionManager.error.restoreRemovedConnection" = "Impossibile ripristinare la connessione rimossa: %@";
 "connectionManager.error.restoreCredential" = "Impossibile ripristinare la credenziale: %@";
-"connectionManager.error.deleteCredentialWithRestoreFailures" = "Impossibile eliminare la credenziale per la connessione %@: %@. %@";
-"connectionManager.error.deleteCredentialRecovered" = "Impossibile eliminare la credenziale per la connessione %@; connessione e credenziale sono state ripristinate per riprovare: %@";
+"connectionManager.error.deleteCredentialWithRestoreFailures" = "Impossibile eliminare la credenziale per la connessione %1$@: %2$@. %3$@";
+"connectionManager.error.deleteCredentialRecovered" = "Impossibile eliminare la credenziale per la connessione %1$@; connessione e credenziale sono state ripristinate per riprovare: %2$@";
 "connectionManager.error.unsupportedBackend" = "Backend non supportato: %@";

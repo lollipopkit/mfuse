@@ -37,10 +37,10 @@
 "icloud.sync.disabled" = "iCloud 동기화가 비활성화되어 있습니다.";
 "icloud.sync.stateChangedDuringSync" = "iCloud 동기화 중 로컬 또는 클라우드 연결 상태가 변경되었습니다. 다시 시도하세요.";
 "credential.error.unsupportedPrimaryProvider" = "현재 자격 증명 공급자는 iCloud 키체인 마이그레이션을 지원하지 않습니다.";
-"credential.error.modeTransitionFailed" = "자격 증명 모드 전환에 실패했습니다: %@. 롤백에도 실패했습니다: %@";
+"credential.error.modeTransitionFailed" = "자격 증명 모드 전환에 실패했습니다: %1$@. 롤백에도 실패했습니다: %2$@";
 "connectionManager.error.cleanupFailed" = "삭제 전에 연결 %@ 정리에 실패했습니다";
 "connectionManager.error.restoreRemovedConnection" = "삭제된 연결 복원에 실패했습니다: %@";
 "connectionManager.error.restoreCredential" = "자격 증명 복원에 실패했습니다: %@";
-"connectionManager.error.deleteCredentialWithRestoreFailures" = "연결 %@의 자격 증명 삭제에 실패했습니다: %@. %@";
-"connectionManager.error.deleteCredentialRecovered" = "연결 %@의 자격 증명 삭제에 실패했지만 다시 시도할 수 있도록 연결과 자격 증명을 복원했습니다: %@";
+"connectionManager.error.deleteCredentialWithRestoreFailures" = "연결 %1$@의 자격 증명 삭제에 실패했습니다: %2$@. %3$@";
+"connectionManager.error.deleteCredentialRecovered" = "연결 %1$@의 자격 증명 삭제에 실패했지만 다시 시도할 수 있도록 연결과 자격 증명을 복원했습니다: %2$@";
 "connectionManager.error.unsupportedBackend" = "지원되지 않는 백엔드: %@";

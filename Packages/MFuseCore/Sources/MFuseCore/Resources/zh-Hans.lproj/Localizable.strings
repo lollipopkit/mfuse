@@ -37,10 +37,10 @@
 "icloud.sync.disabled" = "iCloud 同步已关闭。";
 "icloud.sync.stateChangedDuringSync" = "iCloud 同步期间本地或云端连接状态发生变化，请重试。";
 "credential.error.unsupportedPrimaryProvider" = "当前凭证提供器不支持 iCloud Keychain 迁移。";
-"credential.error.modeTransitionFailed" = "凭证模式切换失败：%@。回滚失败：%@";
+"credential.error.modeTransitionFailed" = "凭证模式切换失败：%1$@。回滚失败：%2$@";
 "connectionManager.error.cleanupFailed" = "移除前清理连接 %@ 失败";
 "connectionManager.error.restoreRemovedConnection" = "恢复已移除的连接失败：%@";
 "connectionManager.error.restoreCredential" = "恢复凭证失败：%@";
-"connectionManager.error.deleteCredentialWithRestoreFailures" = "删除连接 %@ 的凭证失败：%@。%@";
-"connectionManager.error.deleteCredentialRecovered" = "删除连接 %@ 的凭证失败；已恢复连接和凭证，可稍后重试：%@";
+"connectionManager.error.deleteCredentialWithRestoreFailures" = "删除连接 %1$@ 的凭证失败：%2$@。%3$@";
+"connectionManager.error.deleteCredentialRecovered" = "删除连接 %1$@ 的凭证失败；已恢复连接和凭证，可稍后重试：%2$@";
 "connectionManager.error.unsupportedBackend" = "不支持的后端：%@";
