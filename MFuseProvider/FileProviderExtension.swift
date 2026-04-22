@@ -648,7 +648,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             "host is down",
             "network is down",
             "network is unreachable",
-            "timed out",
+            "timed out"
         ]
         return transientIndicators.contains { normalizedDescription.contains($0) }
     }

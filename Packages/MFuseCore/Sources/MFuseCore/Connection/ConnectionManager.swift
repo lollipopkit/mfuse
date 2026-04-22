@@ -546,10 +546,16 @@ public final class ConnectionManager: ObservableObject {
                         states[config.id] = .disconnected
                         scheduleMountResolution(for: config, using: mp)
                     } catch {
-                        states[config.id] = .disconnected
+                        let desc = "Failed to refresh mounted domain \(config.domainIdentifier): \(describe(error))"
+                        if isMissingFileProviderExtensionError(error) {
+                            needsExtensionSetup = true
+                        }
+                        let errorState = ConnectionState.error(desc)
+                        states[config.id] = errorState
+                        onStateChange?(config, errorState)
                         mountResolutionTasks[config.id]?.cancel()
                         mountResolutionTasks.removeValue(forKey: config.id)
-                        setMountState(.unmounted, for: config)
+                        setMountState(.error(desc), for: config)
                         try? await mp.removeSymlink(for: config)
                     }
                 } else {

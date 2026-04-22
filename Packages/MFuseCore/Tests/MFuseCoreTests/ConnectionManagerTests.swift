@@ -492,7 +492,9 @@ final class ConnectionManagerTests: XCTestCase {
         }
 
         XCTAssertEqual(manager.connections, [config])
-        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        guard case .error = manager.state(for: config.id) else {
+            return XCTFail("Expected connection error state after failed unmount cleanup")
+        }
         guard case .error(let message) = manager.mountState(for: config.id) else {
             return XCTFail("Expected mount error state after failed unmount cleanup")
         }

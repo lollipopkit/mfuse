@@ -6,6 +6,13 @@ import NIOFoundationCompat
 /// FTP/FTPS implementation of `RemoteFileSystem` using SwiftNIO.
 public actor FTPFileSystem: RemoteFileSystem {
     private static let uploadChunkSize = 1_048_576
+    private static let mdtmFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMddHHmmss"
+        return formatter
+    }()
 
     private let config: ConnectionConfig
     private let credential: Credential
@@ -21,7 +28,6 @@ public actor FTPFileSystem: RemoteFileSystem {
     // MARK: - Config Helpers
 
     private var useTLS: Bool { config.parameters["tls"] == "true" }
-    private var passiveMode: Bool { config.parameters["passive"] != "false" }
 
     // MARK: - Lifecycle
 
@@ -313,6 +319,11 @@ public actor FTPFileSystem: RemoteFileSystem {
         // Try DELE (file) first, then RMD (directory)
         let deleResp = try await conn.sendCommand("DELE \(remotePath)")
         if deleResp.code == 250 { return }
+        let normalizedDeleText = deleResp.text.lowercased()
+        if deleResp.code == 550 &&
+            (normalizedDeleText.contains("permission") || normalizedDeleText.contains("denied")) {
+            throw RemoteFileSystemError.operationFailed("Delete failed: \(deleResp.text)")
+        }
 
         let rmdResp = try await conn.sendCommand("RMD \(remotePath)")
         guard rmdResp.code == 250 else {
@@ -472,11 +483,7 @@ public actor FTPFileSystem: RemoteFileSystem {
         let parts = text.split(separator: " ")
         guard let rawTimeStr = parts.last else { return nil }
         let timeStr = String(rawTimeStr.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: true).first ?? rawTimeStr)
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.dateFormat = "yyyyMMddHHmmss"
-        return formatter.date(from: timeStr)
+        return Self.mdtmFormatter.date(from: timeStr)
     }
 
     private func validateTransferCompletion(_ response: FTPResponse, failurePrefix: String) throws {
