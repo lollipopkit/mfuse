@@ -123,7 +123,7 @@ public final class DomainManager: ObservableObject {
             domains = try await NSFileProviderManager.domains()
         } catch {
             errors.append(.init(id: "__domains__", operation: .listDomains, error: error))
-            throw SyncDomainsError(errors: errors)
+            domains = []
         }
 
         // Remove stale domains
@@ -174,6 +174,11 @@ public final class DomainManager: ObservableObject {
 
         do {
             try await NSFileProviderManager.removeAllDomains()
+            // File Provider domain removal completes asynchronously after the API returns.
+            // This fixed delay gives the system time to finish tearing down internal state
+            // before we re-register domains below. A future improvement could replace this
+            // with a configurable constant or a more reliable readiness signal/callback if
+            // Apple exposes one.
             try await Task.sleep(nanoseconds: 500_000_000)
         } catch {
             throw SyncDomainsError(

@@ -163,6 +163,9 @@ actor MockMountProvider: MountProvider {
     }
 
     func unregister(config: ConnectionConfig) async throws {
+        guard registeredDomainIDs.contains(config.domainIdentifier) else {
+            throw MountError.domainNotFound(config.domainIdentifier)
+        }
         unregisterInvocations.append(config.domainIdentifier)
         if unmountShouldFail {
             throw MountError.unmountFailed("mock unmount failure")
@@ -181,12 +184,12 @@ actor MockMountProvider: MountProvider {
     }
 
     func disconnect(config: ConnectionConfig) async throws {
+        guard registeredDomainIDs.contains(config.domainIdentifier) else {
+            throw MountError.domainNotFound(config.domainIdentifier)
+        }
         disconnectInvocations.append(config.domainIdentifier)
         if unmountShouldFail {
             throw MountError.unmountFailed("mock unmount failure")
-        }
-        guard registeredDomainIDs.contains(config.domainIdentifier) else {
-            throw MountError.domainNotFound(config.domainIdentifier)
         }
         disconnectedDomainIDs.insert(config.domainIdentifier)
     }
@@ -587,6 +590,29 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(disconnectCalled)
     }
 
+    func testReloadConnectionsFromStorageUnregistersRemovedDomainAfterCleanup() async throws {
+        let config = ConnectionConfig(
+            name: "ReloadRemoved",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await manager.connect(config.id)
+        try storage.saveConnections([])
+
+        await manager.reloadConnectionsFromStorage()
+
+        XCTAssertFalse(manager.connections.contains(where: { $0.id == config.id }))
+        let unregisterInvocations = await mountProvider.unregisterInvocations
+        XCTAssertEqual(unregisterInvocations, [config.domainIdentifier])
+        let domainStates = try await mountProvider.domainStates()
+        XCTAssertTrue(domainStates.isEmpty)
+    }
+
     func testConnectSuccess() async throws {
         let config = ConnectionConfig(
             name: "Test",
@@ -755,6 +781,27 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(message.contains("mock unmount failure"))
         XCTAssertNil(manager.fileSystem(for: config.id))
         XCTAssertEqual(manager.mountState(for: config.id), .error(message))
+    }
+
+    func testDisconnectTreatsMissingDomainAsAlreadyCleanedUp() async throws {
+        let config = ConnectionConfig(
+            name: "MissingDomain",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        await mountProvider.setDomainStates([])
+        await manager.disconnect(config.id)
+
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+        XCTAssertNil(manager.fileSystem(for: config.id))
     }
 
     func testSyncSavedConnectionRegistrationKeepsPreregisteredDomainUnmounted() async throws {

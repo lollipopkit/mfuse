@@ -395,6 +395,10 @@ public final class ConnectionManager: ObservableObject {
 
             do {
                 try await mp.disconnect(config: config)
+            } catch MountError.domainNotFound {
+                logger.notice(
+                    "Skipping disconnect for missing domain \(config.domainIdentifier, privacy: .public)"
+                )
             } catch {
                 let message = "Failed to disconnect domain for \(config.name): \(describe(error))"
                 logger.error(
@@ -556,6 +560,7 @@ public final class ConnectionManager: ObservableObject {
                 nextConnections.append(removedConfig)
                 continue
             }
+            try? await mountProvider?.unregister(config: removedConfig)
 
             states.removeValue(forKey: removedConfig.id)
             mountStates.removeValue(forKey: removedConfig.id)
