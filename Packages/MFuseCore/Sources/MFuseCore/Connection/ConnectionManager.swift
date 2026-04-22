@@ -64,7 +64,14 @@ public final class ConnectionManager: ObservableObject {
         self.storage = storage
         self.credentialProvider = credentialProvider
         self.registry = registry
-        self.connections = storage.loadConnections()
+        do {
+            self.connections = try storage.loadConnections()
+        } catch {
+            self.connections = []
+            logger.error(
+                "Failed to load initial connections from storage: \(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     // MARK: - CRUD
@@ -471,13 +478,27 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func reloadConnectionsFromStorage() async {
-        let reloadedConnections = storage.loadConnections()
+        let reloadedConnections: [ConnectionConfig]
+        do {
+            reloadedConnections = try storage.loadConnections()
+        } catch {
+            logger.error(
+                "Failed to reload connections from storage: \(String(describing: error), privacy: .public)"
+            )
+            return
+        }
         let currentConnections = connections
         let currentIDs = Set(currentConnections.map(\.id))
         let reloadedIDs = Set(reloadedConnections.map(\.id))
+        var nextConnections = reloadedConnections
 
         for removedConfig in currentConnections where !reloadedIDs.contains(removedConfig.id) {
             await disconnect(removedConfig.id, using: removedConfig)
+            guard isCleanupComplete(for: removedConfig.id) else {
+                nextConnections.append(removedConfig)
+                continue
+            }
+
             states.removeValue(forKey: removedConfig.id)
             mountStates.removeValue(forKey: removedConfig.id)
             fileSystems.removeValue(forKey: removedConfig.id)
@@ -490,8 +511,8 @@ public final class ConnectionManager: ObservableObject {
             mountResolutionTasks.removeValue(forKey: removedConfig.id)
         }
 
-        connections = reloadedConnections
-        for config in reloadedConnections where !currentIDs.contains(config.id) {
+        connections = nextConnections
+        for config in nextConnections where !currentIDs.contains(config.id) {
             states[config.id] = .disconnected
         }
     }

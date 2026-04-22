@@ -1,6 +1,17 @@
 import Foundation
 import os.log
 
+private enum ICloudConnectionRecordValidationError: Error, LocalizedError {
+    case missingConfigForLiveRecord(UUID)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingConfigForLiveRecord(let id):
+            return "iCloud connection record \(id.uuidString) is missing config for a live entry."
+        }
+    }
+}
+
 public struct ICloudSyncAvailability: Sendable, Equatable {
     public let isDriveAvailable: Bool
     public let isKeychainAvailable: Bool
@@ -72,6 +83,7 @@ public actor ICloudConnectionSyncService {
     private let keychainAvailabilityProbe: @Sendable () -> Bool
     private let now: @Sendable () -> Date
     private let connectionSaver: @Sendable ([ConnectionConfig]) throws -> Void
+    private let beforeWritingAttempt: @Sendable () throws -> Void
 
     public init(
         storage: SharedStorage,
@@ -86,12 +98,39 @@ public actor ICloudConnectionSyncService {
         },
         now: @escaping @Sendable () -> Date = { Date() },
         connectionSaver: (@Sendable ([ConnectionConfig]) throws -> Void)? = nil
+        ) {
+        self.storage = storage
+        self.fileManager = fileManager
+        self.ubiquityContainerURLProvider = ubiquityContainerURLProvider
+        self.keychainAvailabilityProbe = keychainAvailabilityProbe
+        self.now = now
+        self.beforeWritingAttempt = {}
+        self.connectionSaver = connectionSaver ?? { connections in
+            try storage.saveConnections(connections)
+        }
+    }
+
+    init(
+        storage: SharedStorage,
+        fileManager: FileManager = .default,
+        ubiquityContainerURLProvider: @escaping @Sendable () -> URL? = {
+            FileManager.default.url(
+                forUbiquityContainerIdentifier: AppGroupConstants.ubiquityContainerIdentifier
+            )
+        },
+        keychainAvailabilityProbe: @escaping @Sendable () -> Bool = {
+            KeychainService.isSynchronizableKeychainAvailable()
+        },
+        now: @escaping @Sendable () -> Date = { Date() },
+        connectionSaver: (@Sendable ([ConnectionConfig]) throws -> Void)? = nil,
+        beforeWritingAttempt: @escaping @Sendable () throws -> Void
     ) {
         self.storage = storage
         self.fileManager = fileManager
         self.ubiquityContainerURLProvider = ubiquityContainerURLProvider
         self.keychainAvailabilityProbe = keychainAvailabilityProbe
         self.now = now
+        self.beforeWritingAttempt = beforeWritingAttempt
         self.connectionSaver = connectionSaver ?? { connections in
             try storage.saveConnections(connections)
         }
@@ -117,6 +156,14 @@ public actor ICloudConnectionSyncService {
     }
 
     public func synchronize() throws -> ICloudConnectionSyncResult {
+        guard SharedAppSettings.iCloudSyncEnabled else {
+            throw NSError(
+                domain: "ICloudConnectionSyncService",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "iCloud Sync is disabled."]
+            )
+        }
+
         guard let cloudRootURL = ubiquityContainerURLProvider() else {
             throw NSError(
                 domain: "ICloudConnectionSyncService",
@@ -125,48 +172,80 @@ public actor ICloudConnectionSyncService {
             )
         }
 
-        let localConnections = storage.loadConnections()
-        let localRecords = try readRecordSet(at: localStateFileURL)
-        let cloudRecords = try readRecordSet(at: cloudRecordsFileURL(in: cloudRootURL))
-        let materializedLocalRecords = materializeLocalRecordSet(
-            liveConnections: localConnections,
-            base: localRecords
-        )
-        let mergedRecordSet = merge(local: materializedLocalRecords, cloud: cloudRecords)
-        let mergedConnections = liveConnections(from: mergedRecordSet)
-        let didUpdateLocalSnapshot = mergedConnections != localConnections
         let cloudURL = cloudRecordsFileURL(in: cloudRootURL)
+        let maxAttempts = 3
 
-        do {
-            try writeRecordSet(mergedRecordSet, to: cloudURL)
-            try writeRecordSet(mergedRecordSet, to: localStateFileURL)
-            if didUpdateLocalSnapshot {
-                try connectionSaver(mergedConnections)
+        for attempt in 1...maxAttempts {
+            let localConnections = try storage.loadConnections()
+            let localRecords = try readRecordSet(at: localStateFileURL)
+            let cloudRecords = try readRecordSet(at: cloudURL)
+            let materializedLocalRecords = materializeLocalRecordSet(
+                liveConnections: localConnections,
+                base: localRecords
+            )
+            let mergedRecordSet = merge(local: materializedLocalRecords, cloud: cloudRecords)
+            let mergedConnections = liveConnections(from: mergedRecordSet)
+            let didUpdateLocalSnapshot = mergedConnections != localConnections
+
+            try beforeWritingAttempt()
+
+            let currentLocalConnections = try storage.loadConnections()
+            let currentLocalRecords = try readRecordSet(at: localStateFileURL)
+            let currentCloudRecords = try readRecordSet(at: cloudURL)
+            guard currentLocalConnections == localConnections,
+                  currentLocalRecords == localRecords,
+                  currentCloudRecords == cloudRecords else {
+                if attempt < maxAttempts {
+                    continue
+                }
+                throw NSError(
+                    domain: "ICloudConnectionSyncService",
+                    code: 2,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Local or cloud connection state changed during iCloud synchronization. Please retry."
+                    ]
+                )
             }
-        } catch {
-            rollbackRecordSet(
-                cloudRecords,
-                at: cloudURL,
-                description: "cloud iCloud connection records"
+
+            do {
+                try writeRecordSet(mergedRecordSet, to: cloudURL)
+                try writeRecordSet(mergedRecordSet, to: localStateFileURL)
+                if didUpdateLocalSnapshot {
+                    try connectionSaver(mergedConnections)
+                }
+            } catch {
+                rollbackRecordSet(
+                    currentCloudRecords,
+                    at: cloudURL,
+                    description: "cloud iCloud connection records"
+                )
+                rollbackRecordSet(
+                    currentLocalRecords,
+                    at: localStateFileURL,
+                    description: "local iCloud connection state"
+                )
+                throw error
+            }
+
+            return ICloudConnectionSyncResult(
+                records: mergedRecordSet,
+                liveConnections: mergedConnections,
+                didUpdateLocalSnapshot: didUpdateLocalSnapshot
             )
-            rollbackRecordSet(
-                localRecords,
-                at: localStateFileURL,
-                description: "local iCloud connection state"
-            )
-            throw error
         }
 
-        return ICloudConnectionSyncResult(
-            records: mergedRecordSet,
-            liveConnections: mergedConnections,
-            didUpdateLocalSnapshot: didUpdateLocalSnapshot
+        throw NSError(
+            domain: "ICloudConnectionSyncService",
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Local or cloud connection state changed during iCloud synchronization. Please retry."
+            ]
         )
     }
 
     public func markCurrentStateAsBaseline() throws {
         let snapshot = ICloudConnectionRecordSet(
-            records: storage.loadConnections().map {
+            records: try storage.loadConnections().map {
                 ICloudConnectionRecord(id: $0.id, config: $0, updatedAt: now())
             }
         )
@@ -252,7 +331,7 @@ public actor ICloudConnectionSyncService {
         for (id, existing) in recordsByID where liveByID[id] == nil && existing.deletedAt == nil {
             recordsByID[id] = ICloudConnectionRecord(
                 id: id,
-                config: existing.config,
+                config: nil,
                 updatedAt: existing.updatedAt,
                 deletedAt: timestamp
             )
@@ -308,7 +387,16 @@ public actor ICloudConnectionSyncService {
             )
             throw readError
         }
+        if let recordSet {
+            try validate(recordSet: recordSet)
+        }
         return recordSet
+    }
+
+    private func validate(recordSet: ICloudConnectionRecordSet) throws {
+        for record in recordSet.records where record.deletedAt == nil && record.config == nil {
+            throw ICloudConnectionRecordValidationError.missingConfigForLiveRecord(record.id)
+        }
     }
 
     private func writeRecordSet(_ recordSet: ICloudConnectionRecordSet, to url: URL) throws {

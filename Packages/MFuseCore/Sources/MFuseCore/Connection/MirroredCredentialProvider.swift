@@ -11,6 +11,12 @@ public enum MirroredCredentialProviderError: Error, LocalizedError {
     }
 }
 
+public enum MirroredCredentialSyncState: Sendable, Equatable {
+    case local
+    case synchronizable
+    case mixed
+}
+
 /// Uses Keychain as the app-facing credential store while mirroring credentials
 /// into the shared credential store used by the File Provider extension.
 public final class MirroredCredentialProvider: CredentialProvider, @unchecked Sendable {
@@ -18,15 +24,36 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     private let lock = NSLock()
     private let primaryFactory: @Sendable (KeychainItemSyncMode) -> KeychainService
     private let sharedStoreFactory: @Sendable (KeychainItemSyncMode) -> SharedCredentialStore
+    private let credentialExistenceProbe: @Sendable (KeychainItemSyncMode, UUID) async throws -> Bool
     private var primary: CredentialProvider
     public private(set) var sharedStore: SharedCredentialStore
 
     public init(
         primary: CredentialProvider = KeychainService(),
-        sharedStore: SharedCredentialStore = SharedCredentialStore(allowLegacyKeychainMigration: true)
+        sharedStore: SharedCredentialStore = SharedCredentialStore(allowLegacyKeychainMigration: true),
+        primaryFactory: @escaping @Sendable (KeychainItemSyncMode) -> KeychainService = {
+            KeychainService(syncMode: $0)
+        },
+        sharedStoreFactory: @escaping @Sendable (KeychainItemSyncMode) -> SharedCredentialStore = {
+            SharedCredentialStore(syncMode: $0, allowLegacyKeychainMigration: true)
+        },
+        credentialExistenceProbe: (@Sendable (KeychainItemSyncMode, UUID) async throws -> Bool)? = nil
     ) {
-        self.primaryFactory = { KeychainService(syncMode: $0) }
-        self.sharedStoreFactory = { SharedCredentialStore(syncMode: $0, allowLegacyKeychainMigration: true) }
+        self.primaryFactory = primaryFactory
+        self.sharedStoreFactory = sharedStoreFactory
+        if let credentialExistenceProbe {
+            self.credentialExistenceProbe = credentialExistenceProbe
+        } else {
+            self.credentialExistenceProbe = { mode, connectionID in
+                let primary = primaryFactory(mode)
+                let sharedStore = sharedStoreFactory(mode)
+                if try await primary.credential(for: connectionID) != nil {
+                    return true
+                }
+
+                return try sharedStore.credential(for: connectionID) != nil
+            }
+        }
         self.primary = primary
         self.sharedStore = sharedStore
     }
@@ -64,6 +91,39 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
         try sharedStore.delete(for: connectionID)
     }
 
+    public func credentialSyncState(for connectionIDs: [UUID]) async throws -> MirroredCredentialSyncState {
+        guard !connectionIDs.isEmpty else {
+            return syncMode == .synchronizable ? .synchronizable : .local
+        }
+
+        var foundLocalCredential = false
+        var foundSynchronizableCredential = false
+
+        for connectionID in connectionIDs {
+            if try await credentialExistenceProbe(.local, connectionID) {
+                foundLocalCredential = true
+            }
+
+            if try await credentialExistenceProbe(.synchronizable, connectionID) {
+                foundSynchronizableCredential = true
+            }
+
+            if foundLocalCredential && foundSynchronizableCredential {
+                return .mixed
+            }
+        }
+
+        if foundSynchronizableCredential {
+            return .synchronizable
+        }
+
+        if foundLocalCredential {
+            return .local
+        }
+
+        return syncMode == .synchronizable ? .synchronizable : .local
+    }
+
     public func setSynchronizableEnabled(_ enabled: Bool, connectionIDs: [UUID]) async throws {
         let targetMode: KeychainItemSyncMode = enabled ? .synchronizable : .local
         let (sourcePrimary, sourceSharedStore) = storesSnapshot()
@@ -89,11 +149,6 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
                 try await targetPrimary.store(credential, for: connectionID)
                 try targetSharedStore.store(credential, for: connectionID)
             }
-
-            for connectionID in connectionIDs {
-                try await sourcePrimary.delete(for: connectionID)
-                try sourceSharedStore.delete(for: connectionID)
-            }
         } catch {
             try? await rollbackModeTransition(
                 credentialsToMove: credentialsToMove,
@@ -104,6 +159,28 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
                 connectionIDs: connectionIDs
             )
             throw error
+        }
+
+        for connectionID in connectionIDs {
+            do {
+                try await sourcePrimary.delete(for: connectionID)
+            } catch {
+                NSLog(
+                    "MFuse credential migration cleanup failed for source primary item %@: %@",
+                    connectionID.uuidString,
+                    error.localizedDescription
+                )
+            }
+
+            do {
+                try sourceSharedStore.delete(for: connectionID)
+            } catch {
+                NSLog(
+                    "MFuse credential migration cleanup failed for source shared item %@: %@",
+                    connectionID.uuidString,
+                    error.localizedDescription
+                )
+            }
         }
 
         lock.withLock {

@@ -10,11 +10,20 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         }
     }
 
+    private final class BoolBox: @unchecked Sendable {
+        var value: Bool
+
+        init(_ value: Bool) {
+            self.value = value
+        }
+    }
+
     private var containerURL: URL!
     private var cloudRootURL: URL!
 
     override func setUp() {
         super.setUp()
+        SharedAppSettings.setICloudSyncEnabled(true)
         containerURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MFuseCoreICloudLocal-\(UUID().uuidString)", isDirectory: true)
         cloudRootURL = FileManager.default.temporaryDirectory
@@ -28,6 +37,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         if let cloudRootURL {
             try? FileManager.default.removeItem(at: cloudRootURL)
         }
+        SharedAppSettings.setICloudSyncEnabled(false)
         super.tearDown()
     }
 
@@ -56,7 +66,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         let result = try await service.synchronize()
 
         XCTAssertEqual(Set(result.liveConnections), Set([localConfig, cloudConfig]))
-        XCTAssertEqual(Set(storage.loadConnections()), Set([localConfig, cloudConfig]))
+        XCTAssertEqual(Set(try storage.loadConnections()), Set([localConfig, cloudConfig]))
     }
 
     func testSynchronizePrefersNewerRecordForSameID() async throws {
@@ -90,7 +100,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         let result = try await service.synchronize()
 
         XCTAssertEqual(result.liveConnections, [cloudConfig])
-        XCTAssertEqual(storage.loadConnections(), [cloudConfig])
+        XCTAssertEqual(try storage.loadConnections(), [cloudConfig])
     }
 
     func testSynchronizeWritesTombstoneSoDeletedConnectionDoesNotReappear() async throws {
@@ -121,8 +131,9 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         let record = try XCTUnwrap(cloudRecordSet.records.first(where: { $0.id == config.id }))
 
         XCTAssertTrue(result.liveConnections.isEmpty)
-        XCTAssertEqual(storage.loadConnections(), [])
+        XCTAssertEqual(try storage.loadConnections(), [])
         XCTAssertEqual(record.deletedAt, dateBox.value)
+        XCTAssertNil(record.config)
     }
 
     func testSynchronizeKeepsDuplicateEndpointsWhenIDsDiffer() async throws {
@@ -201,7 +212,90 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
 
         XCTAssertEqual(try readCloudRecordSet(), previousCloudState)
         XCTAssertEqual(try readLocalStateRecordSet(), previousLocalState)
-        XCTAssertEqual(storage.loadConnections(), [localConfig])
+        XCTAssertEqual(try storage.loadConnections(), [localConfig])
+    }
+
+    func testSynchronizeRejectsLiveRecordWithoutConfig() async throws {
+        let storage = SharedStorage(containerURL: containerURL)
+        let dateBox = DateBox(Date(timeIntervalSince1970: 1_000))
+        let service = makeService(storage: storage, dateBox: dateBox)
+        let malformedID = UUID()
+
+        try writeCloudRecordSet(
+            ICloudConnectionRecordSet(records: [
+                ICloudConnectionRecord(id: malformedID, config: nil, updatedAt: dateBox.value),
+            ])
+        )
+
+        do {
+            _ = try await service.synchronize()
+            XCTFail("Expected synchronize to fail for a live iCloud record without config")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains(malformedID.uuidString))
+        }
+    }
+
+    func testSynchronizeRetriesWhenLocalConnectionsChangeBeforeWrite() async throws {
+        let storage = SharedStorage(containerURL: containerURL)
+        let dateBox = DateBox(Date(timeIntervalSince1970: 1_000))
+        let didInjectConcurrentChange = BoolBox(false)
+        let localConfig = ConnectionConfig(
+            name: "Local",
+            backendType: .sftp,
+            host: "local.example.com"
+        )
+        let concurrentConfig = ConnectionConfig(
+            name: "Concurrent",
+            backendType: .sftp,
+            host: "concurrent.example.com"
+        )
+        let cloudConfig = ConnectionConfig(
+            name: "Cloud",
+            backendType: .sftp,
+            host: "cloud.example.com"
+        )
+
+        try storage.saveConnections([localConfig])
+        try writeCloudRecordSet(
+            ICloudConnectionRecordSet(records: [
+                ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value),
+            ])
+        )
+
+        let service = ICloudConnectionSyncService(
+            storage: storage,
+            ubiquityContainerURLProvider: { [cloudRootURL] in cloudRootURL },
+            keychainAvailabilityProbe: { true },
+            now: { dateBox.value },
+            beforeWritingAttempt: {
+                guard !didInjectConcurrentChange.value else {
+                    return
+                }
+                didInjectConcurrentChange.value = true
+                try storage.saveConnections([localConfig, concurrentConfig])
+            }
+        )
+
+        let result = try await service.synchronize()
+
+        XCTAssertEqual(Set(result.liveConnections), Set([localConfig, concurrentConfig, cloudConfig]))
+        XCTAssertEqual(Set(try storage.loadConnections()), Set([localConfig, concurrentConfig, cloudConfig]))
+        XCTAssertTrue(didInjectConcurrentChange.value)
+    }
+
+    func testSynchronizeThrowsWhenICloudSyncIsDisabled() async throws {
+        let storage = SharedStorage(containerURL: containerURL)
+        let dateBox = DateBox(Date(timeIntervalSince1970: 1_000))
+        let service = makeService(storage: storage, dateBox: dateBox)
+        SharedAppSettings.setICloudSyncEnabled(false)
+
+        do {
+            _ = try await service.synchronize()
+            XCTFail("Expected synchronize to fail when iCloud sync is disabled")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, "ICloudConnectionSyncService")
+            XCTAssertEqual((error as NSError).code, 0)
+        }
     }
 
     private func makeService(

@@ -70,10 +70,10 @@ struct MFuseApp: App {
             registry: registry
         )
         manager.onLocalConnectionsDidChange = { _ in
-            guard SharedAppSettings.iCloudSyncEnabled else {
-                return
-            }
             Task { @MainActor in
+                guard SharedAppSettings.iCloudSyncEnabled else {
+                    return
+                }
                 do {
                     let result = try await iCloudSyncService.synchronize()
                     if result.didUpdateLocalSnapshot {

@@ -118,6 +118,24 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    private func setPersistedICloudSyncEnabled(_ enabled: Bool) {
+        SharedAppSettings.setICloudSyncEnabled(enabled)
+        iCloudSyncEnabled = enabled
+    }
+
+    private func recoverICloudSyncStateAfterDisableFailure(connectionIDs: [UUID]) async {
+        let recoveredEnabled: Bool
+
+        do {
+            let credentialSyncState = try await credentialProvider.credentialSyncState(for: connectionIDs)
+            recoveredEnabled = credentialSyncState == .synchronizable
+        } catch {
+            recoveredEnabled = false
+        }
+
+        setPersistedICloudSyncEnabled(recoveredEnabled)
+    }
+
     private func applyICloudSync(_ enabled: Bool) async {
         guard !isUpdatingICloudSync else {
             return
@@ -126,7 +144,13 @@ final class AppSettingsStore: ObservableObject {
         defer { isUpdatingICloudSync = false }
 
         await refreshICloudSyncStatus()
-        let connectionIDs = storage.loadConnections().map(\.id)
+        let connectionIDs: [UUID]
+        do {
+            connectionIDs = try storage.loadConnections().map(\.id)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
 
         if enabled {
             guard currentICloudAvailability.canEnableSync else {
@@ -137,26 +161,22 @@ final class AppSettingsStore: ObservableObject {
 
             do {
                 try await credentialProvider.setSynchronizableEnabled(true, connectionIDs: connectionIDs)
+                setPersistedICloudSyncEnabled(true)
                 let result = try await iCloudSyncService.synchronize()
-                SharedAppSettings.setICloudSyncEnabled(true)
-                iCloudSyncEnabled = true
                 if result.didUpdateLocalSnapshot {
                     NotificationCenter.default.post(name: .connectionStorageDidRefresh, object: nil)
                 }
             } catch {
                 try? await credentialProvider.setSynchronizableEnabled(false, connectionIDs: connectionIDs)
-                SharedAppSettings.setICloudSyncEnabled(false)
-                iCloudSyncEnabled = false
+                setPersistedICloudSyncEnabled(false)
                 errorMessage = error.localizedDescription
             }
         } else {
             do {
                 try await credentialProvider.setSynchronizableEnabled(false, connectionIDs: connectionIDs)
-                SharedAppSettings.setICloudSyncEnabled(false)
-                iCloudSyncEnabled = false
+                setPersistedICloudSyncEnabled(false)
             } catch {
-                SharedAppSettings.setICloudSyncEnabled(true)
-                iCloudSyncEnabled = true
+                await recoverICloudSyncStateAfterDisableFailure(connectionIDs: connectionIDs)
                 errorMessage = error.localizedDescription
             }
         }

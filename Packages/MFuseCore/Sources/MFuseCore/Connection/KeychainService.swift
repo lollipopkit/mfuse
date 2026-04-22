@@ -254,7 +254,10 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
         if useDataProtectionKeychain {
             query[kSecUseDataProtectionKeychain as String] = true
         }
-        if syncMode == .synchronizable {
+        switch syncMode {
+        case .local:
+            query[kSecAttrSynchronizable as String] = kCFBooleanFalse
+        case .synchronizable:
             query[kSecAttrSynchronizable as String] = kCFBooleanTrue
         }
         return query
