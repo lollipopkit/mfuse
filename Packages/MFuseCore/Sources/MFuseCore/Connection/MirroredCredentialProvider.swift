@@ -32,7 +32,9 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     private let lock = NSLock()
     private let primaryFactory: @Sendable (KeychainItemSyncMode) -> KeychainService
     private let sharedStoreFactory: @Sendable (KeychainItemSyncMode) -> SharedCredentialStore
-    private let credentialExistenceProbe: @Sendable (KeychainItemSyncMode, UUID) async throws -> Bool
+    private let customCredentialExistenceProbe: (@Sendable (KeychainItemSyncMode, UUID) async throws -> Bool)?
+    private var primaryStoreCache: [KeychainItemSyncMode: KeychainService] = [:]
+    private var sharedStoreCache: [KeychainItemSyncMode: SharedCredentialStore] = [:]
     private var primary: CredentialProvider
     public private(set) var sharedStore: SharedCredentialStore
 
@@ -49,19 +51,7 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     ) {
         self.primaryFactory = primaryFactory
         self.sharedStoreFactory = sharedStoreFactory
-        if let credentialExistenceProbe {
-            self.credentialExistenceProbe = credentialExistenceProbe
-        } else {
-            self.credentialExistenceProbe = { mode, connectionID in
-                let primary = primaryFactory(mode)
-                let sharedStore = sharedStoreFactory(mode)
-                if try await primary.credential(for: connectionID) != nil {
-                    return true
-                }
-
-                return try sharedStore.credential(for: connectionID) != nil
-            }
-        }
+        self.customCredentialExistenceProbe = credentialExistenceProbe
         self.primary = primary
         self.sharedStore = sharedStore
     }
@@ -108,11 +98,11 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
         var foundSynchronizableCredential = false
 
         for connectionID in connectionIDs {
-            if try await credentialExistenceProbe(.local, connectionID) {
+            if try await credentialExists(in: .local, for: connectionID) {
                 foundLocalCredential = true
             }
 
-            if try await credentialExistenceProbe(.synchronizable, connectionID) {
+            if try await credentialExists(in: .synchronizable, for: connectionID) {
                 foundSynchronizableCredential = true
             }
 
@@ -212,6 +202,45 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
     private func storesSnapshot() -> (CredentialProvider, SharedCredentialStore) {
         lock.withLock {
             (primary, sharedStore)
+        }
+    }
+
+    private func credentialExists(in mode: KeychainItemSyncMode, for connectionID: UUID) async throws -> Bool {
+        if let customCredentialExistenceProbe {
+            return try await customCredentialExistenceProbe(mode, connectionID)
+        }
+
+        let (primary, sharedStore) = cachedStores(for: mode)
+        if try await primary.credential(for: connectionID) != nil {
+            return true
+        }
+
+        return try sharedStore.credential(for: connectionID) != nil
+    }
+
+    private func cachedStores(
+        for mode: KeychainItemSyncMode
+    ) -> (primary: KeychainService, sharedStore: SharedCredentialStore) {
+        lock.withLock {
+            let primary: KeychainService
+            if let cachedPrimary = primaryStoreCache[mode] {
+                primary = cachedPrimary
+            } else {
+                let createdPrimary = primaryFactory(mode)
+                primaryStoreCache[mode] = createdPrimary
+                primary = createdPrimary
+            }
+
+            let sharedStore: SharedCredentialStore
+            if let cachedSharedStore = sharedStoreCache[mode] {
+                sharedStore = cachedSharedStore
+            } else {
+                let createdSharedStore = sharedStoreFactory(mode)
+                sharedStoreCache[mode] = createdSharedStore
+                sharedStore = createdSharedStore
+            }
+
+            return (primary, sharedStore)
         }
     }
 }

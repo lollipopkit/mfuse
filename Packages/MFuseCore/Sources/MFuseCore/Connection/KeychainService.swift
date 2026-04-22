@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-public enum KeychainItemSyncMode: Sendable, Equatable {
+public enum KeychainItemSyncMode: Sendable, Equatable, Hashable {
     case local
     case synchronizable
 }
@@ -279,7 +279,7 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
             kSecAttrAccount as String: probeAccount,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
             kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
-            kSecValueData as String: Data("probe".utf8),
+            kSecValueData as String: Data("probe".utf8)
         ]
         if let accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
