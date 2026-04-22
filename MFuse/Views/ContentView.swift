@@ -117,14 +117,19 @@ struct ContentView: View {
     private func saveConnection(_ config: ConnectionConfig, credential: Credential) {
         Task {
             do {
+                let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
                 let previousCredential = try await credentialProvider.credential(for: config.id)
                 try await credentialProvider.store(credential, for: config.id)
                 do {
-                    if connectionManager.connections.contains(where: { $0.id == config.id }) {
+                    if previousConfig != nil {
                         try connectionManager.update(config)
                     } else {
                         try connectionManager.add(config)
                     }
+                    try await connectionManager.syncSavedConnectionRegistration(
+                        config,
+                        previousConfig: previousConfig
+                    )
                 } catch {
                     if let previousCredential {
                         try? await credentialProvider.store(previousCredential, for: config.id)

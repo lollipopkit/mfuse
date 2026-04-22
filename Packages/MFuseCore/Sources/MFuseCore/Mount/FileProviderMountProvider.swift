@@ -23,7 +23,8 @@ public final class FileProviderMountProvider: MountProvider {
         self.symlinkBaseURL = symlinkBaseURL
     }
 
-    public func mount(config: ConnectionConfig) async throws {
+    public func ensureRegistered(config: ConnectionConfig) async throws {
+        let existingDomain = try await findDomain(for: config)
         let domain = try makeDomain(for: config)
 
         do {
@@ -56,35 +57,60 @@ public final class FileProviderMountProvider: MountProvider {
         do {
             try persistBootstrapConfig(for: config)
         } catch {
-            let persistError = error
-            do {
-                try await NSFileProviderManager.remove(domain)
-            } catch {
-                let rollbackError = error
-                Self.logger.error(
-                    "persistBootstrapConfig(for:) failed for domain \(domain.identifier.rawValue, privacy: .public): \(persistError.localizedDescription, privacy: .public); rollback via NSFileProviderManager.remove(domain) also failed: \(rollbackError.localizedDescription, privacy: .public)"
-                )
-                throw MountError.mountFailed(
-                    "persistBootstrapConfig(for:) failed for \(domain.identifier.rawValue): \(persistError.localizedDescription); rollback via NSFileProviderManager.remove(domain) failed: \(rollbackError.localizedDescription)"
-                )
+            if existingDomain == nil {
+                let persistError = error
+                do {
+                    try await NSFileProviderManager.remove(domain)
+                } catch {
+                    let rollbackError = error
+                    Self.logger.error(
+                        "persistBootstrapConfig(for:) failed for domain \(domain.identifier.rawValue, privacy: .public): \(persistError.localizedDescription, privacy: .public); rollback via NSFileProviderManager.remove(domain) also failed: \(rollbackError.localizedDescription, privacy: .public)"
+                    )
+                    throw MountError.mountFailed(
+                        "persistBootstrapConfig(for:) failed for \(domain.identifier.rawValue): \(persistError.localizedDescription); rollback via NSFileProviderManager.remove(domain) failed: \(rollbackError.localizedDescription)"
+                    )
+                }
             }
-            throw persistError
+            throw error
         }
     }
 
-    public func unmount(config: ConnectionConfig) async throws {
-        let domainID = NSFileProviderDomainIdentifier(rawValue: config.domainIdentifier)
-        let domains = try await NSFileProviderManager.domains()
-        guard let domain = domains.first(where: { $0.identifier == domainID }) else {
-            throw MountError.domainNotFound(config.domainIdentifier)
+    public func unregister(config: ConnectionConfig) async throws {
+        if let domain = try await findDomain(for: config) {
+            try await NSFileProviderManager.remove(domain)
         }
-        try await NSFileProviderManager.remove(domain)
         try removeBootstrapConfig(for: config)
     }
 
-    public func mountedDomains() async throws -> [String] {
+    public func reconnect(config: ConnectionConfig) async throws {
+        let domain = try await domainOrThrow(for: config)
+        try persistBootstrapConfig(for: config)
+        guard let manager = NSFileProviderManager(for: domain) else {
+            throw MountError.managerNotFound(config.domainIdentifier)
+        }
+        try await manager.reconnect()
+    }
+
+    public func disconnect(config: ConnectionConfig) async throws {
+        let domain = try await domainOrThrow(for: config)
+        try persistBootstrapConfig(for: config)
+        guard let manager = NSFileProviderManager(for: domain) else {
+            throw MountError.managerNotFound(config.domainIdentifier)
+        }
+        try await manager.disconnect(
+            reason: "Disconnected from MFuse",
+            options: []
+        )
+    }
+
+    public func domainStates() async throws -> [RegisteredDomainState] {
         let domains = try await NSFileProviderManager.domains()
-        return domains.map(\.identifier.rawValue)
+        return domains.map {
+            RegisteredDomainState(
+                identifier: $0.identifier.rawValue,
+                isDisconnected: $0.isDisconnected
+            )
+        }
     }
 
     public func signalEnumerator(for config: ConnectionConfig) async throws {

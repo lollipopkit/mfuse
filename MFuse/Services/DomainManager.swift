@@ -32,10 +32,10 @@ public final class DomainManager: ObservableObject {
     }
 
     /// Sync current connections with File Provider domains.
-    /// Removes stale domains that no longer have a corresponding connection.
+    /// Reconciles saved connections with File Provider domains.
     public func syncDomains() async throws {
         try await repairReplicatedDomainRegistrationIfNeeded()
-        try await removeStaleDomainsAndSymlinks()
+        try await reconcileDomainsAndSymlinks()
     }
 
     /// Remove currently registered MFuse domains that do not correspond to a saved connection.
@@ -45,17 +45,37 @@ public final class DomainManager: ObservableObject {
         try await removeStaleDomainsAndSymlinks()
     }
 
+    private func reconcileDomainsAndSymlinks() async throws {
+        let existingDomainStates = try await mountProvider.domainStates()
+        let existingStatesByID = Dictionary(
+            uniqueKeysWithValues: existingDomainStates.map { ($0.identifier, $0) }
+        )
+
+        for config in connectionManager.connections {
+            try await mountProvider.ensureRegistered(config: config)
+
+            if existingStatesByID[config.domainIdentifier]?.isDisconnected != false {
+                try? await mountProvider.disconnect(config: config)
+            }
+        }
+
+        try await removeStaleDomainsAndSymlinks()
+    }
+
     private func removeStaleDomainsAndSymlinks() async throws {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
-        let domains = try await NSFileProviderManager.domains()
+        let domainStates = try await mountProvider.domainStates()
         var errors: [(id: String, error: Error)] = []
 
         // Remove stale domains
-        for domain in domains where !knownIDs.contains(domain.identifier.rawValue) {
+        for domainState in domainStates where !knownIDs.contains(domainState.identifier) {
             do {
-                try await NSFileProviderManager.remove(domain)
+                let domains = try await NSFileProviderManager.domains()
+                if let domain = domains.first(where: { $0.identifier.rawValue == domainState.identifier }) {
+                    try await NSFileProviderManager.remove(domain)
+                }
             } catch {
-                errors.append((id: domain.identifier.rawValue, error: error))
+                errors.append((id: domainState.identifier, error: error))
             }
         }
 
@@ -86,7 +106,7 @@ public final class DomainManager: ObservableObject {
         }
 
         let existingDomains = try await NSFileProviderManager.domains()
-        let mountedDomainIDs = Set(existingDomains.map(\.identifier.rawValue))
+        let domainIDs = Set(existingDomains.map(\.identifier.rawValue))
         let knownConfigsByDomainID = Dictionary(
             uniqueKeysWithValues: connectionManager.connections.map { ($0.domainIdentifier, $0) }
         )
@@ -99,10 +119,10 @@ public final class DomainManager: ObservableObject {
             throw SyncDomainsError(errors: [("__all_domains__", error)])
         }
 
-        for domainID in mountedDomainIDs {
+        for domainID in domainIDs {
             guard let config = knownConfigsByDomainID[domainID] else { continue }
             do {
-                try await mountProvider.mount(config: config)
+                try await mountProvider.ensureRegistered(config: config)
             } catch {
                 errors.append((id: domainID, error: error))
             }

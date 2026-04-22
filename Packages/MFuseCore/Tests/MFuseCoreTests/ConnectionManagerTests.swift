@@ -110,9 +110,12 @@ actor MockFileSystem: RemoteFileSystem {
 
 actor MockMountProvider: MountProvider {
     let symlinkBaseURL: URL
-    var mountedDomainIDs: [String] = []
-    var mountInvocations: [String] = []
-    var unmountInvocations: [String] = []
+    var registeredDomainIDs: Set<String> = []
+    var disconnectedDomainIDs: Set<String> = []
+    var ensureRegisteredInvocations: [String] = []
+    var unregisterInvocations: [String] = []
+    var reconnectInvocations: [String] = []
+    var disconnectInvocations: [String] = []
     var signalInvocations: [String] = []
     var mountURLs: [String: URL] = [:]
     var createSymlinkInvocations: [String] = []
@@ -127,8 +130,11 @@ actor MockMountProvider: MountProvider {
         self.symlinkBaseURL = symlinkBaseURL
     }
 
-    func setMountedDomainIDs(_ ids: [String]) {
-        mountedDomainIDs = ids
+    func setDomainStates(_ states: [RegisteredDomainState]) {
+        registeredDomainIDs = Set(states.map(\.identifier))
+        disconnectedDomainIDs = Set(
+            states.filter(\.isDisconnected).map(\.identifier)
+        )
     }
 
     func setMountURL(_ url: URL, for domainID: String) {
@@ -151,24 +157,46 @@ actor MockMountProvider: MountProvider {
         removeSymlinkShouldFail = shouldFail
     }
 
-    func mount(config: ConnectionConfig) async throws {
-        mountInvocations.append(config.domainIdentifier)
-        if !mountedDomainIDs.contains(config.domainIdentifier) {
-            mountedDomainIDs.append(config.domainIdentifier)
-        }
+    func ensureRegistered(config: ConnectionConfig) async throws {
+        ensureRegisteredInvocations.append(config.domainIdentifier)
+        registeredDomainIDs.insert(config.domainIdentifier)
+        disconnectedDomainIDs.remove(config.domainIdentifier)
     }
 
-    func unmount(config: ConnectionConfig) async throws {
-        unmountInvocations.append(config.domainIdentifier)
+    func unregister(config: ConnectionConfig) async throws {
+        unregisterInvocations.append(config.domainIdentifier)
         if unmountShouldFail {
             throw MountError.unmountFailed("mock unmount failure")
         }
-        mountedDomainIDs.removeAll { $0 == config.domainIdentifier }
+        registeredDomainIDs.remove(config.domainIdentifier)
+        disconnectedDomainIDs.remove(config.domainIdentifier)
         removedDomains.append(config.domainIdentifier)
     }
 
-    func mountedDomains() async throws -> [String] {
-        mountedDomainIDs
+    func reconnect(config: ConnectionConfig) async throws {
+        reconnectInvocations.append(config.domainIdentifier)
+        registeredDomainIDs.insert(config.domainIdentifier)
+        disconnectedDomainIDs.remove(config.domainIdentifier)
+    }
+
+    func disconnect(config: ConnectionConfig) async throws {
+        disconnectInvocations.append(config.domainIdentifier)
+        if unmountShouldFail {
+            throw MountError.unmountFailed("mock unmount failure")
+        }
+        guard registeredDomainIDs.contains(config.domainIdentifier) else {
+            throw MountError.domainNotFound(config.domainIdentifier)
+        }
+        disconnectedDomainIDs.insert(config.domainIdentifier)
+    }
+
+    func domainStates() async throws -> [RegisteredDomainState] {
+        registeredDomainIDs.map {
+            RegisteredDomainState(
+                identifier: $0,
+                isDisconnected: disconnectedDomainIDs.contains($0)
+            )
+        }
     }
 
     func signalEnumerator(for config: ConnectionConfig) async throws {
@@ -728,6 +756,26 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(manager.mountState(for: config.id), .error(message))
     }
 
+    func testSyncSavedConnectionRegistrationKeepsPreregisteredDomainUnmounted() async throws {
+        let config = ConnectionConfig(
+            name: "saved",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        try manager.add(config)
+
+        try await manager.syncSavedConnectionRegistration(config, previousConfig: nil)
+
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .unmounted)
+        let domainStates = try await mountProvider.domainStates()
+        XCTAssertEqual(
+            domainStates,
+            [RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: true)]
+        )
+    }
+
     func testReconnectSkipsConnectWhenAlreadyConnectedBeforeRetryFires() async throws {
         let config = ConnectionConfig(
             name: "ReconnectSkip",
@@ -861,7 +909,9 @@ final class ConnectionManagerTests: XCTestCase {
         let mountURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mounted-restore-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
-        await mountProvider.setMountedDomainIDs([config.domainIdentifier])
+        await mountProvider.setDomainStates([
+            RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: false)
+        ])
         await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
         manager.mountProvider = mountProvider
         try manager.add(config)
@@ -886,7 +936,10 @@ final class ConnectionManagerTests: XCTestCase {
         )
         let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
         let orphanDomainID = UUID().uuidString
-        await mountProvider.setMountedDomainIDs([config.domainIdentifier, orphanDomainID])
+        await mountProvider.setDomainStates([
+            RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: false),
+            RegisteredDomainState(identifier: orphanDomainID, isDisconnected: false)
+        ])
         let orphanSymlinkURL = testSymlinkBaseURL.appendingPathComponent("orphan-\(UUID().uuidString)")
         let orphanTargetURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
@@ -948,8 +1001,72 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(mountedState, .mounted(path: autoMountURL.path))
         XCTAssertEqual(manager.state(for: manualConfig.id), .disconnected)
         XCTAssertEqual(manager.mountState(for: manualConfig.id), .unmounted)
-        let mountInvocations = await mountProvider.mountInvocations
-        XCTAssertEqual(mountInvocations, [autoConfig.domainIdentifier])
+        let reconnectInvocations = await mountProvider.reconnectInvocations
+        XCTAssertEqual(reconnectInvocations, [autoConfig.domainIdentifier])
+    }
+
+    func testAutoMountConfiguredConnectionsReconnectsDisconnectedRegisteredDomain() async throws {
+        let config = ConnectionConfig(
+            name: "auto-registered",
+            backendType: .sftp,
+            host: "auto.example.com",
+            username: "user",
+            autoMountOnLaunch: true
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auto-registered-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setDomainStates([
+            RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: true)
+        ])
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .unmounted)
+
+        await manager.autoMountConfiguredConnections()
+
+        let mountedState = await waitForMountState(config.id)
+        XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
+        let reconnectInvocations = await mountProvider.reconnectInvocations
+        XCTAssertEqual(reconnectInvocations, [config.domainIdentifier])
+    }
+
+    func testDisconnectKeepsDomainRegisteredButRemovesSymlink() async throws {
+        let config = ConnectionConfig(
+            name: "registered",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("disconnect-registered-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+
+        let symlinkURL = testSymlinkBaseURL
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
+
+        await manager.disconnect(config.id)
+
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: symlinkURL.path))
+        let domainStates = try await mountProvider.domainStates()
+        XCTAssertEqual(
+            domainStates,
+            [RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: true)]
+        )
     }
 
     private func waitForMountState(_ id: UUID) async -> MountState {

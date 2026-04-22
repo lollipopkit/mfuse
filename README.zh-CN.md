@@ -9,6 +9,8 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
 
 已保存的挂载现在可以单独勾选 `Auto-Mount on App Launch`。配合 `Launch at Login` 后，这些挂载会在你登录或重启 Mac 后自动重新连接。
 
+现在保存连接时会立即预注册对应的 File Provider domain，因此即使还没有第一次挂载，系统设置里也能先看到 MFuse。`Unmount` 现在只会断开当前会话并保留 domain；只有删除已保存连接时，系统中的 domain 才会真正移除。
+
 MFuse 现在还在设置页提供了可选的 `iCloud Sync` 总开关。只有当 `iCloud Drive` 和 `iCloud Keychain` 都可用时，MFuse 才会跨设备同步已保存的连接配置与凭据；v1 仍然不会同步 host keys。
 
 ## 截图

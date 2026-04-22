@@ -41,7 +41,7 @@ public final class ConnectionManager: ObservableObject {
     private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
     var staleDomainRemover: ((String) async throws -> Void)?
 
-    /// Optional mount provider – when set, connect() auto-mounts and disconnect() auto-unmounts.
+    /// Optional mount provider – when set, connect() activates a registered domain and disconnect() keeps it registered but disconnected.
     public var mountProvider: (any MountProvider)?
 
     /// Optional callback for state change notifications (connect/disconnect/error).
@@ -126,6 +126,18 @@ public final class ConnectionManager: ObservableObject {
                 throw ConnectionManagerError.cleanupFailed(config.id)
             }
         }
+        if let mountProvider {
+            do {
+                try await mountProvider.unregister(config: config)
+            } catch {
+                let message = "Failed to unregister \(config.name): \(describe(error))"
+                let errorState = ConnectionState.error(message)
+                states[config.id] = errorState
+                setMountState(.error(message), for: config)
+                onStateChange?(config, errorState)
+                throw RemoteFileSystemError.operationFailed(message)
+            }
+        }
         let previousConnections = connections
         let previousState = states[config.id]
         let previousMountState = mountStates[config.id]
@@ -138,6 +150,9 @@ public final class ConnectionManager: ObservableObject {
         do {
             try storage.saveConnections(connections)
         } catch {
+            if let mountProvider {
+                try? await mountProvider.ensureRegistered(config: config)
+            }
             restoreRemovedConnectionState(
                 for: config.id,
                 connections: previousConnections,
@@ -168,6 +183,9 @@ public final class ConnectionManager: ObservableObject {
                         error.localizedDescription
                     )
                 )
+            }
+            if let mountProvider {
+                try? await mountProvider.ensureRegistered(config: config)
             }
             if let savedCredential {
                 do {
@@ -267,10 +285,11 @@ public final class ConnectionManager: ObservableObject {
             if let mp = mountProvider {
                 setMountState(.mounting, for: config)
                 do {
-                    try await mp.mount(config: config)
+                    try await mp.ensureRegistered(config: config)
+                    try await mp.reconnect(config: config)
                     guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
                           !interruptedConnectionIDs.contains(id) else {
-                        try? await mp.unmount(config: config)
+                        try? await mp.disconnect(config: config)
                         try? await fs.disconnect()
                         return
                     }
@@ -375,11 +394,11 @@ public final class ConnectionManager: ObservableObject {
             }
 
             do {
-                try await mp.unmount(config: config)
+                try await mp.disconnect(config: config)
             } catch {
-                let message = "Failed to unmount \(config.name): \(describe(error))"
+                let message = "Failed to disconnect domain for \(config.name): \(describe(error))"
                 logger.error(
-                    "Failed to unmount connection \(config.name, privacy: .private): \(self.describe(error), privacy: .private)"
+                    "Failed to disconnect domain for connection \(config.name, privacy: .private): \(self.describe(error), privacy: .private)"
                 )
                 cleanupFailures.append(message)
             }
@@ -612,11 +631,14 @@ public final class ConnectionManager: ObservableObject {
     public func syncMounts() async {
         guard let mp = mountProvider else { return }
         do {
-            let domainIDs = try await mp.mountedDomains()
+            let domainStates = try await mp.domainStates()
+            let domainStatesByID = Dictionary(
+                uniqueKeysWithValues: domainStates.map { ($0.identifier, $0) }
+            )
             let knownDomainIDs = Set(connections.map(\.domainIdentifier))
 
             // Remove stale domains
-            for domainID in domainIDs where !knownDomainIDs.contains(domainID) {
+            for domainID in domainStatesByID.keys where !knownDomainIDs.contains(domainID) {
                 let remover = staleDomainRemover ?? _removeStaleProviderDomain
                 try? await remover(domainID)
             }
@@ -625,7 +647,15 @@ public final class ConnectionManager: ObservableObject {
 
             // Rebuild mount states and symlinks for existing mounted configs
             for config in connections {
-                if domainIDs.contains(config.domainIdentifier) {
+                if let domainState = domainStatesByID[config.domainIdentifier] {
+                    if domainState.isDisconnected {
+                        mountResolutionTasks[config.id]?.cancel()
+                        mountResolutionTasks.removeValue(forKey: config.id)
+                        setMountState(.unmounted, for: config)
+                        try? await mp.removeSymlink(for: config)
+                        continue
+                    }
+
                     setMountState(.mounting, for: config)
                     do {
                         try await mp.signalEnumerator(for: config)
@@ -687,6 +717,30 @@ public final class ConnectionManager: ObservableObject {
         for config in targets {
             await connect(config.id)
         }
+    }
+
+    public func syncSavedConnectionRegistration(
+        _ config: ConnectionConfig,
+        previousConfig: ConnectionConfig?
+    ) async throws {
+        guard let mountProvider else { return }
+
+        let wasMounted = previousConfig.map { effectiveMountState(for: $0.id).isMounted } ?? false
+        try await mountProvider.ensureRegistered(config: config)
+
+        if wasMounted {
+            await disconnect(config.id, using: previousConfig)
+            await connect(config.id)
+            return
+        }
+
+        if let previousConfig, previousConfig.name != config.name {
+            try? await mountProvider.removeSymlink(for: previousConfig)
+        }
+
+        try? await mountProvider.removeSymlink(for: config)
+        try await mountProvider.disconnect(config: config)
+        setMountState(.unmounted, for: config)
     }
 
     private func _removeStaleProviderDomain(id: String) async throws {

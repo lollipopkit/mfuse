@@ -90,20 +90,40 @@ public enum MountState: Sendable, Equatable {
     }
 }
 
+public struct RegisteredDomainState: Sendable, Equatable {
+    public let identifier: String
+    public let isDisconnected: Bool
+
+    public init(identifier: String, isDisconnected: Bool) {
+        self.identifier = identifier
+        self.isDisconnected = isDisconnected
+    }
+
+    public var isConnected: Bool {
+        !isDisconnected
+    }
+}
+
 /// Abstraction over the mounting mechanism.
 public protocol MountProvider: Sendable {
 
     /// Base directory used for convenience symlinks.
     var symlinkBaseURL: URL { get }
 
-    /// Mount a connection, making it visible in Finder / filesystem.
-    func mount(config: ConnectionConfig) async throws
+    /// Ensure a File Provider domain exists for the connection and refresh bootstrap state.
+    func ensureRegistered(config: ConnectionConfig) async throws
 
-    /// Unmount a previously mounted connection.
-    func unmount(config: ConnectionConfig) async throws
+    /// Remove the File Provider domain for the connection.
+    func unregister(config: ConnectionConfig) async throws
 
-    /// List currently mounted domain identifiers.
-    func mountedDomains() async throws -> [String]
+    /// Reconnect a registered domain so the extension becomes active again.
+    func reconnect(config: ConnectionConfig) async throws
+
+    /// Disconnect a registered domain while keeping it registered.
+    func disconnect(config: ConnectionConfig) async throws
+
+    /// List currently registered domains and whether they are disconnected.
+    func domainStates() async throws -> [RegisteredDomainState]
 
     /// Signal the system to re-enumerate a domain (e.g. after changes).
     func signalEnumerator(for config: ConnectionConfig) async throws
@@ -117,4 +137,12 @@ public protocol MountProvider: Sendable {
 
     /// Remove the convenience symlink for a connection.
     func removeSymlink(for config: ConnectionConfig) async throws
+}
+
+public extension MountProvider {
+    func mountedDomains() async throws -> [String] {
+        try await domainStates()
+            .filter(\.isConnected)
+            .map(\.identifier)
+    }
 }
