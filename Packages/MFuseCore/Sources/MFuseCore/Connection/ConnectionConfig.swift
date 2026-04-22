@@ -8,6 +8,23 @@ public enum AuthMethod: String, Codable, Sendable, CaseIterable {
     case accessKey   // S3: access key ID + secret
     case anonymous   // FTP / WebDAV public access
     case oauth       // Google Drive OAuth2
+
+    public var displayName: String {
+        switch self {
+        case .password:
+            return MFuseCoreL10n.string("auth.password", fallback: "Password")
+        case .publicKey:
+            return MFuseCoreL10n.string("auth.publicKey", fallback: "Public Key")
+        case .agent:
+            return MFuseCoreL10n.string("auth.agent", fallback: "SSH Agent")
+        case .accessKey:
+            return MFuseCoreL10n.string("auth.accessKey", fallback: "Access Key")
+        case .anonymous:
+            return MFuseCoreL10n.string("auth.anonymous", fallback: "Anonymous")
+        case .oauth:
+            return MFuseCoreL10n.string("auth.oauth", fallback: "OAuth")
+        }
+    }
 }
 
 /// Persistent configuration for a single remote filesystem connection.

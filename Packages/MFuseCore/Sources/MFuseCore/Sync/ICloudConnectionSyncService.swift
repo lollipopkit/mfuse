@@ -7,7 +7,11 @@ private enum ICloudConnectionRecordValidationError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingConfigForLiveRecord(let id):
-            return "iCloud connection record \(id.uuidString) is missing config for a live entry."
+            return MFuseCoreL10n.string(
+                "icloud.record.missingConfigForLiveRecord",
+                fallback: "iCloud connection record %@ is missing config for a live entry.",
+                id.uuidString
+            )
         }
     }
 }
@@ -72,9 +76,10 @@ public struct ICloudConnectionSyncResult: Sendable, Equatable {
 }
 
 public actor ICloudConnectionSyncService {
+    private static let errorDomain = "ICloudConnectionSyncService"
     private static let logger = Logger(
         subsystem: "com.lollipopkit.mfuse",
-        category: "ICloudConnectionSyncService"
+        category: errorDomain
     )
 
     private let storage: SharedStorage
@@ -142,10 +147,20 @@ public actor ICloudConnectionSyncService {
         var reasons: [String] = []
 
         if !hasDrive {
-            reasons.append("iCloud Drive is unavailable for MFuse.")
+            reasons.append(
+                MFuseCoreL10n.string(
+                    "icloud.availability.driveUnavailable",
+                    fallback: "iCloud Drive is unavailable for MFuse."
+                )
+            )
         }
         if !hasKeychain {
-            reasons.append("iCloud Keychain is unavailable for MFuse.")
+            reasons.append(
+                MFuseCoreL10n.string(
+                    "icloud.availability.keychainUnavailable",
+                    fallback: "iCloud Keychain is unavailable for MFuse."
+                )
+            )
         }
 
         return ICloudSyncAvailability(
@@ -158,17 +173,27 @@ public actor ICloudConnectionSyncService {
     public func synchronize() throws -> ICloudConnectionSyncResult {
         guard SharedAppSettings.iCloudSyncEnabled else {
             throw NSError(
-                domain: "ICloudConnectionSyncService",
+                domain: Self.errorDomain,
                 code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "iCloud Sync is disabled."]
+                userInfo: [
+                    NSLocalizedDescriptionKey: MFuseCoreL10n.string(
+                        "icloud.sync.disabled",
+                        fallback: "iCloud Sync is disabled."
+                    )
+                ]
             )
         }
 
         guard let cloudRootURL = ubiquityContainerURLProvider() else {
             throw NSError(
-                domain: "ICloudConnectionSyncService",
+                domain: Self.errorDomain,
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "iCloud Drive is unavailable for MFuse."]
+                userInfo: [
+                    NSLocalizedDescriptionKey: MFuseCoreL10n.string(
+                        "icloud.availability.driveUnavailable",
+                        fallback: "iCloud Drive is unavailable for MFuse."
+                    )
+                ]
             )
         }
 
@@ -198,13 +223,7 @@ public actor ICloudConnectionSyncService {
                 if attempt < maxAttempts {
                     continue
                 }
-                throw NSError(
-                    domain: "ICloudConnectionSyncService",
-                    code: 2,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "Local or cloud connection state changed during iCloud synchronization. Please retry."
-                    ]
-                )
+                throw Self.stateChangedDuringSyncError()
             }
 
             do {
@@ -234,13 +253,7 @@ public actor ICloudConnectionSyncService {
             )
         }
 
-        throw NSError(
-            domain: "ICloudConnectionSyncService",
-            code: 2,
-            userInfo: [
-                NSLocalizedDescriptionKey: "Local or cloud connection state changed during iCloud synchronization. Please retry."
-            ]
-        )
+        throw Self.stateChangedDuringSyncError()
     }
 
     public func markCurrentStateAsBaseline() throws {
@@ -281,6 +294,19 @@ public actor ICloudConnectionSyncService {
             return lhs.eventDate < rhs.eventDate
         }
         return ICloudConnectionRecordSet(records: records)
+    }
+
+    private static func stateChangedDuringSyncError() -> NSError {
+        NSError(
+            domain: errorDomain,
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey: MFuseCoreL10n.string(
+                    "icloud.sync.stateChangedDuringSync",
+                    fallback: "Local or cloud connection state changed during iCloud synchronization. Please retry."
+                )
+            ]
+        )
     }
 
     private var localStateFileURL: URL {

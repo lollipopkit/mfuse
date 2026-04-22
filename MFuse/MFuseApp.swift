@@ -137,12 +137,12 @@ struct MFuseApp: App {
         .defaultSize(width: 900, height: 600)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("New Mount") {
+                Button(AppL10n.string("app.command.newMount", fallback: "New Mount")) {
                     NotificationCenter.default.post(name: .newConnection, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
-                Button("Refresh") {
+                Button(AppL10n.string("common.action.refresh", fallback: "Refresh")) {
                     NotificationCenter.default.post(name: .refreshConnections, object: nil)
                 }
                 .keyboardShortcut("r", modifiers: .command)

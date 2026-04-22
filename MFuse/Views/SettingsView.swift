@@ -5,9 +5,9 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("General") {
+            Section(AppL10n.string("settings.section.general", fallback: "General")) {
                 Toggle(
-                    "Launch at Login",
+                    AppL10n.string("settings.toggle.launchAtLogin", fallback: "Launch at Login"),
                     isOn: Binding(
                         get: { appSettings.launchAtLoginEnabled },
                         set: { appSettings.setLaunchAtLoginEnabled($0) }
@@ -19,9 +19,9 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Sync") {
+            Section(AppL10n.string("settings.section.sync", fallback: "Sync")) {
                 Toggle(
-                    "iCloud Sync",
+                    AppL10n.string("settings.toggle.iCloudSync", fallback: "iCloud Sync"),
                     isOn: Binding(
                         get: { appSettings.iCloudSyncEnabled },
                         set: { appSettings.setICloudSyncEnabled($0) }
@@ -43,9 +43,9 @@ struct SettingsView: View {
                 }
             }
 
-            Section("About") {
-                LabeledContent("Version", value: appSettings.versionString)
-                LabeledContent("Build", value: appSettings.buildString)
+            Section(AppL10n.string("settings.section.about", fallback: "About")) {
+                LabeledContent(AppL10n.string("settings.field.version", fallback: "Version"), value: appSettings.versionString)
+                LabeledContent(AppL10n.string("settings.field.build", fallback: "Build"), value: appSettings.buildString)
             }
         }
         .formStyle(.grouped)
@@ -55,12 +55,12 @@ struct SettingsView: View {
             appSettings.refreshLaunchAtLoginStatus()
             await appSettings.refreshICloudSyncStatus()
         }
-        .alert("Unable to Update Settings", isPresented: errorIsPresented) {
-            Button("OK", role: .cancel) {
+        .alert(AppL10n.string("settings.error.unableToUpdate", fallback: "Unable to Update Settings"), isPresented: errorIsPresented) {
+            Button(AppL10n.string("common.action.ok", fallback: "OK"), role: .cancel) {
                 appSettings.errorMessage = nil
             }
         } message: {
-            Text(appSettings.errorMessage ?? "An unknown error occurred.")
+            Text(appSettings.errorMessage ?? AppL10n.string("common.error.unknown", fallback: "An unknown error occurred."))
         }
     }
 

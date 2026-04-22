@@ -6,7 +6,10 @@ public enum MirroredCredentialProviderError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unsupportedPrimaryProvider:
-            return "The current credential provider does not support iCloud Keychain migration."
+            return MFuseCoreL10n.string(
+                "credential.error.unsupportedPrimaryProvider",
+                fallback: "The current credential provider does not support iCloud Keychain migration."
+            )
         }
     }
 }
@@ -21,8 +24,12 @@ public struct ModeTransitionError: Error, LocalizedError {
     }
 
     public var errorDescription: String? {
-        "Credential mode transition failed: \(originalError.localizedDescription). " +
-        "Rollback failed: \(rollbackError.localizedDescription)"
+        MFuseCoreL10n.string(
+            "credential.error.modeTransitionFailed",
+            fallback: "Credential mode transition failed: %@. Rollback failed: %@",
+            originalError.localizedDescription,
+            rollbackError.localizedDescription
+        )
     }
 }
 

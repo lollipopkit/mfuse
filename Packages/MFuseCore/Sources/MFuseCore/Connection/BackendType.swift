@@ -20,7 +20,11 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
         case .smb:         return "SMB"
         case .nfs:         return "NFS"
         case .ftp:         return "FTP"
-        case .googleDrive: return "Google Drive"
+        case .googleDrive:
+            return MFuseCoreL10n.string(
+                "backend.googleDrive",
+                fallback: "Google Drive"
+            )
         }
     }
 

@@ -16,15 +16,40 @@ final class NotificationService {
     }
 
     func postMounted(name: String) {
-        post(title: "Mounted", body: "\(name) is now available in Finder.", identifier: "mounted-\(name)")
+        post(
+            title: AppL10n.string("notification.mounted.title", fallback: "Mounted"),
+            body: AppL10n.string(
+                "notification.mounted.body",
+                fallback: "%@ is now available in Finder.",
+                name
+            ),
+            identifier: "mounted-\(name)"
+        )
     }
 
     func postUnmounted(name: String) {
-        post(title: "Unmounted", body: "\(name) has been removed from Finder.", identifier: "unmounted-\(name)")
+        post(
+            title: AppL10n.string("notification.unmounted.title", fallback: "Unmounted"),
+            body: AppL10n.string(
+                "notification.unmounted.body",
+                fallback: "%@ has been removed from Finder.",
+                name
+            ),
+            identifier: "unmounted-\(name)"
+        )
     }
 
     func postMountError(name: String, error: String) {
-        post(title: "Mount Error", body: "\(name): \(error)", identifier: "error-\(name)")
+        post(
+            title: AppL10n.string("notification.mountError.title", fallback: "Mount Error"),
+            body: AppL10n.string(
+                "notification.mountError.body",
+                fallback: "%1$@: %2$@",
+                name,
+                error
+            ),
+            identifier: "error-\(name)"
+        )
     }
 
     private func post(title: String, body: String, identifier: String) {

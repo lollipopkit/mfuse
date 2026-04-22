@@ -73,7 +73,14 @@ enum FileProviderOperationTimeout: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .timedOut(let operation):
-            return "Timed out while \(operation)"
+            let template = NSLocalizedString(
+                "fileprovider.timeout",
+                tableName: nil,
+                bundle: .main,
+                value: "Timed out while %@",
+                comment: ""
+            )
+            return String(format: template, locale: .current, arguments: [operation])
         }
     }
 }

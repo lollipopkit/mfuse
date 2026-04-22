@@ -22,17 +22,17 @@ struct ConnectionDetailView: View {
 
             // Details
             Form {
-                Section("Server") {
-                    LabeledContent("Type", value: config.backendType.displayName)
-                    LabeledContent("Host", value: config.host)
-                    LabeledContent("Port", value: "\(config.port)")
-                    LabeledContent("Username", value: config.username)
-                    LabeledContent("Remote Path", value: config.remotePath)
-                    LabeledContent("Auth", value: config.authMethod.rawValue.capitalized)
+                Section(AppL10n.string("detail.section.server", fallback: "Server")) {
+                    LabeledContent(AppL10n.string("detail.field.type", fallback: "Type"), value: config.backendType.displayName)
+                    LabeledContent(AppL10n.string("detail.field.host", fallback: "Host"), value: config.host)
+                    LabeledContent(AppL10n.string("detail.field.port", fallback: "Port"), value: "\(config.port)")
+                    LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
+                    LabeledContent(AppL10n.string("detail.field.remotePath", fallback: "Remote Path"), value: config.remotePath)
+                    LabeledContent(AppL10n.string("detail.field.auth", fallback: "Auth"), value: config.authMethod.displayName)
                 }
 
-                Section("Mount") {
-                    LabeledContent("State") {
+                Section(AppL10n.string("detail.section.mount", fallback: "Mount")) {
+                    LabeledContent(AppL10n.string("detail.field.state", fallback: "State")) {
                         HStack(spacing: 6) {
                             Image(systemName: mount.isMounted ? "folder.fill" : "folder")
                                 .foregroundStyle(iconColor)
@@ -69,7 +69,7 @@ struct ConnectionDetailView: View {
                         }
                     }
                 } label: {
-                    Label("Open in Finder", systemImage: "folder")
+                    Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
                 }
                 .buttonStyle(.bordered)
             }
@@ -81,7 +81,7 @@ struct ConnectionDetailView: View {
     private var mountButton: some View {
         Group {
             if mount.isMounted {
-                Button("Unmount") {
+                Button(AppL10n.string("common.action.unmount", fallback: "Unmount")) {
                     Task {
                         await connectionManager.disconnect(config.id)
                     }
@@ -91,7 +91,7 @@ struct ConnectionDetailView: View {
                 ProgressView()
                     .controlSize(.small)
             } else {
-                Button("Mount") {
+                Button(AppL10n.string("common.action.mount", fallback: "Mount")) {
                     Task {
                         await connectionManager.connect(config.id)
                     }
@@ -111,7 +111,7 @@ struct ConnectionDetailView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Refresh Finder listing")
+                .help(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
             }
         }
     }

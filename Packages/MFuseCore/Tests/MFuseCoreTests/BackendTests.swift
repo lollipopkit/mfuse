@@ -54,6 +54,25 @@ final class BackendTypeTests: XCTestCase {
         XCTAssertEqual(BackendType.googleDrive.displayName, "Google Drive")
     }
 
+    func testLocalizedDisplayNamesFromBundle() {
+        XCTAssertEqual(
+            MFuseCoreL10n.string(
+                "backend.googleDrive",
+                localeIdentifier: "zh-CN",
+                fallback: "Google Drive"
+            ),
+            "Google 云端硬盘"
+        )
+        XCTAssertEqual(
+            MFuseCoreL10n.string(
+                "backend.googleDrive",
+                localeIdentifier: "fr",
+                fallback: "Google Drive"
+            ),
+            "Google Drive"
+        )
+    }
+
     func testDefaultPort() {
         XCTAssertEqual(BackendType.sftp.defaultPort, 22)
         XCTAssertEqual(BackendType.s3.defaultPort, 443)
@@ -94,5 +113,51 @@ final class BackendTypeTests: XCTestCase {
         for type in BackendType.allCases {
             XCTAssertEqual(type.id, type.rawValue)
         }
+    }
+
+    func testAuthMethodDisplayNameUsesLocalizationResources() {
+        XCTAssertEqual(
+            AuthMethod.password.displayName,
+            MFuseCoreL10n.string(
+                "auth.password",
+                localeIdentifier: "en",
+                fallback: "Password"
+            )
+        )
+        XCTAssertEqual(
+            MFuseCoreL10n.string(
+                "auth.publicKey",
+                localeIdentifier: "zh-CN",
+                fallback: "Public Key"
+            ),
+            "公钥"
+        )
+    }
+
+    func testConnectionAndMountStatusFormatting() {
+        XCTAssertEqual(
+            MFuseCoreL10n.string(
+                "connection.error",
+                localeIdentifier: "en",
+                fallback: "Error: %@",
+                "boom"
+            ),
+            "Error: boom"
+        )
+        XCTAssertEqual(
+            MFuseCoreL10n.string(
+                "mount.error.status",
+                localeIdentifier: "zh-CN",
+                fallback: "Mount error: %@",
+                "失败"
+            ),
+            "挂载错误：失败"
+        )
+    }
+
+    func testLocalizedErrorsAreNonEmpty() {
+        XCTAssertFalse(RemoteFileSystemError.notConnected.localizedDescription.isEmpty)
+        XCTAssertFalse(MountError.extensionNotEnabled.localizedDescription.isEmpty)
+        XCTAssertFalse(ConnectionManagerError.cleanupFailed(UUID()).localizedDescription.isEmpty)
     }
 }

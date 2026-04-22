@@ -96,7 +96,11 @@ struct ConnectionEditorSheet: View {
         VStack(spacing: 0) {
             // Title
             HStack {
-                Text(existingID != nil ? "Edit Mount" : "New Mount")
+                Text(
+                    existingID != nil
+                        ? AppL10n.string("editor.title.editMount", fallback: "Edit Mount")
+                        : AppL10n.string("editor.title.newMount", fallback: "New Mount")
+                )
                     .font(.headline)
                 Spacer()
             }
@@ -106,9 +110,13 @@ struct ConnectionEditorSheet: View {
 
             // Form
             Form {
-                Section("General") {
-                    TextField("Name", text: $name, prompt: Text("My Server"))
-                    Picker("Type", selection: $backendType) {
+                Section(AppL10n.string("editor.section.general", fallback: "General")) {
+                    TextField(
+                        AppL10n.string("editor.field.name", fallback: "Name"),
+                        text: $name,
+                        prompt: Text(AppL10n.string("editor.prompt.name", fallback: "My Server"))
+                    )
+                    Picker(AppL10n.string("detail.field.type", fallback: "Type"), selection: $backendType) {
                         ForEach(BackendType.allCases) { type in
                             Text(type.displayName).tag(type)
                         }
@@ -122,61 +130,61 @@ struct ConnectionEditorSheet: View {
                             authMethod = newType.supportedAuthMethods.first ?? .password
                         }
                     }
-                    Toggle("Auto-Mount on App Launch", isOn: $autoMountOnLaunch)
+                    Toggle(AppL10n.string("editor.field.autoMountOnAppLaunch", fallback: "Auto-Mount on App Launch"), isOn: $autoMountOnLaunch)
                 }
 
                 // Hide host/port for Google Drive (cloud-only)
                 if backendType != .googleDrive {
-                    Section("Server") {
+                    Section(AppL10n.string("detail.section.server", fallback: "Server")) {
                         if backendType != .s3 {
-                            TextField("Host", text: $host, prompt: Text("example.com"))
+                            TextField(AppL10n.string("detail.field.host", fallback: "Host"), text: $host, prompt: Text(AppL10n.string("editor.prompt.host", fallback: "example.com")))
                         }
-                        TextField("Port", text: $port, prompt: Text("\(backendType.defaultPort)"))
+                        TextField(AppL10n.string("detail.field.port", fallback: "Port"), text: $port, prompt: Text("\(backendType.defaultPort)"))
                         if backendType != .s3 {
-                            TextField("Username", text: $username, prompt: Text("user"))
+                            TextField(AppL10n.string("detail.field.username", fallback: "Username"), text: $username, prompt: Text(AppL10n.string("editor.prompt.username", fallback: "user")))
                         }
-                        TextField("Remote Path", text: $remotePath, prompt: Text("/"))
+                        TextField(AppL10n.string("detail.field.remotePath", fallback: "Remote Path"), text: $remotePath, prompt: Text("/"))
                     }
                 }
 
                 // Backend-specific parameters
                 switch backendType {
                 case .s3:
-                    Section("S3 Settings") {
-                        TextField("Bucket", text: $s3Bucket, prompt: Text("my-bucket"))
-                        TextField("Region", text: $s3Region, prompt: Text("us-east-1"))
-                        TextField("Custom Endpoint (optional)", text: $s3Endpoint, prompt: Text("https://s3.amazonaws.com"))
-                        Toggle("Path-Style Access", isOn: $s3PathStyle)
+                    Section(AppL10n.string("editor.section.s3", fallback: "S3 Settings")) {
+                        TextField(AppL10n.string("editor.field.bucket", fallback: "Bucket"), text: $s3Bucket, prompt: Text(AppL10n.string("editor.prompt.bucket", fallback: "my-bucket")))
+                        TextField(AppL10n.string("editor.field.region", fallback: "Region"), text: $s3Region, prompt: Text("us-east-1"))
+                        TextField(AppL10n.string("editor.field.customEndpoint", fallback: "Custom Endpoint (optional)"), text: $s3Endpoint, prompt: Text("https://s3.amazonaws.com"))
+                        Toggle(AppL10n.string("editor.field.pathStyleAccess", fallback: "Path-Style Access"), isOn: $s3PathStyle)
                     }
                 case .webdav:
-                    Section("WebDAV Settings") {
-                        Toggle("Use TLS (HTTPS)", isOn: $webdavTLS)
+                    Section(AppL10n.string("editor.section.webdav", fallback: "WebDAV Settings")) {
+                        Toggle(AppL10n.string("editor.field.useTLSHTTPS", fallback: "Use TLS (HTTPS)"), isOn: $webdavTLS)
                     }
                 case .smb:
-                    Section("SMB Settings") {
-                        TextField("Share Name", text: $smbShare, prompt: Text("shared"))
-                        TextField("Domain (optional)", text: $smbDomain, prompt: Text("WORKGROUP"))
+                    Section(AppL10n.string("editor.section.smb", fallback: "SMB Settings")) {
+                        TextField(AppL10n.string("editor.field.shareName", fallback: "Share Name"), text: $smbShare, prompt: Text("shared"))
+                        TextField(AppL10n.string("editor.field.domainOptional", fallback: "Domain (optional)"), text: $smbDomain, prompt: Text("WORKGROUP"))
                     }
                 case .ftp:
-                    Section("FTP Settings") {
-                        Toggle("Use TLS (FTPS)", isOn: $ftpTLS)
-                        Toggle("Passive Mode", isOn: $ftpPassive)
+                    Section(AppL10n.string("editor.section.ftp", fallback: "FTP Settings")) {
+                        Toggle(AppL10n.string("editor.field.useTLSFTPS", fallback: "Use TLS (FTPS)"), isOn: $ftpTLS)
+                        Toggle(AppL10n.string("editor.field.passiveMode", fallback: "Passive Mode"), isOn: $ftpPassive)
                     }
                 case .googleDrive:
-                    Section("Google Drive Settings") {
-                        TextField("OAuth Client ID", text: $gdClientID, prompt: Text("xxxx.apps.googleusercontent.com"))
-                        TextField("Redirect URI", text: $gdRedirectURI, prompt: Text("com.lollipopkit.mfuse:/oauth"))
+                    Section(AppL10n.string("editor.section.googleDrive", fallback: "Google Drive Settings")) {
+                        TextField(AppL10n.string("editor.field.oauthClientID", fallback: "OAuth Client ID"), text: $gdClientID, prompt: Text("xxxx.apps.googleusercontent.com"))
+                        TextField(AppL10n.string("editor.field.redirectURI", fallback: "Redirect URI"), text: $gdRedirectURI, prompt: Text("com.lollipopkit.mfuse:/oauth"))
                     }
                 default:
                     EmptyView()
                 }
 
-                Section("Authentication") {
+                Section(AppL10n.string("editor.section.authentication", fallback: "Authentication")) {
                     let methods = backendType.supportedAuthMethods
                     if methods.count > 1 {
-                        Picker("Method", selection: $authMethod) {
+                        Picker(AppL10n.string("editor.field.method", fallback: "Method"), selection: $authMethod) {
                             ForEach(methods, id: \.self) { method in
-                                Text(method.rawValue.capitalized).tag(method)
+                                Text(method.displayName).tag(method)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -184,27 +192,27 @@ struct ConnectionEditorSheet: View {
 
                     switch authMethod {
                     case .password:
-                        SecureField("Password", text: $password)
+                        SecureField(AppL10n.string("editor.field.password", fallback: "Password"), text: $password)
                     case .publicKey:
                         HStack {
-                            TextField("Private Key Path", text: $privateKeyPath)
-                            Button("Browse…") { browseKeyFile() }
+                            TextField(AppL10n.string("editor.field.privateKeyPath", fallback: "Private Key Path"), text: $privateKeyPath)
+                            Button(AppL10n.string("editor.action.browse", fallback: "Browse…")) { browseKeyFile() }
                                 .controlSize(.small)
                         }
-                        SecureField("Passphrase (optional)", text: $password)
+                        SecureField(AppL10n.string("editor.field.passphraseOptional", fallback: "Passphrase (optional)"), text: $password)
                     case .agent:
-                        Text("SSH Agent will be used for authentication.")
+                        Text(AppL10n.string("editor.message.sshAgent", fallback: "SSH Agent will be used for authentication."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     case .accessKey:
-                        TextField("Access Key ID", text: $s3AccessKeyID)
-                        SecureField("Secret Access Key", text: $s3SecretAccessKey)
+                        TextField(AppL10n.string("editor.field.accessKeyID", fallback: "Access Key ID"), text: $s3AccessKeyID)
+                        SecureField(AppL10n.string("editor.field.secretAccessKey", fallback: "Secret Access Key"), text: $s3SecretAccessKey)
                     case .anonymous:
-                        Text("No credentials required.")
+                        Text(AppL10n.string("editor.message.noCredentialsRequired", fallback: "No credentials required."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     case .oauth:
-                        Text("You will be prompted to sign in with Google after saving.")
+                        Text(AppL10n.string("editor.message.googleSignInAfterSaving", fallback: "You will be prompted to sign in with Google after saving."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -216,7 +224,7 @@ struct ConnectionEditorSheet: View {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.red)
-                            Text("Credentials will be sent in cleartext. Enable TLS to encrypt this mount.")
+                            Text(AppL10n.string("editor.warning.cleartextCredentials", fallback: "Credentials will be sent in cleartext. Enable TLS to encrypt this mount."))
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         }
@@ -241,16 +249,16 @@ struct ConnectionEditorSheet: View {
 
             // Buttons
             HStack {
-                Button("Test Access") { testConnection() }
+                Button(AppL10n.string("editor.action.testAccess", fallback: "Test Access")) { testConnection() }
                     .disabled(isTesting || !isValid)
                 if isTesting {
                     ProgressView()
                         .controlSize(.small)
                 }
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button(AppL10n.string("common.action.cancel", fallback: "Cancel")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Save") { save() }
+                Button(AppL10n.string("common.action.save", fallback: "Save")) { save() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!isValid)
@@ -350,7 +358,7 @@ struct ConnectionEditorSheet: View {
                     guard !Task.isCancelled else { return }
                     switch result {
                     case .success:
-                        testResult = "Access successful!"
+                        testResult = AppL10n.string("editor.message.accessSuccessful", fallback: "Access successful!")
                         testSuccess = true
                     case .failure(let error):
                         testResult = error.localizedDescription
@@ -385,7 +393,12 @@ struct ConnectionEditorSheet: View {
                 )
             } catch {
                 throw RemoteFileSystemError.operationFailed(
-                    "Unable to read private key at \(privateKeyPath): \(error.localizedDescription)"
+                    AppL10n.string(
+                        "editor.error.readPrivateKey",
+                        fallback: "Unable to read private key at %@: %@",
+                        privateKeyPath,
+                        error.localizedDescription
+                    )
                 )
             }
         case .agent:
@@ -486,7 +499,10 @@ struct ConnectionEditorSheet: View {
         case .googleDrive:
             guard !gdClientID.isEmpty, !gdRedirectURI.isEmpty else {
                 throw RemoteFileSystemError.operationFailed(
-                    "Google Drive requires both OAuth Client ID and Redirect URI"
+                    AppL10n.string(
+                        "editor.error.googleDriveOAuthFieldsRequired",
+                        fallback: "Google Drive requires both OAuth Client ID and Redirect URI"
+                    )
                 )
             }
             params["clientID"] = gdClientID

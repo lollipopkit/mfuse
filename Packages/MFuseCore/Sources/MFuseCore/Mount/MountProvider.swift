@@ -11,12 +11,18 @@ public enum MountError: Error, Sendable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .domainAlreadyExists(let id): return "Domain already exists: \(id)"
-        case .domainNotFound(let id):      return "Domain not found: \(id)"
-        case .managerNotFound(let id):     return "File Provider manager not found: \(id)"
-        case .mountFailed(let msg):        return "Mount failed: \(msg)"
-        case .unmountFailed(let msg):      return "Unmount failed: \(msg)"
-        case .extensionNotEnabled:         return "File Provider extension is not enabled"
+        case .domainAlreadyExists(let id):
+            return MFuseCoreL10n.string("mount.error.domainAlreadyExists", fallback: "Domain already exists: %@", id)
+        case .domainNotFound(let id):
+            return MFuseCoreL10n.string("mount.error.domainNotFound", fallback: "Domain not found: %@", id)
+        case .managerNotFound(let id):
+            return MFuseCoreL10n.string("mount.error.managerNotFound", fallback: "File Provider manager not found: %@", id)
+        case .mountFailed(let msg):
+            return MFuseCoreL10n.string("mount.error.mountFailed", fallback: "Mount failed: %@", msg)
+        case .unmountFailed(let msg):
+            return MFuseCoreL10n.string("mount.error.unmountFailed", fallback: "Unmount failed: %@", msg)
+        case .extensionNotEnabled:
+            return MFuseCoreL10n.string("mount.error.extensionNotEnabled", fallback: "File Provider extension is not enabled")
         }
     }
 
@@ -64,10 +70,14 @@ public enum MountState: Sendable, Equatable {
 
     public var statusText: String {
         switch self {
-        case .unmounted:          return "Unmounted"
-        case .mounting:           return "Mounting…"
-        case .mounted(let path):  return path
-        case .error(let msg):     return "Mount error: \(msg)"
+        case .unmounted:
+            return MFuseCoreL10n.string("mount.unmounted", fallback: "Unmounted")
+        case .mounting:
+            return MFuseCoreL10n.string("mount.mounting", fallback: "Mounting…")
+        case .mounted(let path):
+            return path
+        case .error(let msg):
+            return MFuseCoreL10n.string("mount.error.status", fallback: "Mount error: %@", msg)
         }
     }
 

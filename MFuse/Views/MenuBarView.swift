@@ -27,7 +27,7 @@ struct MenuBarView: View {
             Divider()
 
             if connectionManager.connections.isEmpty {
-                Text("No mounts configured.\nOpen MFuse to add one.")
+                Text(AppL10n.string("menuBar.emptyState.message", fallback: "No mounts configured.\nOpen MFuse to add one."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(12)
@@ -39,7 +39,7 @@ struct MenuBarView: View {
                 Divider()
 
                 HStack(spacing: 12) {
-                    Button("Mount All") {
+                    Button(AppL10n.string("common.action.mountAll", fallback: "Mount All")) {
                         dismissMenuBarPanel()
                         Task {
                             for config in connectionManager.connections
@@ -52,7 +52,7 @@ struct MenuBarView: View {
                     .font(.caption)
                     .disabled(mountedCount == connectionManager.connections.count)
 
-                    Button("Unmount All") {
+                    Button(AppL10n.string("common.action.unmountAll", fallback: "Unmount All")) {
                         dismissMenuBarPanel()
                         Task {
                             for config in connectionManager.connections
@@ -72,7 +72,7 @@ struct MenuBarView: View {
             Divider()
 
             HStack {
-                Button("Open MFuse") {
+                Button(AppL10n.string("menuBar.action.openMFuse", fallback: "Open MFuse")) {
                     dismissMenuBarPanel()
                     AppDelegate.activateMainInterface()
                     openWindow(id: MFuseApp.mainWindowID)
@@ -80,14 +80,14 @@ struct MenuBarView: View {
                 .buttonStyle(.borderless)
                 .font(.caption)
                 Spacer()
-                Button("Settings") {
+                Button(AppL10n.string("menuBar.action.settings", fallback: "Settings")) {
                     dismissMenuBarPanel()
                     openSettings()
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
                 Spacer()
-                Button("Quit") {
+                Button(AppL10n.string("menuBar.action.quit", fallback: "Quit")) {
                     dismissMenuBarPanel()
                     isQuitting = true
                     AppDelegate.requestFullTermination()
@@ -143,7 +143,7 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
-                .help("Reveal in Finder")
+                .help(AppL10n.string("menuBar.help.revealInFinder", fallback: "Reveal in Finder"))
             }
             toggleButton(config: config, mountState: mount)
         }
@@ -157,7 +157,11 @@ struct MenuBarView: View {
             ProgressView()
                 .controlSize(.small)
         } else {
-            Button(mountState.isMounted ? "Unmount" : "Mount") {
+            Button(
+                mountState.isMounted
+                    ? AppL10n.string("common.action.unmount", fallback: "Unmount")
+                    : AppL10n.string("common.action.mount", fallback: "Mount")
+            ) {
                 dismissMenuBarPanel()
                 Task {
                     if mountState.isMounted {

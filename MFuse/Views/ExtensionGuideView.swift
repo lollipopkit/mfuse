@@ -19,11 +19,11 @@ struct ExtensionGuideView: View {
                 .foregroundStyle(.blue)
                 .padding(.top, 32)
 
-            Text("Enable MFuse Extension")
+            Text(AppL10n.string("extensionGuide.title", fallback: "Enable MFuse Extension"))
                 .font(.title.bold())
                 .padding(.top, 16)
 
-            Text("MFuse needs a system extension to mount remote files.\nPlease enable it in System Settings.")
+            Text(AppL10n.string("extensionGuide.message", fallback: "MFuse needs a system extension to mount remote files.\nPlease enable it in System Settings."))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.top, 8)
@@ -32,14 +32,14 @@ struct ExtensionGuideView: View {
             // Steps
             VStack(alignment: .leading, spacing: 16) {
                 stepRow(number: 1,
-                        title: "Open System Settings",
-                        subtitle: "General → Login Items & Extensions")
+                        title: AppL10n.string("extensionGuide.step.openSystemSettings.title", fallback: "Open System Settings"),
+                        subtitle: AppL10n.string("extensionGuide.step.openSystemSettings.subtitle", fallback: "General → Login Items & Extensions"))
                 stepRow(number: 2,
-                        title: "File Provider Extensions",
-                        subtitle: "Find and enable \"MFuse\"")
+                        title: AppL10n.string("extensionGuide.step.fileProviderExtensions.title", fallback: "File Provider Extensions"),
+                        subtitle: AppL10n.string("extensionGuide.step.fileProviderExtensions.subtitle", fallback: "Find and enable \"MFuse\""))
                 stepRow(number: 3,
-                        title: "Return here",
-                        subtitle: "Press \"Check Again\" — mounting should work")
+                        title: AppL10n.string("extensionGuide.step.returnHere.title", fallback: "Return here"),
+                        subtitle: AppL10n.string("extensionGuide.step.returnHere.subtitle", fallback: "Press \"Check Again\" — mounting should work"))
             }
             .padding(.top, 24)
             .padding(.horizontal, 40)
@@ -48,7 +48,7 @@ struct ExtensionGuideView: View {
 
             // Status feedback
             if checkFailed {
-                Label("Extension not yet enabled — please check System Settings.",
+                Label(AppL10n.string("extensionGuide.status.notEnabled", fallback: "Extension not yet enabled — please check System Settings."),
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -60,7 +60,7 @@ struct ExtensionGuideView: View {
                 Button {
                     openExtensionSettings()
                 } label: {
-                    Label("Open System Settings", systemImage: "gear")
+                    Label(AppL10n.string("extensionGuide.action.openSystemSettings", fallback: "Open System Settings"), systemImage: "gear")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -90,13 +90,13 @@ struct ExtensionGuideView: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Text("Check Again")
+                            Text(AppL10n.string("extensionGuide.action.checkAgain", fallback: "Check Again"))
                         }
                     }
                     .buttonStyle(.bordered)
                     .disabled(checking)
 
-                    Button("Later") {
+                    Button(AppL10n.string("common.action.later", fallback: "Later")) {
                         dismissGuide()
                     }
                     .buttonStyle(.bordered)
