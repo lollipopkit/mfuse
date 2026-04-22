@@ -11,6 +11,21 @@ public enum MirroredCredentialProviderError: Error, LocalizedError {
     }
 }
 
+public struct ModeTransitionError: Error, LocalizedError {
+    public let originalError: Error
+    public let rollbackError: Error
+
+    public init(originalError: Error, rollbackError: Error) {
+        self.originalError = originalError
+        self.rollbackError = rollbackError
+    }
+
+    public var errorDescription: String? {
+        "Credential mode transition failed: \(originalError.localizedDescription). " +
+        "Rollback failed: \(rollbackError.localizedDescription)"
+    }
+}
+
 public enum MirroredCredentialSyncState: Sendable, Equatable {
     case local
     case synchronizable
@@ -187,15 +202,26 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
                     try targetSharedStore.store(credential, for: connectionID)
                 }
             } catch {
-                try? await rollbackModeTransition(context: ModeTransitionContext(
+                let originalError = error
+                let context = ModeTransitionContext(
                     credentialsToMove: credentialsToMove,
                     sourcePrimary: sourcePrimary,
                     sourceSharedStore: sourceSharedStore,
                     targetPrimary: targetPrimary,
                     targetSharedStore: targetSharedStore,
                     connectionIDs: connectionIDs
-                ))
-                throw error
+                )
+
+                do {
+                    try await rollbackModeTransition(context: context)
+                } catch {
+                    throw ModeTransitionError(
+                        originalError: originalError,
+                        rollbackError: error
+                    )
+                }
+
+                throw originalError
             }
 
             for connectionID in connectionIDs {

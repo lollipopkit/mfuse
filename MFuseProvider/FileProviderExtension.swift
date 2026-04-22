@@ -95,6 +95,33 @@ final class FileProviderDomainVersionState: @unchecked Sendable {
     }
 }
 
+final class SharedCredentialStoreProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private var store: SharedCredentialStore
+
+    init(
+        syncMode: KeychainItemSyncMode = SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
+    ) {
+        self.store = SharedCredentialStore(syncMode: syncMode)
+    }
+
+    func credential(for connectionID: UUID) throws -> Credential? {
+        let store = lock.withLock { self.store }
+        return try store.credential(for: connectionID)
+    }
+
+    func store(_ credential: Credential, for connectionID: UUID) throws {
+        let store = lock.withLock { self.store }
+        try store.store(credential, for: connectionID)
+    }
+
+    func replace(syncMode: KeychainItemSyncMode) {
+        lock.withLock {
+            self.store = SharedCredentialStore(syncMode: syncMode)
+        }
+    }
+}
+
 @Sendable
 func withOperationTimeout<T: Sendable>(
     seconds: Double,
@@ -125,11 +152,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     private static let bootstrapTransientRetryDelayNanoseconds: UInt64 = 750_000_000
     private static let contentCacheStoreRetryCount = 2
     private static let streamedReadChunkSize: UInt32 = 1_048_576
-    private static var sharedCredentialStore: SharedCredentialStore {
-        SharedCredentialStore(
-            syncMode: SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
-        )
-    }
+    private static let sharedCredentialStoreProvider = SharedCredentialStoreProvider()
     private static let registerBackendsOnce: Void = {
         BackendRegistry.shared.registerAllBuiltIns(
             sftpFactory: { config, credential in
@@ -155,7 +178,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     config: config,
                     credential: credential
                 ) { updatedCredential in
-                    try FileProviderExtension.sharedCredentialStore.store(updatedCredential, for: config.id)
+                    try FileProviderExtension.sharedCredentialStoreProvider.store(updatedCredential, for: config.id)
                 }
             }
         )
@@ -170,7 +193,18 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     public required init(domain: NSFileProviderDomain) {
         self.domain = domain
         super.init()
+        Self.swapCredentialStoreForCurrentSettings()
         Self.registerBackends()
+    }
+
+    static func swapCredentialStore(syncMode: KeychainItemSyncMode) {
+        sharedCredentialStoreProvider.replace(syncMode: syncMode)
+    }
+
+    static func swapCredentialStoreForCurrentSettings() {
+        swapCredentialStore(
+            syncMode: SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
+        )
     }
 
     public var domainVersion: NSFileProviderDomainVersion {
@@ -658,7 +692,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func requireCredential(for config: ConnectionConfig) async throws -> Credential {
-        let credential = try Self.sharedCredentialStore.credential(for: config.id) ?? Credential()
+        let credential = try Self.sharedCredentialStoreProvider.credential(for: config.id) ?? Credential()
 
         switch config.authMethod {
         case .password:
