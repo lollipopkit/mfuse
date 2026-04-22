@@ -1,6 +1,7 @@
 import Foundation
 import MFuseCore
 import FileProvider
+import os.log
 
 /// Bridges ConnectionManager operations with NSFileProviderDomain lifecycle.
 /// Mount/unmount is now handled automatically by ConnectionManager.
@@ -9,6 +10,7 @@ import FileProvider
 public final class DomainManager: ObservableObject {
     private static let replicatedDomainMigrationDefaultsKey =
         "com.lollipopkit.mfuse.fileprovider.replicated-domain-migration-v1"
+    private static let logger = Logger(subsystem: "com.lollipopkit.mfuse", category: "DomainManager")
 
     struct SyncDomainsError: LocalizedError {
         enum Operation: String {
@@ -64,11 +66,20 @@ public final class DomainManager: ObservableObject {
     }
 
     private func reconcileDomainsAndSymlinks() async throws {
-        let existingDomainStates = try await mountProvider.domainStates()
+        var errors: [SyncDomainsError.Entry] = []
+        let existingDomainStates: [RegisteredDomainState]
+        do {
+            existingDomainStates = try await mountProvider.domainStates()
+        } catch {
+            errors.append(.init(id: "__domains__", operation: .listDomains, error: error))
+            Self.logger.error(
+                "Failed to list existing domain states before reconciliation: \(String(describing: error), privacy: .public)"
+            )
+            existingDomainStates = []
+        }
         let existingStatesByID = Dictionary(
             uniqueKeysWithValues: existingDomainStates.map { ($0.identifier, $0) }
         )
-        var errors: [SyncDomainsError.Entry] = []
 
         for config in connectionManager.connections {
             do {

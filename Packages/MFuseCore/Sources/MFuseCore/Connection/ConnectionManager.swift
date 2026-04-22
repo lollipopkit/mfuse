@@ -129,6 +129,10 @@ public final class ConnectionManager: ObservableObject {
         if let mountProvider {
             do {
                 try await mountProvider.unregister(config: config)
+            } catch MountError.domainNotFound {
+                states[config.id] = .disconnected
+                setMountState(.unmounted, for: config)
+                onStateChange?(config, .disconnected)
             } catch {
                 let message = "Failed to unregister \(config.name): \(describe(error))"
                 let errorState = ConnectionState.error(message)
@@ -560,7 +564,21 @@ public final class ConnectionManager: ObservableObject {
                 nextConnections.append(removedConfig)
                 continue
             }
-            try? await mountProvider?.unregister(config: removedConfig)
+            if let mountProvider {
+                do {
+                    try await mountProvider.unregister(config: removedConfig)
+                } catch MountError.domainNotFound {
+                    logger.notice(
+                        "Skipping unregister for missing domain \(removedConfig.domainIdentifier, privacy: .public) during reload cleanup"
+                    )
+                } catch {
+                    logger.error(
+                        "Failed to unregister removed connection \(removedConfig.name, privacy: .private) during reload: \(self.describe(error), privacy: .private)"
+                    )
+                    nextConnections.append(removedConfig)
+                    continue
+                }
+            }
 
             states.removeValue(forKey: removedConfig.id)
             mountStates.removeValue(forKey: removedConfig.id)

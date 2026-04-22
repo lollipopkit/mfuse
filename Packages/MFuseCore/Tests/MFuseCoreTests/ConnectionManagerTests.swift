@@ -124,6 +124,7 @@ actor MockMountProvider: MountProvider {
     var nilMountURLCounts: [String: Int] = [:]
     var staleDomainsRemoved: [String] = []
     var unmountShouldFail = false
+    var unregisterShouldFail = false
     var removeSymlinkShouldFail = false
 
     init(symlinkBaseURL: URL) {
@@ -153,6 +154,10 @@ actor MockMountProvider: MountProvider {
         unmountShouldFail = shouldFail
     }
 
+    func setUnregisterShouldFail(_ shouldFail: Bool) {
+        unregisterShouldFail = shouldFail
+    }
+
     func setRemoveSymlinkShouldFail(_ shouldFail: Bool) {
         removeSymlinkShouldFail = shouldFail
     }
@@ -167,7 +172,7 @@ actor MockMountProvider: MountProvider {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
         unregisterInvocations.append(config.domainIdentifier)
-        if unmountShouldFail {
+        if unregisterShouldFail {
             throw MountError.unmountFailed("mock unmount failure")
         }
         registeredDomainIDs.remove(config.domainIdentifier)
@@ -537,6 +542,29 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(try storage.loadConnections(), [config])
     }
 
+    func testRemoveConnectionSucceedsWhenDomainAlreadyMissing() async throws {
+        let config = ConnectionConfig(
+            name: "MissingDomainRemoval",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        await mountProvider.setDomainStates([])
+
+        try await manager.remove(config)
+
+        XCTAssertTrue(manager.connections.isEmpty)
+        XCTAssertNil(manager.fileSystem(for: config.id))
+        XCTAssertNil(credentialProvider.credentials[config.id])
+        XCTAssertTrue(try storage.loadConnections().isEmpty)
+    }
+
     func testReloadConnectionsFromStorageSkipsCleanupWhenReloadFails() async throws {
         let config = ConnectionConfig(
             name: "ReloadFailure",
@@ -611,6 +639,29 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(unregisterInvocations, [config.domainIdentifier])
         let domainStates = try await mountProvider.domainStates()
         XCTAssertTrue(domainStates.isEmpty)
+    }
+
+    func testReloadConnectionsFromStoragePreservesRuntimeStateWhenUnregisterFails() async throws {
+        let config = ConnectionConfig(
+            name: "ReloadUnregisterFailure",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await manager.connect(config.id)
+        await mountProvider.setUnregisterShouldFail(true)
+        try storage.saveConnections([])
+
+        await manager.reloadConnectionsFromStorage()
+
+        XCTAssertEqual(manager.connections, [config])
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        let unregisterInvocations = await mountProvider.unregisterInvocations
+        XCTAssertEqual(unregisterInvocations, [config.domainIdentifier])
     }
 
     func testConnectSuccess() async throws {
