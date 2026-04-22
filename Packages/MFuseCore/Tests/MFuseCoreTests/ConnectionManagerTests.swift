@@ -174,7 +174,9 @@ actor MockMountProvider: MountProvider {
 
     func reconnect(config: ConnectionConfig) async throws {
         reconnectInvocations.append(config.domainIdentifier)
-        registeredDomainIDs.insert(config.domainIdentifier)
+        guard registeredDomainIDs.contains(config.domainIdentifier) else {
+            throw MountError.domainNotFound(config.domainIdentifier)
+        }
         disconnectedDomainIDs.remove(config.domainIdentifier)
     }
 

@@ -11,13 +11,29 @@ public final class DomainManager: ObservableObject {
         "com.lollipopkit.mfuse.fileprovider.replicated-domain-migration-v1"
 
     struct SyncDomainsError: LocalizedError {
-        let errors: [(id: String, error: Error)]
+        enum Operation: String {
+            case register = "register"
+            case disconnect = "disconnect"
+            case removeStaleDomain = "remove stale domain"
+            case listDomains = "list domains"
+            case removeAllDomains = "remove all domains"
+        }
+
+        struct Entry {
+            let id: String
+            let operation: Operation
+            let error: Error
+        }
+
+        let errors: [Entry]
 
         var errorDescription: String? {
-            let details = errors.map { "\($0.id): \($0.error.localizedDescription)" }.joined(separator: "; ")
+            let details = errors.map {
+                "\($0.operation.rawValue) [\($0.id)]: \($0.error.localizedDescription)"
+            }.joined(separator: "; ")
             return AppL10n.string(
                 "domain.sync.error.removeStaleDomains",
-                fallback: "Failed to remove one or more stale File Provider domains: %@",
+                fallback: "Failed to reconcile one or more File Provider domains: %@",
                 details
             )
         }
@@ -52,13 +68,15 @@ public final class DomainManager: ObservableObject {
         let existingStatesByID = Dictionary(
             uniqueKeysWithValues: existingDomainStates.map { ($0.identifier, $0) }
         )
-        var errors: [(id: String, error: Error)] = []
+        var errors: [SyncDomainsError.Entry] = []
 
         for config in connectionManager.connections {
             do {
                 try await mountProvider.ensureRegistered(config: config)
             } catch {
-                errors.append((id: config.domainIdentifier, error: error))
+                errors.append(
+                    .init(id: config.domainIdentifier, operation: .register, error: error)
+                )
                 continue
             }
 
@@ -72,7 +90,13 @@ public final class DomainManager: ObservableObject {
             }
 
             if shouldRemainDisconnected {
-                try? await mountProvider.disconnect(config: config)
+                do {
+                    try await mountProvider.disconnect(config: config)
+                } catch {
+                    errors.append(
+                        .init(id: config.domainIdentifier, operation: .disconnect, error: error)
+                    )
+                }
             }
         }
 
@@ -80,6 +104,8 @@ public final class DomainManager: ObservableObject {
             try await removeStaleDomainsAndSymlinks()
         } catch let syncError as SyncDomainsError {
             errors.append(contentsOf: syncError.errors)
+        } catch {
+            errors.append(.init(id: "__cleanup__", operation: .listDomains, error: error))
         }
 
         if !errors.isEmpty {
@@ -90,13 +116,13 @@ public final class DomainManager: ObservableObject {
     private func removeStaleDomainsAndSymlinks() async throws {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
         let domainStates = try await mountProvider.domainStates()
-        var errors: [(id: String, error: Error)] = []
+        var errors: [SyncDomainsError.Entry] = []
         let domains: [NSFileProviderDomain]
 
         do {
             domains = try await NSFileProviderManager.domains()
         } catch {
-            errors.append((id: "__domains__", error: error))
+            errors.append(.init(id: "__domains__", operation: .listDomains, error: error))
             throw SyncDomainsError(errors: errors)
         }
 
@@ -107,7 +133,9 @@ public final class DomainManager: ObservableObject {
                     try await NSFileProviderManager.remove(domain)
                 }
             } catch {
-                errors.append((id: domainState.identifier, error: error))
+                errors.append(
+                    .init(id: domainState.identifier, operation: .removeStaleDomain, error: error)
+                )
             }
         }
 
@@ -142,13 +170,15 @@ public final class DomainManager: ObservableObject {
         let knownConfigsByDomainID = Dictionary(
             uniqueKeysWithValues: connectionManager.connections.map { ($0.domainIdentifier, $0) }
         )
-        var errors: [(id: String, error: Error)] = []
+        var errors: [SyncDomainsError.Entry] = []
 
         do {
             try await NSFileProviderManager.removeAllDomains()
             try await Task.sleep(nanoseconds: 500_000_000)
         } catch {
-            throw SyncDomainsError(errors: [("__all_domains__", error)])
+            throw SyncDomainsError(
+                errors: [.init(id: "__all_domains__", operation: .removeAllDomains, error: error)]
+            )
         }
 
         for domainID in domainIDs {
@@ -156,7 +186,7 @@ public final class DomainManager: ObservableObject {
             do {
                 try await mountProvider.ensureRegistered(config: config)
             } catch {
-                errors.append((id: domainID, error: error))
+                errors.append(.init(id: domainID, operation: .register, error: error))
             }
         }
 
