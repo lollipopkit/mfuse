@@ -286,6 +286,9 @@ public final class ConnectionManager: ObservableObject {
                 }
             }
         } catch {
+            if error is CancellationError || Task.isCancelled {
+                return
+            }
             guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
                   !interruptedConnectionIDs.contains(id) else {
                 return
@@ -794,7 +797,7 @@ public final class ConnectionManager: ObservableObject {
             "host is down",
             "network is down",
             "network is unreachable",
-            "timed out",
+            "timed out"
         ]
         return transientIndicators.contains { normalizedDescription.contains($0) }
     }

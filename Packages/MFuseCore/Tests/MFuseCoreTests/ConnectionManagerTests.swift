@@ -740,7 +740,7 @@ final class ConnectionManagerTests: XCTestCase {
         }
         let paths = await fs.enumeratedPaths
         let expectedPaths: [RemotePath] = [
-            config.remotePath.isEmpty ? .root : RemotePath(config.remotePath),
+            config.remotePath.isEmpty ? .root : RemotePath(config.remotePath)
         ]
         XCTAssertEqual(paths, expectedPaths)
     }

@@ -322,6 +322,8 @@ struct ConnectionEditorSheet: View {
     private func testConnection() {
         isTesting = true
         testResult = nil
+        currentTestTask?.cancel()
+        currentTestTask = nil
         let credential: Credential
         do {
             let parameters = try buildParameters()
@@ -338,7 +340,6 @@ struct ConnectionEditorSheet: View {
             )
             credential = try buildCredential()
 
-            currentTestTask?.cancel()
             currentTestTask = Task {
                 let result = await Self.sharedTestConnectionManager.testConnection(
                     config,

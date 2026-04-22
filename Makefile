@@ -16,7 +16,9 @@ build:
 
 test: test-stable
 
-# Stable local/default test subset. Use `make test-all` for the full package matrix.
+# Stable local/default smoke-test subset.
+# Intentionally excludes MFuseCore and other broader suites; use `make test-all`
+# for the full verification matrix.
 test-stable:
 	cd Packages/MFuseWebDAV && swift test
 	cd Packages/MFuseSMB && swift test

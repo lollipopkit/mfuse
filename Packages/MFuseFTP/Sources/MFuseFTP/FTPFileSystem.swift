@@ -79,9 +79,9 @@ public actor FTPFileSystem: RemoteFileSystem {
 
     public func disconnect() async throws {
         if let conn = connection {
+            defer { connection = nil }
             _ = try? await conn.sendCommand("QUIT")
             try await conn.close()
-            connection = nil
         }
     }
 
@@ -313,6 +313,17 @@ public actor FTPFileSystem: RemoteFileSystem {
     }
 
     public func delete(at path: RemotePath) async throws {
+        let item = try await itemInfo(at: path)
+        if item.isDirectory {
+            let children = try await enumerate(at: path)
+            for child in children {
+                try await delete(at: child.path)
+            }
+        }
+        try await deleteFileOrEmptyDirectory(at: path)
+    }
+
+    private func deleteFileOrEmptyDirectory(at path: RemotePath) async throws {
         let conn = try requireConnection()
         let remotePath = resolvedPath(path)
 

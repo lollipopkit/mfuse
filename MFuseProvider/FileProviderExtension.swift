@@ -832,47 +832,10 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             return []
         }
 
-        var itemsByPath = Dictionary(
-            uniqueKeysWithValues: await context.cache.descendants(of: path).map { ($0.path, $0) }
-        )
-
-        do {
-            for item in try await remoteDescendantItems(of: path, using: context.fileSystem) {
-                itemsByPath[item.path] = item
-            }
-        } catch {
-            logger.warning(
-                "Failed to enumerate descendants before deleting \(path.absoluteString, privacy: .public): \(error.localizedDescription, privacy: .public)"
-            )
-        }
-
-        return itemsByPath.values.sorted { lhs, rhs in
+        let cachedDescendants = await context.cache.descendants(of: path)
+        return cachedDescendants.sorted { lhs, rhs in
             lhs.path.components.count > rhs.path.components.count
         }
-    }
-
-    private func remoteDescendantItems(
-        of path: RemotePath,
-        using fileSystem: any RemoteFileSystem,
-        maxDepth: Int? = nil
-    ) async throws -> [RemoteItem] {
-        var descendants: [RemoteItem] = []
-        var pending: [(path: RemotePath, remainingDepth: Int?)] = [(path, maxDepth)]
-
-        while let next = pending.popLast() {
-            let children = try await fileSystem.enumerate(at: next.path)
-            descendants.append(contentsOf: children)
-
-            for child in children where child.isDirectory {
-                if let remainingDepth = next.remainingDepth, remainingDepth == 0 {
-                    continue
-                }
-                let nextDepth = next.remainingDepth.map { $0 - 1 }
-                pending.append((child.path, nextDepth))
-            }
-        }
-
-        return descendants
     }
 
     private func invalidateDeletedDescendants(
@@ -912,6 +875,12 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             case .notFound:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.noSuchItem.rawValue)
+            case .notDirectory, .notFile:
+                return NSError(
+                    domain: NSFileProviderErrorDomain,
+                    code: NSFileProviderError.noSuchItem.rawValue,
+                    userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"]
+                )
             case .alreadyExists:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.filenameCollision.rawValue)
