@@ -76,7 +76,7 @@ public final class DomainManager: ObservableObject {
         } catch {
             errors.append(.init(id: "__domains__", operation: .listDomains, error: error))
             Self.logger.error(
-                "Failed to list existing domain states before reconciliation: \(String(describing: error), privacy: .public)"
+                "Failed to list existing domain states before reconciliation: \(String(describing: error), privacy: .private)"
             )
             existingDomainStates = []
             didLoadExistingDomainStates = false
@@ -109,8 +109,7 @@ public final class DomainManager: ObservableObject {
                 shouldRemainDisconnected = false
             }
 
-            let needsDisconnectCall = shouldRemainDisconnected && existingState?.isDisconnected != true
-            if needsDisconnectCall {
+            if shouldRemainDisconnected {
                 do {
                     try await mountProvider.disconnect(config: config)
                 } catch {
@@ -212,6 +211,8 @@ public final class DomainManager: ObservableObject {
             )
         }
 
+        defaults.set(true, forKey: Self.replicatedDomainMigrationDefaultsKey)
+
         for domainID in domainIDs {
             guard let config = knownConfigsByDomainID[domainID] else { continue }
             do {
@@ -224,7 +225,5 @@ public final class DomainManager: ObservableObject {
         if !errors.isEmpty {
             throw SyncDomainsError(errors: errors)
         }
-
-        defaults.set(true, forKey: Self.replicatedDomainMigrationDefaultsKey)
     }
 }
