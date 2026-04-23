@@ -1,4 +1,4 @@
-@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&display=swap');
+@import 'https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&display=swap';
 
 :root {
   color-scheme: light;
@@ -23,7 +23,7 @@
   /* Typography */
   --font-display: 'Cabinet Grotesk', 'SF Pro Rounded', system-ui, -apple-system, sans-serif;
   --font-body: 'Cabinet Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
 }
 
 @media (prefers-color-scheme: dark) {
