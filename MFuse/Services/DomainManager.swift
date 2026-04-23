@@ -137,16 +137,6 @@ public final class DomainManager: ObservableObject {
     private func removeStaleDomainsAndSymlinks() async throws {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
         var errors: [SyncDomainsError.Entry] = []
-        let domainStates: [RegisteredDomainState]
-        do {
-            domainStates = try await mountProvider.domainStates()
-        } catch {
-            errors.append(.init(id: "__domain_states__", operation: .listDomains, error: error))
-            Self.logger.error(
-                "Failed to list domain states during stale cleanup: \(String(describing: error), privacy: .public)"
-            )
-            domainStates = []
-        }
         let domains: [NSFileProviderDomain]
 
         do {
@@ -154,6 +144,12 @@ public final class DomainManager: ObservableObject {
         } catch {
             errors.append(.init(id: "__domains__", operation: .listDomains, error: error))
             domains = []
+        }
+        let domainStates = domains.map {
+            RegisteredDomainState(
+                identifier: $0.identifier.rawValue,
+                isDisconnected: $0.isDisconnected
+            )
         }
 
         // Remove stale domains
