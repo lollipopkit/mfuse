@@ -44,7 +44,8 @@ struct SidebarView: View {
                     Button(AppL10n.string("common.action.mountAll", fallback: "Mount All")) {
                         Task {
                             let configsToMount = connectionManager.connections.filter {
-                                !connectionManager.effectiveMountState(for: $0.id).isMounted
+                                let state = connectionManager.effectiveMountState(for: $0.id)
+                                return !state.isMounted && !state.isMounting
                             }
                             await withTaskGroup(of: Void.self) { group in
                                 for config in configsToMount {
@@ -86,6 +87,7 @@ struct SidebarView: View {
         HStack(spacing: 8) {
             Image(systemName: config.backendType.iconName)
                 .foregroundStyle(mount.isMounted ? .green : .secondary)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
@@ -95,21 +97,25 @@ struct SidebarView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                if mount.isMounted {
-                    Text(FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
+                Text(mount.isMounted
+                    ? FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL)
+                    : ""
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .opacity(mount.isMounted ? 1 : 0)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
             }
             Spacer()
-            if mount.isMounted {
-                Image(systemName: "folder.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.green.opacity(0.7))
-            }
+            Image(systemName: "folder.fill")
+                .font(.caption2)
+                .foregroundStyle(.green.opacity(0.7))
+                .opacity(mount.isMounted ? 1 : 0)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
             Circle()
                 .fill(stateColor(mount))
+                .animation(AnimationConstants.mountState, value: mount)
                 .frame(width: 8, height: 8)
         }
         .padding(.vertical, 2)
@@ -184,7 +190,7 @@ struct SidebarView: View {
 
     private func stateColor(_ state: MountState) -> Color {
         switch state {
-        case .unmounted:  return .gray
+        case .unmounted:  return .secondary
         case .mounting:   return .orange
         case .mounted:    return .green
         case .error:      return .red

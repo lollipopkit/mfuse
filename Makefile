@@ -1,6 +1,9 @@
-.PHONY: all build test test-stable test-all generate clean lint release-dmg sync-homebrew-cask release
+.PHONY: all build test test-stable test-all generate clean lint debug-install release-dmg sync-homebrew-cask release
 
 SCHEME = MFuse
+APP_NAME = MFuse
+DEBUG_DERIVED_DATA = DerivedData
+DEBUG_APP_PATH = $(DEBUG_DERIVED_DATA)/Build/Products/Debug/$(APP_NAME).app
 CODESIGN_FLAGS = CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 LOCAL_PROJECT_SPEC = project.local.yml
 XCODEGEN_ENV =
@@ -45,6 +48,11 @@ clean:
 
 lint:
 	swiftlint
+
+debug-install:
+	xcodebuild -scheme $(SCHEME) -configuration Debug -derivedDataPath $(DEBUG_DERIVED_DATA) build $(CODESIGN_FLAGS)
+	rm -rf /Applications/$(APP_NAME).app
+	ditto $(DEBUG_APP_PATH) /Applications/$(APP_NAME).app
 
 release-dmg:
 	@test -n "$(XCARCHIVE_PATH)" || (echo "release-dmg requires XCARCHIVE_PATH. Example: XCARCHIVE_PATH=/abs/path/to/MFuse.xcarchive make release-dmg; this target calls scripts/release/package-dmg-from-xcarchive.sh." >&2; exit 1)

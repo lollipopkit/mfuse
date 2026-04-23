@@ -36,8 +36,11 @@ struct ConnectionDetailView: View {
                         HStack(spacing: 6) {
                             Image(systemName: mount.isMounted ? "folder.fill" : "folder")
                                 .foregroundStyle(iconColor)
+                                .contentTransition(.symbolEffect(.replace))
+                                .animation(AnimationConstants.mountState, value: mount.isMounted)
                             Text(mount.statusText)
                                 .foregroundStyle(mountStateColor)
+                                .animation(AnimationConstants.mountState, value: mount)
                         }
                     }
                 }
@@ -59,21 +62,26 @@ struct ConnectionDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if mount.isMounted {
-                Button {
-                    Task {
-                        if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                            await MainActor.run {
-                                NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+            Group {
+                if mount.isMounted {
+                    Button {
+                        Task {
+                            if let targetURL = await connectionManager.resolveFinderURL(for: config) {
+                                await MainActor.run {
+                                    NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+                                }
                             }
                         }
+                    } label: {
+                        Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
                     }
-                } label: {
-                    Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
+                    .buttonStyle(.bordered)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
-                .buttonStyle(.bordered)
             }
+            .animation(AnimationConstants.mountState, value: mount.isMounted)
             mountButton
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
             refreshButton
         }
     }
@@ -112,8 +120,10 @@ struct ConnectionDetailView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
+                .transition(.opacity)
             }
         }
+        .animation(AnimationConstants.mountState, value: mount.isMounted)
     }
 
     private var iconColor: Color {

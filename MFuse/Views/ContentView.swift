@@ -21,10 +21,13 @@ struct ContentView: View {
         } detail: {
             if let config = selectedConnection {
                 ConnectionDetailView(config: config)
+                    .transition(.opacity)
             } else {
                 emptyState
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: selectedConnection?.id)
         .sheet(item: $editorPresentation) { presentation in
             ConnectionEditorSheet(
                 config: presentation.config,
@@ -97,6 +100,7 @@ struct ContentView: View {
             Image(systemName: "externaldrive.connected.to.line.below")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
+                .symbolEffect(.pulse, options: .repeating.speed(0.5))
             Text(AppL10n.string("content.empty.title", fallback: "No Mount Selected"))
                 .font(.title2)
                 .foregroundStyle(.secondary)

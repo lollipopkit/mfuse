@@ -54,6 +54,7 @@ struct ConnectionEditorSheet: View {
 
     // Test connection
     @State private var isTesting = false
+    private let formAnimation: Animation = .easeInOut(duration: 0.3)
     @State private var testResult: String?
     @State private var testSuccess = false
     @State private var didLoadStoredCredential = false
@@ -246,13 +247,18 @@ struct ConnectionEditorSheet: View {
                         HStack {
                             Image(systemName: testSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
                                 .foregroundStyle(testSuccess ? .green : .red)
+                                .contentTransition(.symbolEffect(.replace))
                             Text(result)
                                 .font(.caption)
                         }
                     }
+                    .transition(.opacity)
                 }
             }
             .formStyle(.grouped)
+            .animation(formAnimation, value: backendType)
+            .animation(formAnimation, value: authMethod)
+            .animation(formAnimation, value: testResult)
 
             Divider()
 

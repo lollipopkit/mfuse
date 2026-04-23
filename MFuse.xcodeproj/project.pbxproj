@@ -20,6 +20,7 @@
 		6CFC915ABB3E65C2A3A9069D /* AppSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E2CAE2DCA895B496A33267B /* AppSettingsStore.swift */; };
 		6E2ADD8447C2E0F96F71DE13 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618EE0B5F204273106B71B31 /* ContentView.swift */; };
 		72A115D9CCD7002E3176B222 /* MFuseCore in Frameworks */ = {isa = PBXBuildFile; productRef = C7BD1586AC9E7DC89E58B6D8 /* MFuseCore */; };
+		7870A11C4616210EF8341D5B /* AnimationConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAD39B59F4BB3BBDEDE4A134 /* AnimationConstants.swift */; };
 		7C7BCD42BB471A66399444AC /* DomainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 641045C86137A217F117D301 /* DomainManager.swift */; };
 		7CCE8C8F7D36AA581BB4D938 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AFF01BD12544FDA9F2E4CE4 /* SettingsView.swift */; };
 		7D24C4338D8350B1380FA05E /* MFuseFTP in Frameworks */ = {isa = PBXBuildFile; productRef = 5F7981F6ECF44B6960C2B77E /* MFuseFTP */; };
@@ -105,6 +106,7 @@
 		A2DA624F0F8F589D1C9AF275 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		B64BE0FF0049FC47D89DBE6E /* MFuse.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MFuse.entitlements; sourceTree = "<group>"; };
 		B8450D10A58493639E045F51 /* MFuseCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MFuseCore; path = Packages/MFuseCore; sourceTree = SOURCE_ROOT; };
+		CAD39B59F4BB3BBDEDE4A134 /* AnimationConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimationConstants.swift; sourceTree = "<group>"; };
 		CF049908CAFD8A56B509E6E5 /* MFuseProvider.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MFuseProvider.entitlements; sourceTree = "<group>"; };
 		D1290DD7A47C057E88E6C301 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E04C0DC08BA9FE68D4A916FB /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 		FCADB348C99F6CDF45FAA842 /* Support */ = {
 			isa = PBXGroup;
 			children = (
+				CAD39B59F4BB3BBDEDE4A134 /* AnimationConstants.swift */,
 				3C84A779C9224B41A0B09275 /* AppL10n.swift */,
 			);
 			path = Support;
@@ -409,6 +412,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7870A11C4616210EF8341D5B /* AnimationConstants.swift in Sources */,
 				649D377F4FD453574489071E /* AppL10n.swift in Sources */,
 				6CFC915ABB3E65C2A3A9069D /* AppSettingsStore.swift in Sources */,
 				3EB5D25B2551950935CCE632 /* ConnectionDetailView.swift in Sources */,
@@ -462,7 +466,6 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = BA88US33G6;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_DEBUG_DYLIB = NO;
@@ -473,7 +476,6 @@
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse.provider;
 				PRODUCT_NAME = MFuseProvider;
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "MFuse Provider Release Profile";
@@ -516,6 +518,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 0;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = BA88US33G6;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -529,6 +532,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -547,7 +551,6 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = BA88US33G6;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_DEBUG_DYLIB = NO;
@@ -557,7 +560,6 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse;
 				PRODUCT_NAME = MFuse;
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "MFuse App Release Profile";
@@ -572,7 +574,6 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = BA88US33G6;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -582,7 +583,6 @@
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse.provider;
 				PRODUCT_NAME = MFuseProvider;
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "MFuse Provider Dev Profile";
@@ -625,6 +625,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 0;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = BA88US33G6;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -644,6 +645,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -663,7 +665,6 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = BA88US33G6;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -672,7 +673,6 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.lollipopkit.mfuse;
 				PRODUCT_NAME = MFuse;
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "MFuse App Dev Profile";
