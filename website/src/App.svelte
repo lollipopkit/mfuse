@@ -122,6 +122,9 @@
     </div>
 
     <div class="code-block" id="homebrew">
+      <span class="prompt"># tap the custom repo</span>
+      <span class="command">brew tap lollipopkit/taps</span>
+      <span class="prompt"># install MFuse</span>
       <span class="command">brew install --cask mfuse</span>
     </div>
   </section>
@@ -148,10 +151,10 @@
     <div class="cta-block">
       <h2>MFuse is free and open source under AGPLv3.</h2>
       <p>
-        Install with Homebrew or download a packaged build from GitHub Releases. Free software, no paid lock-in.
+        Install from the Homebrew tap or download a packaged build from GitHub Releases. Free software, no paid lock-in.
       </p>
       <div class="cta-actions">
-        <a class="btn btn-secondary" href="#homebrew">Install with Homebrew</a>
+        <a class="btn btn-secondary" href="#homebrew">Install from Homebrew Tap</a>
         <a class="btn btn-primary" href="https://github.com/lollipopkit/mfuse/releases">Download from GitHub Releases</a>
       </div>
     </div>

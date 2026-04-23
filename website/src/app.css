@@ -311,6 +311,8 @@ body {
   border-radius: var(--radius-container);
   border: 1px solid var(--light-gray);
   background: var(--snow);
+  display: grid;
+  gap: 0.3rem;
   padding: 1.25rem 1.5rem;
   margin-top: 2rem;
   font-family: var(--font-mono);
@@ -322,11 +324,25 @@ body {
 
 .code-block .prompt {
   color: var(--stone);
+  font-size: 0.78rem;
 }
 
 .code-block .command {
   color: var(--black);
   font-weight: 500;
+}
+
+.install-note {
+  margin-top: 0.9rem;
+  color: var(--stone);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  max-width: 66ch;
+}
+
+.install-note code {
+  font-family: var(--font-mono);
+  color: var(--near-black);
 }
 
 /* ─── Testimonial ─── */
