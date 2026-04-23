@@ -265,6 +265,7 @@ struct MenuBarView: View {
         if case .mounting = mountState {
             ProgressView()
                 .controlSize(.small)
+                .accessibilityLabel(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…"))
         } else {
             Button {
                 dismissMenuBarPanel()

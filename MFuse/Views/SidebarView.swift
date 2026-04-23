@@ -44,7 +44,8 @@ struct SidebarView: View {
                     Button(AppL10n.string("common.action.mountAll", fallback: "Mount All")) {
                         Task {
                             let configsToMount = connectionManager.connections.filter {
-                                !connectionManager.effectiveMountState(for: $0.id).isMounted
+                                let state = connectionManager.effectiveMountState(for: $0.id)
+                                return !state.isMounted && !state.isMounting
                             }
                             await withTaskGroup(of: Void.self) { group in
                                 for config in configsToMount {
