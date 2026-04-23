@@ -31,13 +31,13 @@ else
   APP_BUILD=""
 fi
 
-if [[ -n "$APP_VERSION" && "$APP_VERSION" != '$('* && -n "$APP_BUILD" && "$APP_BUILD" != '$('* ]]; then
-  DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}-${APP_BUILD}}"
+if [[ -n "$APP_VERSION" && "$APP_VERSION" != '$('* ]]; then
+  DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}}"
 fi
 
 if [[ -z "${DMG_PATH:-}" ]]; then
   if [[ -z "${DMG_BASENAME:-}" ]]; then
-    echo "DMG_PATH requires DMG_BASENAME when version/build are unavailable" >&2
+    echo "DMG_PATH requires DMG_BASENAME when version is unavailable" >&2
     echo "Provide DMG_PATH directly, or provide XCARCHIVE_PATH/APP_PATH so DMG_BASENAME can be resolved." >&2
     exit 1
   fi
@@ -50,20 +50,23 @@ if [[ ! -f "$DMG_PATH" ]]; then
   exit 1
 fi
 
-if [[ -z "$APP_VERSION" || "$APP_VERSION" == '$('* || -z "$APP_BUILD" || "$APP_BUILD" == '$('* ]]; then
+if [[ -z "$APP_VERSION" || "$APP_VERSION" == '$('* ]]; then
   dmg_filename="$(basename "$DMG_PATH")"
-  if [[ "$dmg_filename" =~ ^${APP_NAME}-(.+)-([0-9]+)\.dmg$ ]]; then
+  if [[ "$dmg_filename" =~ ^${APP_NAME}-([0-9]+(\.[0-9]+){1,2})\.dmg$ ]]; then
     APP_VERSION="${BASH_REMATCH[1]}"
-    APP_BUILD="${BASH_REMATCH[2]}"
+    APP_BUILD="${APP_BUILD:-}"
+  elif [[ "$dmg_filename" =~ ^${APP_NAME}-([0-9]+(\.[0-9]+){1,2})-([0-9]+)\.dmg$ ]]; then
+    APP_VERSION="${BASH_REMATCH[1]}"
+    APP_BUILD="${BASH_REMATCH[3]}"
   else
-    echo "unable to determine version/build from $DMG_PATH" >&2
-    echo "Provide XCARCHIVE_PATH, APP_PATH, or a DMG named ${APP_NAME}-<version>-<build>.dmg." >&2
+    echo "unable to determine version from $DMG_PATH" >&2
+    echo "Provide XCARCHIVE_PATH, APP_PATH, or a DMG named ${APP_NAME}-<version>.dmg." >&2
     exit 1
   fi
 fi
 
 RELEASE_TAG="${RELEASE_TAG:-v${APP_VERSION}}"
-DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}-${APP_BUILD}}"
+DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}}"
 
 if [[ -z "$TAP_CASK_PATH" && -n "$TAP_REPO_PATH" ]]; then
   TAP_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"
@@ -84,7 +87,7 @@ SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 mkdir -p "$(dirname "$TAP_CASK_PATH")"
 cat > "$TAP_CASK_PATH" <<CASK
 cask "$CASK_NAME" do
-  version "$APP_VERSION,$APP_BUILD"
+  version "$APP_VERSION"
   sha256 "$SHA256"
 
   url "https://github.com/$APP_REPO_SLUG/releases/download/$RELEASE_TAG/${DMG_BASENAME}.dmg",
@@ -100,7 +103,10 @@ end
 CASK
 
 echo "Generated tap cask: $TAP_CASK_PATH"
-echo "Version: $APP_VERSION ($APP_BUILD)"
+echo "Version: $APP_VERSION"
+if [[ -n "$APP_BUILD" && "$APP_BUILD" != '$('* ]]; then
+  echo "Build number: $APP_BUILD"
+fi
 echo "Release tag: $RELEASE_TAG"
 echo "DMG: $DMG_PATH"
 echo "SHA256: $SHA256"

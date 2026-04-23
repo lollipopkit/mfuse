@@ -36,7 +36,7 @@ fi
 
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
 APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
-DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}-${APP_BUILD}}"
+DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}}"
 DMG_PATH="${DMG_PATH:-$ARTIFACTS_PATH/${DMG_BASENAME}.dmg}"
 
 mkdir -p "$ARTIFACTS_PATH"
@@ -66,4 +66,5 @@ hdiutil create \
   "$DMG_PATH"
 
 echo "Created DMG at $DMG_PATH"
-echo "Version: $APP_VERSION ($APP_BUILD)"
+echo "Version: $APP_VERSION"
+echo "Build number: $APP_BUILD"
