@@ -144,9 +144,17 @@ public final class ConnectionManager: ObservableObject {
         }
         let previousConnections = connections
         let previousState = states[config.id]
-        let previousMountState = mountStates[config.id]
+       let previousMountState = mountStates[config.id]
         let previousFileSystem = fileSystems[config.id]
-        let savedCredential = try await credentialProvider.credential(for: config.id)
+        let savedCredential: Credential?
+        do {
+            savedCredential = try await credentialProvider.credential(for: config.id)
+        } catch {
+            if let mountProvider {
+                try? await mountProvider.ensureRegistered(config: config)
+            }
+            throw error
+        }
         connections.removeAll { $0.id == config.id }
         states.removeValue(forKey: config.id)
         mountStates.removeValue(forKey: config.id)

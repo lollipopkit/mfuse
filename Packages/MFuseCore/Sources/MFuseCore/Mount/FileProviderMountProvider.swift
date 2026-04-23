@@ -36,7 +36,7 @@ public final class FileProviderMountProvider: MountProvider {
             if shouldRetryMountAfterDomainRefresh(error) {
                 if let stale = try await findDomain(for: config) {
                     try await NSFileProviderManager.remove(stale)
-                    try await Task.sleep(nanoseconds: 500_000_000)
+                    try await Task.sleep(nanoseconds: FileProviderConstants.domainRemovalSettleNanoseconds)
                 }
                 try Task.checkCancellation()
                 try await Task.sleep(nanoseconds: 1_000_000_000)

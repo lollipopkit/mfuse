@@ -204,14 +204,12 @@ public final class DomainManager: ObservableObject {
             // before we re-register domains below. A future improvement could replace this
             // with a configurable constant or a more reliable readiness signal/callback if
             // Apple exposes one.
-            try await Task.sleep(nanoseconds: 500_000_000)
+            try await Task.sleep(nanoseconds: FileProviderConstants.domainRemovalSettleNanoseconds)
         } catch {
             throw SyncDomainsError(
                 errors: [.init(id: "__all_domains__", operation: .removeAllDomains, error: error)]
             )
         }
-
-        defaults.set(true, forKey: Self.replicatedDomainMigrationDefaultsKey)
 
         for domainID in domainIDs {
             guard let config = knownConfigsByDomainID[domainID] else { continue }
@@ -221,6 +219,8 @@ public final class DomainManager: ObservableObject {
                 errors.append(.init(id: domainID, operation: .register, error: error))
             }
         }
+
+        defaults.set(true, forKey: Self.replicatedDomainMigrationDefaultsKey)
 
         if !errors.isEmpty {
             throw SyncDomainsError(errors: errors)
