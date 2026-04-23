@@ -6,6 +6,7 @@ struct ConnectionDetailView: View {
 
     @EnvironmentObject var connectionManager: ConnectionManager
     let config: ConnectionConfig
+    private let mountStateAnimation: Animation = .easeInOut(duration: 0.35)
 
     private var mount: MountState {
         connectionManager.effectiveMountState(for: config.id)
@@ -36,8 +37,11 @@ struct ConnectionDetailView: View {
                         HStack(spacing: 6) {
                             Image(systemName: mount.isMounted ? "folder.fill" : "folder")
                                 .foregroundStyle(iconColor)
+                                .contentTransition(.symbolEffect(.replace))
+                                .animation(mountStateAnimation, value: mount.isMounted)
                             Text(mount.statusText)
                                 .foregroundStyle(mountStateColor)
+                                .animation(mountStateAnimation, value: mount)
                         }
                     }
                 }
@@ -72,8 +76,10 @@ struct ConnectionDetailView: View {
                     Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
                 }
                 .buttonStyle(.bordered)
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
             mountButton
+                .animation(mountStateAnimation, value: mount.isMounted)
             refreshButton
         }
     }
@@ -112,8 +118,10 @@ struct ConnectionDetailView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
+                .transition(.opacity)
             }
         }
+        .animation(mountStateAnimation, value: mount.isMounted)
     }
 
     private var iconColor: Color {

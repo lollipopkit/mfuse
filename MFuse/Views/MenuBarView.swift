@@ -9,6 +9,7 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var isQuitting = false
+    private let mountStateAnimation: Animation = .easeInOut(duration: 0.35)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -20,6 +21,8 @@ struct MenuBarView: View {
                 Text("\(mountedCount)/\(connectionManager.connections.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+                    .animation(mountStateAnimation, value: mountedCount)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -110,6 +113,7 @@ struct MenuBarView: View {
         HStack(spacing: 8) {
             Circle()
                 .fill(stateColor(mount))
+                .animation(mountStateAnimation, value: mount)
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
                 Text(config.name)
@@ -120,11 +124,13 @@ struct MenuBarView: View {
                         .font(.caption2)
                         .foregroundStyle(.green.opacity(0.8))
                         .lineLimit(1)
+                        .transition(.opacity)
                 } else {
                     Text(config.host)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .transition(.opacity)
                 }
                 if case .error(let msg) = mount {
                     Text(msg)
@@ -144,11 +150,13 @@ struct MenuBarView: View {
                 .buttonStyle(.borderless)
                 .controlSize(.small)
                 .help(AppL10n.string("menuBar.help.revealInFinder", fallback: "Reveal in Finder"))
+                .transition(.opacity)
             }
             toggleButton(config: config, mountState: mount)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .animation(mountStateAnimation, value: mount.isMounted)
     }
 
     @ViewBuilder

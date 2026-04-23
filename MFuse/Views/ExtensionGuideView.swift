@@ -10,6 +10,8 @@ struct ExtensionGuideView: View {
     @State private var checking = false
     @State private var checkFailed = false
     @State private var verifyTask: Task<Void, Never>?
+    @State private var didAppear = false
+    private let stepAnimation: Animation = .easeOut(duration: 0.4)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +19,7 @@ struct ExtensionGuideView: View {
             Image(systemName: "puzzlepiece.extension")
                 .font(.system(size: 56))
                 .foregroundStyle(.blue)
+                .symbolEffect(.pulse, options: .repeating.speed(0.4))
                 .padding(.top, 32)
 
             Text(AppL10n.string("extensionGuide.title", fallback: "Enable MFuse Extension"))
@@ -43,6 +46,9 @@ struct ExtensionGuideView: View {
             }
             .padding(.top, 24)
             .padding(.horizontal, 40)
+            .opacity(didAppear ? 1 : 0)
+            .offset(y: didAppear ? 0 : 12)
+            .animation(stepAnimation, value: didAppear)
 
             Spacer()
 
@@ -53,6 +59,7 @@ struct ExtensionGuideView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
             // Actions
@@ -112,6 +119,11 @@ struct ExtensionGuideView: View {
             verifyTask?.cancel()
             verifyTask = nil
         }
+        .task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            didAppear = true
+        }
+        .animation(.easeInOut(duration: 0.3), value: checkFailed)
     }
 
     // MARK: - Subviews
