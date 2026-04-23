@@ -120,7 +120,12 @@ struct ExtensionGuideView: View {
             verifyTask = nil
         }
         .task {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
             didAppear = true
         }
         .animation(.easeInOut(duration: 0.3), value: checkFailed)

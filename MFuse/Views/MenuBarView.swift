@@ -237,6 +237,7 @@ struct MenuBarView: View {
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .help(AppL10n.string("menuBar.help.revealInFinder", fallback: "Reveal in Finder"))
+                    .accessibilityLabel(AppL10n.string("menuBar.help.revealInFinder", fallback: "Reveal in Finder"))
                     .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
                 toggleButton(config: config, mountState: mount)
@@ -269,6 +270,10 @@ struct MenuBarView: View {
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
+            .accessibilityLabel(mountState.isMounted
+                ? AppL10n.string("common.action.unmount", fallback: "Unmount")
+                : AppL10n.string("common.action.mount", fallback: "Mount")
+            )
             .contentTransition(.symbolEffect(.replace))
             .animation(mountStateAnimation, value: mountState.isMounted)
         }
