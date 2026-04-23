@@ -1,0 +1,463 @@
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&display=swap');
+
+:root {
+  /* Monochrome palette — Ollama-inspired */
+  --black: #000000;
+  --near-black: #262626;
+  --dark-surface: #090909;
+  --stone: #737373;
+  --mid-gray: #525252;
+  --silver: #a3a3a3;
+  --border-light: #d4d4d4;
+  --light-gray: #e5e5e5;
+  --snow: #fafafa;
+  --white: #ffffff;
+  --ring-blue: rgba(59, 130, 246, 0.5);
+
+  /* Radius system: binary — 12px containers, 9999px pills */
+  --radius-container: 12px;
+  --radius-pill: 9999px;
+
+  /* Typography */
+  --font-display: 'Cabinet Grotesk', 'SF Pro Rounded', system-ui, -apple-system, sans-serif;
+  --font-body: 'Cabinet Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--white);
+  color: var(--black);
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: normal;
+  overflow-x: hidden;
+}
+
+#app {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* ─── Navigation ─── */
+.site-nav {
+  position: sticky;
+  top: 1.5rem;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(1080px, 92vw);
+  margin: 0 auto;
+  padding: 0.65rem 1.25rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--light-gray);
+  background: var(--white);
+}
+
+.brand {
+  text-decoration: none;
+  color: var(--black);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+}
+
+.site-nav nav {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+}
+
+.site-nav nav a {
+  text-decoration: none;
+  color: var(--stone);
+  font-size: 0.9rem;
+  font-weight: 400;
+  transition: color 0.2s ease;
+}
+
+.site-nav nav a:hover {
+  color: var(--black);
+}
+
+.nav-cta {
+  text-decoration: none;
+  border-radius: var(--radius-pill);
+  background: var(--black);
+  color: var(--white);
+  padding: 0.55rem 1.25rem;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: opacity 0.2s ease;
+}
+
+.nav-cta:hover {
+  opacity: 0.85;
+}
+
+/* ─── Sections ─── */
+.page-section {
+  width: min(1080px, 92vw);
+  margin: 0 auto;
+  padding: clamp(5rem, 12vw, 9rem) 0;
+}
+
+/* ─── Hero ─── */
+.hero {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  padding: clamp(6rem, 16vw, 12rem) 0 clamp(5rem, 10vw, 7rem);
+}
+
+.hero h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 5.5vw, 3.5rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: var(--black);
+  max-width: 18ch;
+}
+
+.hero-subtitle {
+  color: var(--stone);
+  font-size: clamp(1rem, 1.4vw, 1.15rem);
+  line-height: 1.6;
+  max-width: 52ch;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+/* ─── Buttons ─── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-radius: var(--radius-pill);
+  padding: 0.625rem 1.5rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  font-family: var(--font-body);
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.btn:hover {
+  opacity: 0.85;
+}
+
+.btn-primary {
+  background: var(--black);
+  color: var(--white);
+}
+
+.btn-secondary {
+  background: var(--light-gray);
+  color: var(--near-black);
+}
+
+/* ─── Section headings ─── */
+.section-head {
+  margin-bottom: 2.5rem;
+}
+
+.section-head h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 3.2vw, 2.25rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--black);
+  max-width: 28ch;
+}
+
+.section-head p {
+  margin-top: 0.75rem;
+  color: var(--stone);
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 55ch;
+}
+
+/* ─── Feature grid ─── */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.feature-card {
+  border-radius: var(--radius-container);
+  border: 1px solid var(--light-gray);
+  background: var(--white);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  transition: border-color 0.2s ease;
+}
+
+.feature-card:hover {
+  border-color: var(--border-light);
+}
+
+.feature-card .icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-container);
+  background: var(--snow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.feature-card h3 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--black);
+}
+
+.feature-card p {
+  color: var(--stone);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+/* ─── Wide card ─── */
+.feature-card.wide {
+  grid-column: span 2;
+}
+
+/* ─── Protocol list ─── */
+.protocol-section {
+  width: min(1080px, 92vw);
+  margin: 0 auto;
+  padding: clamp(4rem, 8vw, 6rem) 0;
+}
+
+.protocol-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+}
+
+.protocol-badge {
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--light-gray);
+  background: var(--white);
+  padding: 0.45rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--near-black);
+  font-family: var(--font-mono);
+  transition: background 0.2s ease;
+}
+
+.protocol-badge:hover {
+  background: var(--snow);
+}
+
+/* ─── Code block ─── */
+.code-block {
+  border-radius: var(--radius-container);
+  border: 1px solid var(--light-gray);
+  background: var(--snow);
+  padding: 1.25rem 1.5rem;
+  margin-top: 2rem;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--near-black);
+  overflow-x: auto;
+}
+
+.code-block .prompt {
+  color: var(--stone);
+}
+
+.code-block .command {
+  color: var(--black);
+  font-weight: 500;
+}
+
+/* ─── Testimonial ─── */
+.testimonial-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.testimonial-card {
+  border-radius: var(--radius-container);
+  border: 1px solid var(--light-gray);
+  background: var(--white);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.testimonial-card .quote {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--near-black);
+  font-style: italic;
+}
+
+.testimonial-card .author {
+  margin-top: auto;
+}
+
+.testimonial-card .name {
+  font-weight: 500;
+  font-size: 0.88rem;
+  color: var(--black);
+}
+
+.testimonial-card .role {
+  font-size: 0.82rem;
+  color: var(--stone);
+}
+
+/* ─── CTA ─── */
+.cta-section {
+  width: min(1080px, 92vw);
+  margin: 0 auto;
+  padding: clamp(4rem, 10vw, 8rem) 0;
+}
+
+.cta-block {
+  border-radius: var(--radius-container);
+  border: 1px solid var(--light-gray);
+  background: var(--white);
+  padding: clamp(2rem, 4vw, 3.5rem);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.cta-block h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  max-width: 22ch;
+}
+
+.cta-block p {
+  color: var(--stone);
+  max-width: 48ch;
+  line-height: 1.6;
+}
+
+.cta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+/* ─── Footer ─── */
+.site-footer {
+  width: min(1080px, 92vw);
+  margin: 0 auto;
+  padding: 1.5rem 0 3rem;
+  border-top: 1px solid var(--light-gray);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  color: var(--stone);
+  font-size: 0.85rem;
+}
+
+.site-footer a {
+  text-decoration: none;
+  color: var(--stone);
+  transition: color 0.2s ease;
+}
+
+.site-footer a:hover {
+  color: var(--black);
+}
+
+.footer-links {
+  display: flex;
+  gap: 1.5rem;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 768px) {
+  .site-nav nav {
+    display: none;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .feature-card.wide {
+    grid-column: span 1;
+  }
+
+  .testimonial-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero h1 {
+    max-width: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .site-nav {
+    top: 0.75rem;
+    padding: 0.55rem 1rem;
+  }
+
+  .hero {
+    padding: clamp(4rem, 10vw, 6rem) 0 clamp(3rem, 6vw, 5rem);
+  }
+
+  .protocol-badges {
+    gap: 0.4rem;
+  }
+
+  .site-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

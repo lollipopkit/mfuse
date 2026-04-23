@@ -43,3 +43,5 @@ project.local.yml
 # Playgrounds
 timeline.xctimeline
 playground.xcworkspace
+
+.vite/
