@@ -34,6 +34,8 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
 - FTP
 - NFS
 - Google Drive
+- Dropbox
+- Microsoft OneDrive
 
 ## 后端说明
 
@@ -53,7 +55,9 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
 │   ├── MFuseSMB/
 │   ├── MFuseFTP/
 │   ├── MFuseNFS/
-│   └── MFuseGoogleDrive/
+│   ├── MFuseGoogleDrive/
+│   ├── MFuseDropbox/
+│   └── MFuseOneDrive/
 ├── project.yml             # XcodeGen 工程定义
 └── Makefile
 ```
@@ -73,6 +77,33 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
 ```bash
 make generate
 ```
+
+### 配置内置 OAuth 应用
+
+Dropbox 和 OneDrive 走内置 PKCE OAuth 配置，运行前需要在 `project.local.yml`
+里填入对应的应用 ID：
+
+```yaml
+settings:
+  base:
+    MFDROPBOX_CLIENT_ID: YOUR_DROPBOX_APP_KEY
+    MFONEDRIVE_CLIENT_ID: YOUR_MICROSOFT_APP_ID
+```
+
+应用内已经预置了默认回调 URI：
+
+- Dropbox：`com.lollipopkit.mfuse.dropbox:/oauth`
+- OneDrive：`com.lollipopkit.mfuse.onedrive:/oauth`
+
+当前首版范围：
+
+- Dropbox：标准用户文件空间
+- OneDrive：当前登录用户的默认个人盘 / 工作盘 `drive`
+
+当前不包含：
+
+- SharePoint 文档库和其他非默认 Microsoft Graph drive
+- Dropbox Team Space / 管理员代理能力
 
 ### 运行测试
 

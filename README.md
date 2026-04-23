@@ -34,6 +34,8 @@ MFuse is a macOS app that exposes remote storage in Finder through File Provider
 - FTP
 - NFS
 - Google Drive
+- Dropbox
+- Microsoft OneDrive
 
 ## Backend Notes
 
@@ -53,7 +55,9 @@ MFuse is a macOS app that exposes remote storage in Finder through File Provider
 │   ├── MFuseSMB/
 │   ├── MFuseFTP/
 │   ├── MFuseNFS/
-│   └── MFuseGoogleDrive/
+│   ├── MFuseGoogleDrive/
+│   ├── MFuseDropbox/
+│   └── MFuseOneDrive/
 ├── project.yml             # XcodeGen project definition
 └── Makefile
 ```
@@ -73,6 +77,33 @@ MFuse is a macOS app that exposes remote storage in Finder through File Provider
 ```bash
 make generate
 ```
+
+### Configure bundled OAuth apps
+
+Dropbox and OneDrive use bundled PKCE OAuth app settings loaded from build settings.
+Set them in `project.local.yml` before running the app:
+
+```yaml
+settings:
+  base:
+    MFDROPBOX_CLIENT_ID: YOUR_DROPBOX_APP_KEY
+    MFONEDRIVE_CLIENT_ID: YOUR_MICROSOFT_APP_ID
+```
+
+Default redirect URIs are already wired in the app bundle:
+
+- Dropbox: `com.lollipopkit.mfuse.dropbox:/oauth`
+- OneDrive: `com.lollipopkit.mfuse.onedrive:/oauth`
+
+Current scope:
+
+- Dropbox: standard user file space
+- OneDrive: the signed-in user's default personal/work `drive`
+
+Out of scope for this first pass:
+
+- SharePoint document libraries and other non-default Microsoft Graph drives
+- Dropbox Team Space / admin impersonation flows
 
 ### Run tests
 

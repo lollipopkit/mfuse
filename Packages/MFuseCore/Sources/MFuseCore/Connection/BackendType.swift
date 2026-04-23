@@ -9,6 +9,8 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
     case nfs
     case ftp
     case googleDrive
+    case dropbox
+    case oneDrive
 
     public var id: String { rawValue }
 
@@ -25,6 +27,16 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
                 "backend.googleDrive",
                 fallback: "Google Drive"
             )
+        case .dropbox:
+            return MFuseCoreL10n.string(
+                "backend.dropbox",
+                fallback: "Dropbox"
+            )
+        case .oneDrive:
+            return MFuseCoreL10n.string(
+                "backend.oneDrive",
+                fallback: "Microsoft OneDrive"
+            )
         }
     }
 
@@ -37,6 +49,8 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
         case .nfs:         return 2049
         case .ftp:         return 21
         case .googleDrive: return 443
+        case .dropbox:     return 443
+        case .oneDrive:    return 443
         }
     }
 
@@ -49,6 +63,17 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
         case .nfs:         return "externaldrive.connected.to.line.below"
         case .ftp:         return "arrow.up.arrow.down"
         case .googleDrive: return "icloud.and.arrow.down"
+        case .dropbox:     return "shippingbox"
+        case .oneDrive:    return "cloud"
+        }
+    }
+
+    public var requiresServerEndpoint: Bool {
+        switch self {
+        case .googleDrive, .dropbox, .oneDrive:
+            return false
+        default:
+            return true
         }
     }
 
@@ -62,6 +87,8 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
         case .nfs:         return [.anonymous]
         case .ftp:         return [.password, .anonymous]
         case .googleDrive: return [.oauth]
+        case .dropbox:     return [.oauth]
+        case .oneDrive:    return [.oauth]
         }
     }
 }
