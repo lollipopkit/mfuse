@@ -929,6 +929,122 @@
         }
       }
     },
+    "content.error.savedButDomainSyncFailed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection was saved, but File Provider domain sync failed: %@. MFuse will retry reconciliation on the next launch."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接已保存，但 File Provider 域同步失败：%@。MFuse 会在下次启动时重试协调。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連線已儲存，但 File Provider 網域同步失敗：%@。MFuse 會在下次啟動時重試協調。"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La conexión se guardó, pero falló la sincronización del dominio de File Provider: %@. MFuse volverá a intentar la reconciliación en el próximo inicio."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続は保存されましたが、File Provider ドメインの同期に失敗しました: %@。MFuse は次回起動時に再調整を再試行します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결은 저장되었지만 File Provider 도메인 동기화에 실패했습니다: %@. MFuse는 다음 실행 시 다시 조정합니다."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connessione è stata salvata, ma la sincronizzazione del dominio File Provider non è riuscita: %@. MFuse ritenterà la riconciliazione al prossimo avvio."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koneksi telah disimpan, tetapi sinkronisasi domain File Provider gagal: %@. MFuse akan mencoba rekonsiliasi lagi saat peluncuran berikutnya."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connexion a été enregistrée, mais la synchronisation du domaine File Provider a échoué : %@. MFuse réessaiera la réconciliation au prochain lancement."
+          }
+        }
+      }
+    },
+    "content.warning.domainSyncIssue": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Domain Sync Issue"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "域同步问题"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "網域同步問題"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Problema de sincronización del dominio"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドメイン同期の問題"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "도메인 동기화 문제"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Problema di sincronizzazione del dominio"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masalah sinkronisasi domain"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Problème de synchronisation du domaine"
+          }
+        }
+      }
+    },
     "detail.action.openInFinder": {
       "localizations": {
         "en": {
@@ -3899,60 +4015,60 @@
         }
       }
     },
-    "domain.sync.error.removeStaleDomains": {
+    "domain.sync.error.reconcile": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Failed to remove one or more stale File Provider domains: %@"
+            "value": "Failed to reconcile one or more File Provider domains: %@"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "移除一个或多个过期 File Provider 域失败：%@"
+            "value": "协调一个或多个 File Provider 域失败：%@"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "移除一個或多個過期 File Provider 網域失敗：%@"
+            "value": "協調一個或多個 File Provider 網域失敗：%@"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "No se pudo eliminar uno o más dominios obsoletos de File Provider: %@"
+            "value": "No se pudo reconciliar uno o más dominios de File Provider: %@"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "不要になった File Provider ドメインの削除に失敗しました: %@"
+            "value": "1 つ以上の File Provider ドメインの整合に失敗しました: %@"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "오래된 File Provider 도메인 하나 이상을 제거하지 못했습니다: %@"
+            "value": "하나 이상의 File Provider 도메인을 조정하지 못했습니다: %@"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Impossibile rimuovere uno o più domini File Provider obsoleti: %@"
+            "value": "Impossibile riconciliare uno o più domini File Provider: %@"
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gagal menghapus satu atau lebih domain File Provider yang usang: %@"
+            "value": "Gagal merekonsiliasi satu atau lebih domain File Provider: %@"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Échec de la suppression d’un ou plusieurs domaines File Provider obsolètes : %@"
+            "value": "Échec de la réconciliation d’un ou plusieurs domaines File Provider : %@"
           }
         }
       }

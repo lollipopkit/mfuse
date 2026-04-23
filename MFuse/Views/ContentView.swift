@@ -8,7 +8,7 @@ struct ContentView: View {
     @State private var selectedConnection: ConnectionConfig?
     @State private var editorPresentation: EditorPresentation?
     @State private var showingExtensionGuide = false
-    @State private var saveErrorMessage: String?
+    @State private var saveAlert: SaveAlertState?
 
     var body: some View {
         NavigationSplitView {
@@ -43,12 +43,14 @@ struct ContentView: View {
                 ExtensionGuideView()
             }
         )
-        .alert(AppL10n.string("content.error.unableToSaveMount", fallback: "Unable to Save Mount"), isPresented: saveErrorIsPresented) {
-            Button(AppL10n.string("common.action.ok", fallback: "OK"), role: .cancel) {
-                saveErrorMessage = nil
-            }
-        } message: {
-            Text(saveErrorMessage ?? AppL10n.string("common.error.unknown", fallback: "An unknown error occurred."))
+        .alert(item: $saveAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .cancel(Text(AppL10n.string("common.action.ok", fallback: "OK"))) {
+                    saveAlert = nil
+                }
+            )
         }
         .onReceive(connectionManager.$needsExtensionSetup) { needs in
             if needs {
@@ -117,10 +119,11 @@ struct ContentView: View {
     private func saveConnection(_ config: ConnectionConfig, credential: Credential) {
         Task {
             do {
+                let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
                 let previousCredential = try await credentialProvider.credential(for: config.id)
                 try await credentialProvider.store(credential, for: config.id)
                 do {
-                    if connectionManager.connections.contains(where: { $0.id == config.id }) {
+                    if previousConfig != nil {
                         try connectionManager.update(config)
                     } else {
                         try connectionManager.add(config)
@@ -137,27 +140,48 @@ struct ContentView: View {
                     selectedConnection = config
                     editorPresentation = nil
                 }
+                do {
+                    try await connectionManager.syncSavedConnectionRegistration(
+                        config,
+                        previousConfig: previousConfig
+                    )
+                } catch {
+                    await MainActor.run {
+                        saveAlert = SaveAlertState(
+                            title: AppL10n.string(
+                                "content.warning.domainSyncIssue",
+                                fallback: "Domain Sync Issue"
+                            ),
+                            message: AppL10n.string(
+                                "content.error.savedButDomainSyncFailed",
+                                fallback: "The connection was saved, but File Provider domain sync failed: %@. MFuse will retry reconciliation on the next launch.",
+                                error.localizedDescription
+                            )
+                        )
+                    }
+                }
             } catch {
                 await MainActor.run {
-                    saveErrorMessage = error.localizedDescription
+                    saveAlert = SaveAlertState(
+                        title: AppL10n.string(
+                            "content.error.unableToSaveMount",
+                            fallback: "Unable to Save Mount"
+                        ),
+                        message: error.localizedDescription
+                    )
                 }
             }
         }
-    }
-
-    private var saveErrorIsPresented: Binding<Bool> {
-        Binding(
-            get: { saveErrorMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    saveErrorMessage = nil
-                }
-            }
-        )
     }
 }
 
 private struct EditorPresentation: Identifiable {
     let id = UUID()
     let config: ConnectionConfig?
+}
+
+private struct SaveAlertState: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }

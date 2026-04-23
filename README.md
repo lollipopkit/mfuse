@@ -9,6 +9,8 @@ MFuse is a macOS app that exposes remote storage in Finder through File Provider
 
 Saved mounts can optionally enable `Auto-Mount on App Launch`. When combined with `Launch at Login`, those mounts will reconnect automatically after you sign in or restart your Mac.
 
+Saving a connection now pre-registers its File Provider domain, so MFuse can appear in System Settings before the first mount. `Unmount` only disconnects the active session and keeps the domain registered; the domain is removed only when you delete the saved connection.
+
 MFuse also includes an optional `iCloud Sync` toggle in Settings. When both `iCloud Drive` and `iCloud Keychain` are available, MFuse can sync saved connection configs and credentials across devices. Host keys are still local-only in v1.
 
 ## Screenshots
