@@ -1,4 +1,4 @@
-.PHONY: all build test test-stable test-all generate clean lint release-install-signing release-clean-signing debug-install-app release-dmg
+.PHONY: all build test test-stable test-all generate clean lint release-dmg sync-homebrew-cask release
 
 SCHEME = MFuse
 CODESIGN_FLAGS = CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
@@ -46,14 +46,12 @@ clean:
 lint:
 	swiftlint
 
-release-install-signing:
-	bash scripts/release/install-apple-signing.sh
-
-release-clean-signing:
-	bash scripts/release/cleanup-apple-signing.sh
-
-debug-install-app:
-	CONFIGURATION=Debug ARCHIVE_PATH="$(CURDIR)/build/debug-install/MFuse.xcarchive" bash scripts/release/build-and-install-app.sh
-
 release-dmg:
-	bash scripts/release/release-dmg.sh
+	@test -n "$(XCARCHIVE_PATH)" || (echo "release-dmg requires XCARCHIVE_PATH. Example: XCARCHIVE_PATH=/abs/path/to/MFuse.xcarchive make release-dmg; this target calls scripts/release/package-dmg-from-xcarchive.sh." >&2; exit 1)
+	bash scripts/release/package-dmg-from-xcarchive.sh
+
+sync-homebrew-cask:
+	bash scripts/release/sync-homebrew-cask.sh
+
+release:
+	bash scripts/release/release-from-git-version.sh

@@ -101,6 +101,32 @@ make lint
 make build
 ```
 
+### 发布
+
+```bash
+make release
+```
+
+`make release` 会从 `.env` 读取签名与公证凭据，并用当前
+`git rev-list --count HEAD` 自动生成版本号：
+
+- `MARKETING_VERSION=<MFUSE_BASE_VERSION>.<commit count>`
+- `CURRENT_PROJECT_VERSION=<commit count>`
+
+例如当 commit 数为 `2` 且 `MFUSE_BASE_VERSION=1.0` 时，发布版本号会是
+`1.0.2`，构建号会是 `2`。
+
+当前发布流程默认要求：
+
+- `Developer ID Application` 证书已经安装在 macOS Keychain 中
+- 公证凭据已经通过 `xcrun notarytool store-credentials` 存入 Keychain
+- app 和 extension 对应的 provisioning profile 已安装到 `~/Library/MobileDevice/Provisioning Profiles`
+- `gh` 已经登录目标仓库并具备上传 Release 资产的权限
+
+公证成功后，`make release` 还会自动创建或更新 tag 为
+`v<MARKETING_VERSION>` 的 GitHub Release，把 title 设成同名，并上传生成的
+DMG 资产。
+
 ## 常用命令
 
 ```bash
@@ -109,7 +135,6 @@ make test       # 运行稳定的 package 测试子集（test-stable 别名）
 make test-all   # 运行完整 package 测试矩阵
 make lint       # 运行 SwiftLint
 make build      # 构建应用 scheme
-make debug-install-app     # 构建已签名 Debug 并安装到 /Applications/MFuse.app
 make clean      # 清理构建产物
 ```
 

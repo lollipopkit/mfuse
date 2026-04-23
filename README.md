@@ -101,6 +101,32 @@ make lint
 make build
 ```
 
+### Release
+
+```bash
+make release
+```
+
+`make release` loads signing and notarization credentials from `.env`, computes the
+current `git rev-list --count HEAD`, and releases with:
+
+- `MARKETING_VERSION=<MFUSE_BASE_VERSION>.<commit count>`
+- `CURRENT_PROJECT_VERSION=<commit count>`
+
+Example: when the commit count is `2` and `MFUSE_BASE_VERSION=1.0`, the release
+version becomes `1.0.2` and the build number becomes `2`.
+
+The release flow now expects:
+
+- a `Developer ID Application` certificate already installed in your macOS keychain
+- notarization credentials already stored via `xcrun notarytool store-credentials`
+- app and extension provisioning profiles already installed under `~/Library/MobileDevice/Provisioning Profiles`
+- `gh` already authenticated for the target repository with upload permission
+
+After notarization succeeds, `make release` automatically creates or updates the
+GitHub Release tagged `v<MARKETING_VERSION>`, sets its title to the same value,
+and uploads the generated DMG asset.
+
 ## Testing
 
 Current test coverage is centered on Swift packages, especially:
