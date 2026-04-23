@@ -6,7 +6,6 @@ import os.log
 struct SidebarView: View {
 
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse", category: "SidebarView")
-    private let mountStateAnimation: Animation = .easeInOut(duration: 0.35)
     @EnvironmentObject var connectionManager: ConnectionManager
     @Binding var selectedConnection: ConnectionConfig?
     @State private var removalErrorMessage: String?
@@ -87,7 +86,7 @@ struct SidebarView: View {
         HStack(spacing: 8) {
             Image(systemName: config.backendType.iconName)
                 .foregroundStyle(mount.isMounted ? .green : .secondary)
-                .animation(mountStateAnimation, value: mount.isMounted)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
@@ -105,17 +104,17 @@ struct SidebarView: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .opacity(mount.isMounted ? 1 : 0)
-                .animation(mountStateAnimation, value: mount.isMounted)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
             }
             Spacer()
             Image(systemName: "folder.fill")
                 .font(.caption2)
                 .foregroundStyle(.green.opacity(0.7))
                 .opacity(mount.isMounted ? 1 : 0)
-                .animation(mountStateAnimation, value: mount.isMounted)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
             Circle()
                 .fill(stateColor(mount))
-                .animation(mountStateAnimation, value: mount)
+                .animation(AnimationConstants.mountState, value: mount)
                 .frame(width: 8, height: 8)
         }
         .padding(.vertical, 2)

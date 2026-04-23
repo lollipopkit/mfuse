@@ -9,7 +9,6 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var isQuitting = false
-    private let mountStateAnimation: Animation = .easeInOut(duration: 0.35)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,7 +47,7 @@ struct MenuBarView: View {
                     .monospacedDigit()
                     .foregroundStyle(mountedCount > 0 ? .green : .secondary)
                     .contentTransition(.numericText())
-                    .animation(mountStateAnimation, value: mountedCount)
+                    .animation(AnimationConstants.mountState, value: mountedCount)
             }
         }
         .padding(.horizontal, 14)
@@ -92,8 +91,9 @@ struct MenuBarView: View {
             Button {
                 dismissMenuBarPanel()
                 Task {
-                    for config in connectionManager.connections
-                    where !connectionManager.effectiveMountState(for: config.id).isMounted {
+                    for config in connectionManager.connections {
+                        let state = connectionManager.effectiveMountState(for: config.id)
+                        guard !state.isMounted, !state.isMounting else { continue }
                         await connectionManager.connect(config.id)
                     }
                 }
@@ -190,7 +190,7 @@ struct MenuBarView: View {
                 Image(systemName: config.backendType.iconName)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(stateColor(mount))
-                    .animation(mountStateAnimation, value: mount)
+                    .animation(AnimationConstants.mountState, value: mount)
             }
 
             // Info
@@ -213,7 +213,7 @@ struct MenuBarView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(mount.isMounted ? .green.opacity(0.8) : .secondary)
                 .lineLimit(1)
-                .animation(mountStateAnimation, value: mount.isMounted)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
                 if case .error(let msg) = mount {
                     Text(msg)
                         .font(.system(size: 10))
@@ -242,7 +242,7 @@ struct MenuBarView: View {
                 }
                 toggleButton(config: config, mountState: mount)
             }
-            .animation(mountStateAnimation, value: mount.isMounted)
+            .animation(AnimationConstants.mountState, value: mount.isMounted)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
@@ -275,7 +275,7 @@ struct MenuBarView: View {
                 : AppL10n.string("common.action.mount", fallback: "Mount")
             )
             .contentTransition(.symbolEffect(.replace))
-            .animation(mountStateAnimation, value: mountState.isMounted)
+            .animation(AnimationConstants.mountState, value: mountState.isMounted)
         }
     }
 

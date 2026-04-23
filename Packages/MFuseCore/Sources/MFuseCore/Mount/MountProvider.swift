@@ -63,6 +63,11 @@ public enum MountState: Sendable, Equatable {
         return false
     }
 
+    public var isMounting: Bool {
+        if case .mounting = self { return true }
+        return false
+    }
+
     public var mountPath: String? {
         if case .mounted(let path) = self { return path }
         return nil

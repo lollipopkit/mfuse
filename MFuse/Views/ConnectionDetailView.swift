@@ -6,7 +6,6 @@ struct ConnectionDetailView: View {
 
     @EnvironmentObject var connectionManager: ConnectionManager
     let config: ConnectionConfig
-    private let mountStateAnimation: Animation = .easeInOut(duration: 0.35)
 
     private var mount: MountState {
         connectionManager.effectiveMountState(for: config.id)
@@ -38,10 +37,10 @@ struct ConnectionDetailView: View {
                             Image(systemName: mount.isMounted ? "folder.fill" : "folder")
                                 .foregroundStyle(iconColor)
                                 .contentTransition(.symbolEffect(.replace))
-                                .animation(mountStateAnimation, value: mount.isMounted)
+                                .animation(AnimationConstants.mountState, value: mount.isMounted)
                             Text(mount.statusText)
                                 .foregroundStyle(mountStateColor)
-                                .animation(mountStateAnimation, value: mount)
+                                .animation(AnimationConstants.mountState, value: mount)
                         }
                     }
                 }
@@ -79,7 +78,7 @@ struct ConnectionDetailView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
             mountButton
-                .animation(mountStateAnimation, value: mount.isMounted)
+                .animation(AnimationConstants.mountState, value: mount.isMounted)
             refreshButton
         }
     }
@@ -121,7 +120,7 @@ struct ConnectionDetailView: View {
                 .transition(.opacity)
             }
         }
-        .animation(mountStateAnimation, value: mount.isMounted)
+        .animation(AnimationConstants.mountState, value: mount.isMounted)
     }
 
     private var iconColor: Color {
