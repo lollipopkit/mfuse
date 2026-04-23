@@ -172,7 +172,16 @@ struct ConnectionEditorSheet: View {
                     }
                 case .googleDrive:
                     Section(AppL10n.string("editor.section.googleDrive", fallback: "Google Drive Settings")) {
-                        TextField(AppL10n.string("editor.field.oauthClientID", fallback: "OAuth Client ID"), text: $gdClientID, prompt: Text("xxxx.apps.googleusercontent.com"))
+                        TextField(
+                            AppL10n.string("editor.field.oauthClientID", fallback: "OAuth Client ID"),
+                            text: $gdClientID,
+                            prompt: Text(
+                                AppL10n.string(
+                                    "editor.prompt.oauthClientID",
+                                    fallback: "your-client-id.apps.googleusercontent.com"
+                                )
+                            )
+                        )
                         TextField(AppL10n.string("editor.field.redirectURI", fallback: "Redirect URI"), text: $gdRedirectURI, prompt: Text("com.lollipopkit.mfuse:/oauth"))
                     }
                 default:

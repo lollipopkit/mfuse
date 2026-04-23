@@ -1,6 +1,6 @@
 # MFuse
 
-[English README](README.md) | [License](LICENSE) | [Third-Party Notices](THIRD_PARTY_NOTICES.md)
+[English](README.md) | [下载](https://github.com/lollipopkit/mfuse/releases) | [License](LICENSE) | [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
 > 提示
 > 当前项目仍在积极开发中，行为、接口和支持的工作流都可能发生变化。
@@ -101,23 +101,6 @@ make lint
 make build
 ```
 
-### 本地 Xcode 构建
-
-如果你是在 Xcode 里直接构建 `MFuse.app`，然后再复制到 `/Applications`，主应用 target 和 File Provider extension target 都需要使用有效的 Apple development team 签名。
-
-不要依赖直接修改生成后的 Xcode 工程。`MFuse.xcodeproj` 是从 `project.yml` 重新生成的，所以你在 Xcode 里手动改的签名设置，下一次执行 `make generate` 时可能会丢失。
-
-如果你要稳定保留本机签名配置，复制 `project.local.example.yml` 为 `project.local.yml`，按你的本机情况填写签名参数后重新生成工程。`project.local.yml` 已被 Git 忽略，`make generate` 会自动把它合并进去。
-
-`project.local.example.yml` 现在同时包含两类本地覆盖方式：
-
-- 只注入 `DEVELOPMENT_TEAM`，继续使用 Automatic signing
-- 为 app 和 File Provider extension 分别指定 Debug/Release 的 `CODE_SIGN_STYLE`、`CODE_SIGN_IDENTITY` 和 `PROVISIONING_PROFILE_SPECIFIER`，稳定复现本机显式 provisioning profile 配置
-
-未签名或 ad hoc 签名的构建虽然可以启动，但 macOS 可能会在运行时忽略 File Provider extension，因为 App Group entitlement 不会被系统接受。出现这种情况时，mount 会失败，Finder 还可能对自动生成的便捷链接报“文件不存在”。
-
-如果你要使用 `iCloud Sync`，主应用 target 对应的签名 profile 还需要授权 `iCloud.com.lollipopkit.mfuse` 容器以及 `CloudDocuments`。File Provider extension 不会直接访问 ubiquity container，所以它的 entitlement 需求仍然只包括共享 App Group 和 Keychain access group。
-
 ## 常用命令
 
 ```bash
@@ -129,65 +112,6 @@ make build      # 构建应用 scheme
 make debug-install-app     # 构建已签名 Debug 并安装到 /Applications/MFuse.app
 make clean      # 清理构建产物
 ```
-
-`make debug-install-app` 会执行 `scripts/release/build-and-install-app.sh`：按当前 `MFuse.xcodeproj` 已配置好的签名设置，以 `Debug` 配置归档 `MFuse` scheme，校验归档里的主应用和扩展都嵌入了已授权共享 App Group 的 profile，然后把归档产物安装到 `/Applications/MFuse.app`。
-
-这个本地安装流程现在直接遵循你在 Xcode 工程里已经配置好的签名方式。如果当前 target 走的是显式 provisioning profile，那么这些 profile 仍然需要在 `com.apple.security.application-groups` 里包含 `group.com.lollipopkit.mfuse.shared`。
-
-如果你要验证 `iCloud Sync`，还要确保主应用 target 的 profile 里包含 `iCloud.com.lollipopkit.mfuse`。修改本地签名配置后，请重新从 `project.yml` 生成工程，避免仓库里的 entitlement 声明和你本机的 provisioning setup 漂移。
-
-通用的 `Mac Team Provisioning Profile: *` 仍然不够用。它不包含 App Group entitlement，在 macOS Sequoia 上会导致 “would like to access data from other apps” 启动弹窗、系统设置里看不到 File Provider 扩展，以及 Finder 挂载为空或被带到共享容器。安装脚本依然会拒绝把这种损坏签名的构建复制到 `/Applications`。
-
-如果你只是想本地验证而不覆盖系统 Applications，可以改写安装目标：
-
-```bash
-INSTALL_PATH=/tmp/MFuse.app make debug-install-app
-```
-
-## 本机构建 DMG
-
-仓库现在提供本机发布脚本，用于在你的 Mac 上构建已签名并完成 notarization 的 `DMG`：
-
-- `scripts/release/install-apple-signing.sh`
-- `scripts/release/cleanup-apple-signing.sh`
-- `scripts/release/build-and-notarize-dmg.sh`
-- `scripts/release/release-dmg.sh`
-
-需要准备的本机输入：
-
-- `APPLE_DEVELOPER_ID_APP_P12_PATH`
-- `APPLE_DEVELOPER_ID_APP_P12_PASSWORD`
-- `APPLE_DEVELOPER_ID_APP_PROFILE_PATH`
-- `APPLE_DEVELOPER_ID_EXTENSION_PROFILE_PATH`
-- `APPLE_TEAM_ID`
-- `APPLE_NOTARY_KEY_ID`
-- `APPLE_NOTARY_ISSUER_ID`
-- `APPLE_NOTARY_API_KEY_PATH`
-
-这些脚本默认会从仓库根目录加载 `.env`。如果 shell 里已经显式导出了同名环境变量，则显式环境变量优先。仓库里提供了一个起始模板 `.env.release.example`。
-
-标准流程：
-
-- 将 `Developer ID Application` 证书和两份 provisioning profile 安装到临时本地 keychain
-- 从 `project.yml` 重新生成 `MFuse.xcodeproj`
-- 以 `developer-id` 方式 archive 并 export `Release` 构建
-- 生成并签名 `DMG`
-- 使用 `notarytool` 提交 notarization，并在成功后执行 staple
-- 自动恢复之前的默认 keychain，并清理临时签名材料
-
-示例：
-
-```bash
-cp .env.release.example .env
-# 编辑 .env
-
-make generate
-make release-dmg
-```
-
-`make release-dmg` 现在会在一次执行里完成安装、打包、公证和清理。如果你要手动控制，也可以分别执行 `make release-install-signing` 和 `make release-clean-signing`。
-
-这里故意不包含 `PKG`。如果后续要支持，还需要单独的 `Developer ID Installer` 证书。
 
 ## 测试说明
 
