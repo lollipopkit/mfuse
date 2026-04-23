@@ -135,7 +135,6 @@ make test       # 运行稳定的 package 测试子集（test-stable 别名）
 make test-all   # 运行完整 package 测试矩阵
 make lint       # 运行 SwiftLint
 make build      # 构建应用 scheme
-make debug-install-app     # 构建已签名 Debug 并安装到 /Applications/MFuse.app
 make clean      # 清理构建产物
 ```
 

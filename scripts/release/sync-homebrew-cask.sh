@@ -8,6 +8,7 @@ CASK_NAME="${CASK_NAME:-mfuse}"
 APP_REPO_SLUG="${APP_REPO_SLUG:-lollipopkit/mfuse}"
 TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-taps}"
 TAP_CASK_PATH="${TAP_CASK_PATH:-}"
+EXPLICIT_TAP_CASK_PATH="${TAP_CASK_PATH:-}"
 XCARCHIVE_PATH="${1:-${XCARCHIVE_PATH:-}}"
 
 if [[ -n "$XCARCHIVE_PATH" ]]; then
@@ -30,7 +31,18 @@ else
   APP_BUILD=""
 fi
 
-DMG_PATH="${DMG_PATH:-$REPO_ROOT/build/artifacts/${DMG_BASENAME}.dmg}"
+if [[ -n "$APP_VERSION" && "$APP_VERSION" != '$('* && -n "$APP_BUILD" && "$APP_BUILD" != '$('* ]]; then
+  DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}-${APP_BUILD}}"
+fi
+
+if [[ -z "${DMG_PATH:-}" ]]; then
+  if [[ -z "${DMG_BASENAME:-}" ]]; then
+    echo "DMG_PATH requires DMG_BASENAME when version/build are unavailable" >&2
+    echo "Provide DMG_PATH directly, or provide XCARCHIVE_PATH/APP_PATH so DMG_BASENAME can be resolved." >&2
+    exit 1
+  fi
+  DMG_PATH="$REPO_ROOT/build/artifacts/${DMG_BASENAME}.dmg"
+fi
 
 if [[ ! -f "$DMG_PATH" ]]; then
   echo "DMG not found: $DMG_PATH" >&2
@@ -62,7 +74,7 @@ if [[ -z "$TAP_CASK_PATH" ]]; then
   exit 1
 fi
 
-if [[ -n "$TAP_REPO_PATH" && ! -d "$TAP_REPO_PATH" ]]; then
+if [[ -z "$EXPLICIT_TAP_CASK_PATH" && -n "$TAP_REPO_PATH" && ! -d "$TAP_REPO_PATH" ]]; then
   echo "TAP_REPO_PATH does not exist: $TAP_REPO_PATH" >&2
   exit 1
 fi

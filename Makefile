@@ -47,6 +47,7 @@ lint:
 	swiftlint
 
 release-dmg:
+	@test -n "$(XCARCHIVE_PATH)" || (echo "release-dmg requires XCARCHIVE_PATH. Example: XCARCHIVE_PATH=/abs/path/to/MFuse.xcarchive make release-dmg; this target calls scripts/release/package-dmg-from-xcarchive.sh." >&2; exit 1)
 	bash scripts/release/package-dmg-from-xcarchive.sh
 
 sync-homebrew-cask:
