@@ -91,10 +91,16 @@ struct MenuBarView: View {
             Button {
                 dismissMenuBarPanel()
                 Task {
-                    for config in connectionManager.connections {
-                        let state = connectionManager.effectiveMountState(for: config.id)
-                        guard !state.isMounted, !state.isMounting else { continue }
-                        await connectionManager.connect(config.id)
+                    let configsToMount = connectionManager.connections.filter {
+                        let state = connectionManager.effectiveMountState(for: $0.id)
+                        return !state.isMounted && !state.isMounting
+                    }
+                    await withTaskGroup(of: Void.self) { group in
+                        for config in configsToMount {
+                            group.addTask {
+                                await connectionManager.connect(config.id)
+                            }
+                        }
                     }
                 }
             } label: {
@@ -102,16 +108,22 @@ struct MenuBarView: View {
                     .font(.system(size: 11))
             }
             .buttonStyle(.borderless)
-            .disabled(mountedCount == connectionManager.connections.count)
+            .disabled(mountedCount + mountingCount == connectionManager.connections.count)
 
             Spacer()
 
             Button {
                 dismissMenuBarPanel()
                 Task {
-                    for config in connectionManager.connections
-                    where connectionManager.effectiveMountState(for: config.id).isMounted {
-                        await connectionManager.disconnect(config.id)
+                    let configsToUnmount = connectionManager.connections.filter {
+                        connectionManager.effectiveMountState(for: $0.id).isMounted
+                    }
+                    await withTaskGroup(of: Void.self) { group in
+                        for config in configsToUnmount {
+                            group.addTask {
+                                await connectionManager.disconnect(config.id)
+                            }
+                        }
                     }
                 }
             } label: {
@@ -283,6 +295,10 @@ struct MenuBarView: View {
 
     private var mountedCount: Int {
         connectionManager.connections.filter { connectionManager.effectiveMountState(for: $0.id).isMounted }.count
+    }
+
+    private var mountingCount: Int {
+        connectionManager.connections.filter { connectionManager.effectiveMountState(for: $0.id).isMounting }.count
     }
 
     private func stateColor(_ state: MountState) -> Color {

@@ -189,7 +189,7 @@ struct SidebarView: View {
 
     private func stateColor(_ state: MountState) -> Color {
         switch state {
-        case .unmounted:  return .gray
+        case .unmounted:  return .secondary
         case .mounting:   return .orange
         case .mounted:    return .green
         case .error:      return .red
