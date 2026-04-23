@@ -62,21 +62,24 @@ struct ConnectionDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if mount.isMounted {
-                Button {
-                    Task {
-                        if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                            await MainActor.run {
-                                NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+            Group {
+                if mount.isMounted {
+                    Button {
+                        Task {
+                            if let targetURL = await connectionManager.resolveFinderURL(for: config) {
+                                await MainActor.run {
+                                    NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+                                }
                             }
                         }
+                    } label: {
+                        Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
                     }
-                } label: {
-                    Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
+                    .buttonStyle(.bordered)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
-                .buttonStyle(.bordered)
-                .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
+            .animation(AnimationConstants.mountState, value: mount.isMounted)
             mountButton
                 .animation(AnimationConstants.mountState, value: mount.isMounted)
             refreshButton
