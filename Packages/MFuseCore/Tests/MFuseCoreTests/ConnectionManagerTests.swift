@@ -168,9 +168,6 @@ actor MockMountProvider: MountProvider {
     }
 
     func unregister(config: ConnectionConfig) async throws {
-        guard registeredDomainIDs.contains(config.domainIdentifier) else {
-            throw MountError.domainNotFound(config.domainIdentifier)
-        }
         unregisterInvocations.append(config.domainIdentifier)
         if unregisterShouldFail {
             throw MountError.unmountFailed("mock unmount failure")
@@ -181,10 +178,10 @@ actor MockMountProvider: MountProvider {
     }
 
     func reconnect(config: ConnectionConfig) async throws {
-        reconnectInvocations.append(config.domainIdentifier)
         guard registeredDomainIDs.contains(config.domainIdentifier) else {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
+        reconnectInvocations.append(config.domainIdentifier)
         disconnectedDomainIDs.remove(config.domainIdentifier)
     }
 

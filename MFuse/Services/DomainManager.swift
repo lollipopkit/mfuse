@@ -18,6 +18,7 @@ public final class DomainManager: ObservableObject {
             case disconnect = "disconnect"
             case removeStaleDomain = "remove stale domain"
             case listDomains = "list domains"
+            case cleanup = "cleanup"
             case removeAllDomains = "remove all domains"
         }
 
@@ -34,7 +35,7 @@ public final class DomainManager: ObservableObject {
                 "\($0.operation.rawValue) [\($0.id)]: \($0.error.localizedDescription)"
             }.joined(separator: "; ")
             return AppL10n.string(
-                "domain.sync.error.removeStaleDomains",
+                "domain.sync.error.reconcile",
                 fallback: "Failed to reconcile one or more File Provider domains: %@",
                 details
             )
@@ -68,14 +69,17 @@ public final class DomainManager: ObservableObject {
     private func reconcileDomainsAndSymlinks() async throws {
         var errors: [SyncDomainsError.Entry] = []
         let existingDomainStates: [RegisteredDomainState]
+        let didLoadExistingDomainStates: Bool
         do {
             existingDomainStates = try await mountProvider.domainStates()
+            didLoadExistingDomainStates = true
         } catch {
             errors.append(.init(id: "__domains__", operation: .listDomains, error: error))
             Self.logger.error(
                 "Failed to list existing domain states before reconciliation: \(String(describing: error), privacy: .public)"
             )
             existingDomainStates = []
+            didLoadExistingDomainStates = false
         }
         let existingStatesByID = Dictionary(
             uniqueKeysWithValues: existingDomainStates.map { ($0.identifier, $0) }
@@ -94,10 +98,14 @@ public final class DomainManager: ObservableObject {
             let shouldRemainDisconnected: Bool
             if let existingState = existingStatesByID[config.domainIdentifier] {
                 shouldRemainDisconnected = existingState.isDisconnected
-            } else {
+            } else if didLoadExistingDomainStates {
                 // Newly reconciled domains should stay unmounted until the user
                 // explicitly connects them or auto-mount runs.
                 shouldRemainDisconnected = true
+            } else {
+                // If listing existing domain states failed, avoid disconnecting
+                // potentially active mounts based on an empty snapshot.
+                shouldRemainDisconnected = false
             }
 
             if shouldRemainDisconnected {
@@ -116,7 +124,7 @@ public final class DomainManager: ObservableObject {
         } catch let syncError as SyncDomainsError {
             errors.append(contentsOf: syncError.errors)
         } catch {
-            errors.append(.init(id: "__cleanup__", operation: .listDomains, error: error))
+            errors.append(.init(id: "__cleanup__", operation: .cleanup, error: error))
         }
 
         if !errors.isEmpty {
@@ -126,8 +134,17 @@ public final class DomainManager: ObservableObject {
 
     private func removeStaleDomainsAndSymlinks() async throws {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
-        let domainStates = try await mountProvider.domainStates()
         var errors: [SyncDomainsError.Entry] = []
+        let domainStates: [RegisteredDomainState]
+        do {
+            domainStates = try await mountProvider.domainStates()
+        } catch {
+            errors.append(.init(id: "__domain_states__", operation: .listDomains, error: error))
+            Self.logger.error(
+                "Failed to list domain states during stale cleanup: \(String(describing: error), privacy: .public)"
+            )
+            domainStates = []
+        }
         let domains: [NSFileProviderDomain]
 
         do {
