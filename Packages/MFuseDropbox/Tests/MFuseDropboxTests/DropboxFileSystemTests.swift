@@ -418,6 +418,34 @@ import MFuseTestSupport
     }
 }
 
+@Test func dropboxWriteFileUsesOverwriteUploadWithoutMetadataPreflight() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        if url.contains("/files/get_metadata") {
+            throw TestFailure("writeFile should not preflight metadata: \(url)")
+        }
+        if url.contains("/files/upload") {
+            let arg = request.value(forHTTPHeaderField: "Dropbox-API-Arg") ?? ""
+            #expect(arg.contains(#""mode":"overwrite""#))
+            return .http(status: 200, body: Data("{}".utf8))
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = DropboxFileSystem(
+        config: ConnectionConfig(name: "Dropbox", backendType: .dropbox, host: ""),
+        credential: Credential(token: "valid-token"),
+        oauthProvider: makeDropboxOAuthProvider(session: session),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    try await fileSystem.writeFile(at: RemotePath("/new.txt"), data: Data("content".utf8))
+}
+
 @Test func dropboxLargeUploadThrowsWhenFileIsTruncatedAfterSessionStart() async throws {
     let fileURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("mfuse-dropbox-large-\(UUID().uuidString).bin")

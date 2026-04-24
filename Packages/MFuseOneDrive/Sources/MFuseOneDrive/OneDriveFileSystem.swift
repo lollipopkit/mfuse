@@ -213,8 +213,15 @@ public actor OneDriveFileSystem: RemoteFileSystem {
                 "driveId": try currentDriveID()
             ]
         ])
-        let (data, response) = try await data(for: request)
-        try check(response: response, data: data, path: source, conflictPath: destination)
+        do {
+            let (data, response) = try await data(for: request)
+            try check(response: response, data: data, path: source, conflictPath: destination)
+        } catch {
+            if await destinationExists(afterMoveFailureAt: destination) {
+                throw RemoteFileSystemError.alreadyExists(destination)
+            }
+            throw error
+        }
     }
 
     public func copy(from source: RemotePath, to destination: RemotePath) async throws {
@@ -345,7 +352,8 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         guard let chunkUploadURL = URL(string: uploadSession.uploadUrl),
               let scheme = chunkUploadURL.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
-              chunkUploadURL.host != nil else {
+              let chunkUploadHost = chunkUploadURL.host,
+              validateHostIsMicrosoftDomain(host: chunkUploadHost) else {
             throw RemoteFileSystemError.operationFailed(
                 "OneDrive upload failed: invalid upload session URL for \(path.absoluteString)"
             )
@@ -463,6 +471,15 @@ public actor OneDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.alreadyExists(path)
         } catch RemoteFileSystemError.notFound {
             return
+        }
+    }
+
+    private func destinationExists(afterMoveFailureAt destination: RemotePath) async -> Bool {
+        do {
+            _ = try await driveItem(at: destination)
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -644,7 +661,21 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     }
 
     private func itemByIDURL(_ id: String) -> URL {
-        URL(string: "\(Constants.graphBase)/me/drive/items/\(id)")!
+        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return URL(string: "\(Constants.graphBase)/me/drive/items/\(encodedID)")!
+    }
+
+    private func validateHostIsMicrosoftDomain(host: String) -> Bool {
+        let normalizedHost = host.lowercased()
+        let trustedDomains = [
+            "graph.microsoft.com",
+            "sharepoint.com",
+            "onedrive.com",
+            "microsoftonline.com"
+        ]
+        return trustedDomains.contains { domain in
+            normalizedHost == domain || normalizedHost.hasSuffix(".\(domain)")
+        }
     }
 
     private static func encode(_ path: RemotePath) -> String {

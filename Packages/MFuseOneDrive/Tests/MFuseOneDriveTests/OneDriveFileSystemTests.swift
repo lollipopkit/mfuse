@@ -180,6 +180,86 @@ import MFuseTestSupport
     }
 }
 
+@Test func oneDriveMoveMapsFailedPatchToAlreadyExistsWhenDestinationAppears() async throws {
+    let destinationLookupCount = LockedCounter()
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Target/Existing") {
+            if destinationLookupCount.increment() == 1 {
+                return .http(status: 404, body: Data("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"Not found\"}}".utf8))
+            }
+            return .http(status: 200, body: Data("{\"id\":\"existing\",\"name\":\"Existing\",\"file\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Source") {
+            return .http(status: 200, body: Data("{\"id\":\"src 1\",\"name\":\"Source\",\"file\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Target") {
+            return .http(status: 200, body: Data("{\"id\":\"target-parent\",\"name\":\"Target\",\"folder\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/items/src%201") {
+            return .http(status: 500, body: Data("{\"error\":{\"code\":\"serverError\",\"message\":\"Move failed\"}}".utf8))
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    do {
+        try await fileSystem.move(from: RemotePath("/Source"), to: RemotePath("/Target/Existing"))
+        Issue.record("Expected move failure to map to alreadyExists")
+    } catch RemoteFileSystemError.alreadyExists(let path) {
+        #expect(path == RemotePath("/Target/Existing"))
+    } catch {
+        Issue.record("Expected alreadyExists, got \(error)")
+    }
+}
+
+@Test func oneDriveMoveRethrowsOriginalPatchFailureWhenDestinationStillMissing() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Target/Missing") {
+            return .http(status: 404, body: Data("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"Not found\"}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Source") {
+            return .http(status: 200, body: Data("{\"id\":\"src 1\",\"name\":\"Source\",\"file\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Target") {
+            return .http(status: 200, body: Data("{\"id\":\"target-parent\",\"name\":\"Target\",\"folder\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/items/src%201") {
+            return .http(status: 500, body: Data("{\"error\":{\"code\":\"serverError\",\"message\":\"Move failed\"}}".utf8))
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    do {
+        try await fileSystem.move(from: RemotePath("/Source"), to: RemotePath("/Target/Missing"))
+        Issue.record("Expected original move failure")
+    } catch let error as RemoteFileSystemError {
+        #expect(error.localizedDescription.contains("Move failed"))
+    } catch {
+        Issue.record("Expected RemoteFileSystemError, got \(error)")
+    }
+}
+
 @Test func oneDriveFileSystemSurfacesMissingBuiltInOAuthConfiguration() async throws {
     let session = try makeMockSession { request in
         let url = try #require(request.url?.absoluteString)
@@ -277,7 +357,7 @@ import MFuseTestSupport
             return .http(status: 200, body: Data("{\"id\":\"root\",\"name\":\"root\",\"folder\":{}}".utf8))
         }
         if url.hasSuffix("/me/drive/root:/Large.bin:/createUploadSession") {
-            return .http(status: 200, body: Data("{\"uploadUrl\":\"\"}".utf8))
+            return .http(status: 200, body: Data("{\"uploadUrl\":\"https://evil.example/upload\"}".utf8))
         }
         throw TestFailure("Unexpected request: \(url)")
     }
@@ -448,4 +528,16 @@ private func makeOneDriveOAuthBundle(authority: String) throws -> Bundle {
     let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
     try data.write(to: bundleURL.appendingPathComponent("Info.plist"))
     return try #require(Bundle(path: bundleURL.path))
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
+    }
 }

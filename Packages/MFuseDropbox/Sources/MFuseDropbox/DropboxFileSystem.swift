@@ -138,12 +138,10 @@ public actor DropboxFileSystem: RemoteFileSystem {
     }
 
     public func writeFile(at path: RemotePath, data: Data) async throws {
-        _ = try await metadata(for: path)
         try await upload(data: data, to: path, mode: "overwrite", allowConflict: false)
     }
 
     public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
-        _ = try await metadata(for: path)
         try await uploadFile(from: localFileURL, to: path, mode: "overwrite", strictConflict: false)
     }
 
