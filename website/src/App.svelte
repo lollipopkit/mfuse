@@ -50,11 +50,9 @@
   }
 
   onMount(() => {
-    if (!locale) {
-      applyLocale(getInitialLocale())
-    } else {
-      applyLocale(locale)
-    }
+    const nextLocale = locale || getInitialLocale()
+    applyLocale(nextLocale)
+    syncLocaleToUrl(nextLocale)
 
     isMounted = true
   })
