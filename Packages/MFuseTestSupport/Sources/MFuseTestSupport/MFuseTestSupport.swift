@@ -15,14 +15,14 @@ public final class MockURLProtocol: URLProtocol {
 
     public static func register(handler: @escaping Handler, for token: String) {
         lock.lock()
+        defer { lock.unlock() }
         handlers[token] = handler
-        lock.unlock()
     }
 
     public static func unregister(token: String) {
         lock.lock()
+        defer { lock.unlock() }
         handlers[token] = nil
-        lock.unlock()
     }
 
     override public static func canInit(with request: URLRequest) -> Bool {
@@ -72,6 +72,8 @@ public final class MockURLProtocol: URLProtocol {
 public final class MockSessionHandlerCleaner: NSObject, URLSessionDelegate {
     private let token: String
 
+    /// URLSession strongly retains its delegate, so tests should invalidate
+    /// sessions when they need prompt handler cleanup instead of relying on deinit.
     public init(token: String) {
         self.token = token
     }

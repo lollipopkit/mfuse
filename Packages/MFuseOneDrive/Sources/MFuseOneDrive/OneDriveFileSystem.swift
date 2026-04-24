@@ -111,7 +111,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
                     isHidden: item.name.hasPrefix(".")
                 )
             })
-            nextURL = decoded.nextLink.flatMap(URL.init(string:))
+            nextURL = try validatedGraphNextURL(decoded.nextLink)
         }
 
         return items
@@ -524,6 +524,25 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         request.httpMethod = method
         request.setValue("Bearer \(try currentToken())", forHTTPHeaderField: "Authorization")
         return request
+    }
+
+    private func validatedGraphNextURL(_ nextLink: String?) throws -> URL? {
+        guard let nextLink else {
+            return nil
+        }
+        guard let url = URL(string: nextLink), isAllowedGraphURL(url) else {
+            throw RemoteFileSystemError.operationFailed("Refusing to follow untrusted OneDrive nextLink")
+        }
+        return url
+    }
+
+    private func isAllowedGraphURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              let graphHost = URL(string: Constants.graphBase)?.host?.lowercased() else {
+            return false
+        }
+        return host == graphHost
     }
 
     private func data(for request: URLRequest) async throws -> (Data, URLResponse) {

@@ -3,6 +3,7 @@ import Testing
 
 @testable import MFuseOneDrive
 import MFuseCore
+import MFuseTestSupport
 
 @Test func oneDriveFileSystemSmoke() async throws {
     let enumerateSession = try makeMockSession { request in
@@ -110,6 +111,41 @@ import MFuseCore
     try await copyFileSystem.connect()
     await #expect(throws: RemoteFileSystemError.self) {
         try await copyFileSystem.copy(from: RemotePath("/Source"), to: RemotePath("/Target/Copied"))
+    }
+}
+
+@Test func oneDriveEnumerationRejectsUntrustedNextLink() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root/children") {
+            return .http(
+                status: 200,
+                body: Data("""
+                {
+                  "value": [],
+                  "@odata.nextLink": "https://evil.example/steal"
+                }
+                """.utf8)
+            )
+        }
+        throw TestFailure("Unexpected request for untrusted nextLink test: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    do {
+        _ = try await fileSystem.enumerate(at: .root)
+        Issue.record("Expected untrusted nextLink to be rejected")
+    } catch let error as RemoteFileSystemError {
+        #expect(error.localizedDescription.contains("Refusing to follow untrusted OneDrive nextLink"))
     }
 }
 
@@ -412,98 +448,4 @@ private func makeOneDriveOAuthBundle(authority: String) throws -> Bundle {
     let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
     try data.write(to: bundleURL.appendingPathComponent("Info.plist"))
     return try #require(Bundle(path: bundleURL.path))
-}
-
-private final class MockURLProtocol: URLProtocol {
-    enum Response {
-        case http(status: Int, body: Data, headers: [String: String] = [:])
-    }
-
-    typealias Handler = @Sendable (URLRequest) throws -> Response
-
-    static let sessionHeader = "X-MFuse-Mock-Session"
-
-    private static let lock = NSLock()
-    private static var handlers: [String: Handler] = [:]
-
-    static func register(handler: @escaping Handler, for token: String) {
-        lock.lock()
-        handlers[token] = handler
-        lock.unlock()
-    }
-
-    static func unregister(token: String) {
-        lock.lock()
-        handlers[token] = nil
-        lock.unlock()
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        request.value(forHTTPHeaderField: sessionHeader) != nil
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let token = request.value(forHTTPHeaderField: Self.sessionHeader),
-              let handler = Self.handler(for: token) else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
-            return
-        }
-
-        do {
-            switch try handler(request) {
-            case .http(let status, let body, let headers):
-                let response = HTTPURLResponse(
-                    url: try #require(request.url),
-                    statusCode: status,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: body)
-                client?.urlProtocolDidFinishLoading(self)
-            }
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    override func stopLoading() {}
-
-    private static func handler(for token: String) -> Handler? {
-        lock.lock()
-        defer { lock.unlock() }
-        return handlers[token]
-    }
-}
-
-private final class MockSessionHandlerCleaner: NSObject, URLSessionDelegate {
-    private let token: String
-
-    init(token: String) {
-        self.token = token
-    }
-
-    deinit {
-        MockURLProtocol.unregister(token: token)
-    }
-}
-
-private actor CredentialUpdateRecorder {
-    private(set) var lastCredential: Credential?
-
-    func record(_ credential: Credential) {
-        lastCredential = credential
-    }
-}
-
-private struct TestFailure: LocalizedError {
-    let message: String
-
-    init(_ message: String) {
-        self.message = message
-    }
-
-    var errorDescription: String? { message }
 }

@@ -3,6 +3,7 @@ import Testing
 
 @testable import MFuseDropbox
 import MFuseCore
+import MFuseTestSupport
 
 @Test func dropboxFileSystemSmoke() async throws {
     let enumerateSession = try makeMockSession { request in
@@ -104,6 +105,44 @@ import MFuseCore
     await #expect(throws: RemoteFileSystemError.self) {
         try await conflictFileSystem.createDirectory(at: RemotePath("/Docs"))
     }
+
+    let unicodeArgSession = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        if url.contains("/files/get_metadata") {
+            return .http(status: 409, body: Data("{\"error_summary\":\"path/not_found/..\"}".utf8))
+        }
+        if url.contains("/files/upload") {
+            let arg = request.value(forHTTPHeaderField: "Dropbox-API-Arg") ?? ""
+            #expect(arg.contains(#"/\u6587\u6863-\uD83D\uDE80.txt"#))
+            #expect(!arg.contains("文档"))
+            #expect(!arg.contains("🚀"))
+            return .http(status: 200, body: Data("{}".utf8))
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let unicodeArgProvider = DropboxOAuthProvider(
+        configuration: OAuthClientConfiguration(
+            providerName: "Dropbox",
+            clientID: "client-id",
+            redirectURI: "com.example.dropbox:/oauth",
+            authorizationURL: URL(string: "https://www.dropbox.com/oauth2/authorize")!,
+            tokenURL: URL(string: "https://api.dropboxapi.com/oauth2/token")!,
+            scopes: ["files.content.read"]
+        ),
+        session: unicodeArgSession
+    )
+    let unicodeArgFileSystem = DropboxFileSystem(
+        config: config,
+        credential: Credential(token: "valid-token"),
+        oauthProvider: unicodeArgProvider,
+        session: unicodeArgSession
+    )
+    try await unicodeArgFileSystem.connect()
+    try await unicodeArgFileSystem.createFile(at: RemotePath("/文档-🚀.txt"), data: Data("content".utf8))
 
     let session = try makeMockSession { request in
         let url = try #require(request.url?.absoluteString)
@@ -418,6 +457,42 @@ import MFuseCore
     #expect(await fileSystem.isConnected == false)
 }
 
+@Test func dropboxConnectRefreshFailureClearsExistingAccessToken() async throws {
+    let requestCount = LockedCounter()
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            let count = requestCount.increment()
+            if count == 1 {
+                return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+            }
+            return .http(status: 401, body: Data("{\"error_summary\":\"expired_access_token\"}".utf8))
+        }
+        if url.contains("/oauth2/token") {
+            return .http(
+                status: 400,
+                body: Data("{\"error\":\"invalid_grant\",\"error_description\":\"Refresh failed\"}".utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = DropboxFileSystem(
+        config: ConnectionConfig(name: "Dropbox", backendType: .dropbox, host: ""),
+        credential: Credential(password: "refresh-token", token: "valid-token"),
+        oauthProvider: makeDropboxOAuthProvider(session: session),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+
+    await #expect(throws: RemoteFileSystemError.self) {
+        try await fileSystem.connect()
+    }
+    #expect(await fileSystem.isConnected == false)
+}
+
 @Test func dropboxUploadRetriedUnauthorizedResponseClearsConnectionState() async throws {
     let session = try makeMockSession { request in
         let url = try #require(request.url?.absoluteString)
@@ -490,87 +565,15 @@ private func makeDropboxOAuthProvider(session: URLSession) -> DropboxOAuthProvid
     )
 }
 
-private final class MockURLProtocol: URLProtocol {
-    enum Response {
-        case http(status: Int, body: Data, headers: [String: String] = [:])
-    }
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
 
-    typealias Handler = @Sendable (URLRequest) throws -> Response
-
-    static let sessionHeader = "X-MFuse-Mock-Session"
-
-    private static let lock = NSLock()
-    private static var handlers: [String: Handler] = [:]
-
-    static func register(handler: @escaping Handler, for token: String) {
-        lock.lock()
-        handlers[token] = handler
-        lock.unlock()
-    }
-
-    static func unregister(token: String) {
-        lock.lock()
-        handlers[token] = nil
-        lock.unlock()
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        request.value(forHTTPHeaderField: sessionHeader) != nil
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let token = request.value(forHTTPHeaderField: Self.sessionHeader),
-              let handler = Self.handler(for: token) else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
-            return
-        }
-
-        do {
-            switch try handler(request) {
-            case .http(let status, let body, let headers):
-                let response = HTTPURLResponse(
-                    url: try #require(request.url),
-                    statusCode: status,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: body)
-                client?.urlProtocolDidFinishLoading(self)
-            }
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    override func stopLoading() {}
-
-    private static func handler(for token: String) -> Handler? {
+    func increment() -> Int {
         lock.lock()
         defer { lock.unlock() }
-        return handlers[token]
-    }
-}
-
-private final class MockSessionHandlerCleaner: NSObject, URLSessionDelegate {
-    private let token: String
-
-    init(token: String) {
-        self.token = token
-    }
-
-    deinit {
-        MockURLProtocol.unregister(token: token)
-    }
-}
-
-private actor CredentialUpdateRecorder {
-    private(set) var lastCredential: Credential?
-
-    func record(_ credential: Credential) {
-        lastCredential = credential
+        value += 1
+        return value
     }
 }
 
@@ -586,14 +589,4 @@ private func expectNotConnected(
     } catch {
         Issue.record("Expected RemoteFileSystemError.notConnected, got \(error)", sourceLocation: sourceLocation)
     }
-}
-
-private struct TestFailure: LocalizedError {
-    let message: String
-
-    init(_ message: String) {
-        self.message = message
-    }
-
-    var errorDescription: String? { message }
 }

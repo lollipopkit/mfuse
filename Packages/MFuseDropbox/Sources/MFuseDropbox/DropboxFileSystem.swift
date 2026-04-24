@@ -50,8 +50,8 @@ public actor DropboxFileSystem: RemoteFileSystem {
             try await validateCurrentAccount(token: token)
             accessToken = token
         } catch RemoteFileSystemError.authenticationFailed {
-            let refreshedToken = try await refreshAccessToken()
             do {
+                let refreshedToken = try await refreshAccessToken()
                 try await validateCurrentAccount(token: refreshedToken)
                 accessToken = refreshedToken
             } catch {
@@ -314,14 +314,13 @@ public actor DropboxFileSystem: RemoteFileSystem {
         let start = try JSONDecoder().decode(DropboxUploadSessionStart.self, from: startData)
         var offset = UInt64(firstChunk.count)
 
+        var chunk = try fileHandle.read(upToCount: Constants.uploadChunkSize) ?? Data()
+        guard !chunk.isEmpty else {
+            throw RemoteFileSystemError.operationFailed(
+                "Dropbox upload failed: unexpected EOF while reading \(localFileURL.path) at offset \(offset) of \(fileSize); the file may have been modified during upload"
+            )
+        }
         while true {
-            let chunk = try fileHandle.read(upToCount: Constants.uploadChunkSize) ?? Data()
-            guard !chunk.isEmpty else {
-                throw RemoteFileSystemError.operationFailed(
-                    "Dropbox upload failed: unexpected EOF while reading \(localFileURL.path) at offset \(offset) of \(fileSize); the file may have been modified during upload"
-                )
-            }
-
             let nextChunk = try fileHandle.read(upToCount: Constants.uploadChunkSize) ?? Data()
             if nextChunk.isEmpty {
                 var finishRequest = try authorizedRequest(
@@ -367,7 +366,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
             let (_, appendResponse) = try await upload(for: appendRequest, data: chunk)
             try check(response: appendResponse, data: Data(), path: path)
             offset += UInt64(chunk.count)
-            try fileHandle.seek(toOffset: offset)
+            chunk = nextChunk
         }
     }
 
@@ -552,7 +551,25 @@ public actor DropboxFileSystem: RemoteFileSystem {
         guard let string = String(data: data, encoding: .utf8) else {
             throw RemoteFileSystemError.operationFailed("Failed to encode Dropbox-API-Arg")
         }
-        return string
+        return escapedNonASCIIJSONString(string)
+    }
+
+    private func escapedNonASCIIJSONString(_ string: String) -> String {
+        var escaped = ""
+        for scalar in string.unicodeScalars {
+            let value = scalar.value
+            if value <= 0x7F {
+                escaped.unicodeScalars.append(scalar)
+            } else if value <= 0xFFFF {
+                escaped += String(format: "\\u%04X", value)
+            } else {
+                let adjusted = value - 0x1_0000
+                let highSurrogate = 0xD800 + (adjusted >> 10)
+                let lowSurrogate = 0xDC00 + (adjusted & 0x3FF)
+                escaped += String(format: "\\u%04X\\u%04X", highSurrogate, lowSurrogate)
+            }
+        }
+        return escaped
     }
 
     private func pathString(for path: RemotePath) -> String {
