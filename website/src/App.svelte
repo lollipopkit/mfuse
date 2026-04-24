@@ -46,7 +46,6 @@
     locale = nextLocale
     loadLocale(nextLocale)
     setLocale(nextLocale)
-    syncLocaleToUrl(nextLocale)
     localStorage.setItem(localeStorageKey, nextLocale)
   }
 
@@ -71,7 +70,9 @@
   })
 
   function handleLocaleChange(event) {
-    applyLocale(event.currentTarget.value)
+    const nextLocale = event.currentTarget.value
+    applyLocale(nextLocale)
+    syncLocaleToUrl(nextLocale)
   }
 </script>
 
