@@ -1,172 +1,198 @@
 <script>
-  const protocols = [
-    'SFTP',
-    'Amazon S3',
-    'WebDAV',
-    'SMB/CIFS',
-    'FTP',
-    'NFS',
-    'Google Drive',
-  ]
+  import { onMount } from 'svelte'
+  import LL, { setLocale } from './i18n/i18n-svelte'
+  import { loadLocale } from './i18n/i18n-util.sync'
+  import {
+    defaultLocale,
+    getInitialLocale,
+    locales,
+    localeStorageKey,
+    syncLocaleToUrl,
+  } from './lib/i18n.js'
+
+  const protocols = ['SFTP', 'Amazon S3', 'WebDAV', 'SMB/CIFS', 'FTP', 'NFS', 'Google Drive']
 
   const features = [
-    {
-      icon: '⬡',
-      title: 'Native Finder Integration',
-      description:
-        'Uses the macOS File Provider API so remote volumes appear, browse, and behave exactly like local folders.',
-      wide: false,
-    },
-    {
-      icon: '⬡',
-      title: 'Cross-Protocol Workspace',
-      description:
-        'Mount SFTP, S3, WebDAV, SMB, FTP, NFS, and Google Drive side by side in a single Finder-native surface.',
-      wide: true,
-    },
-    {
-      icon: '⬡',
-      title: 'Credential Isolation',
-      description:
-        'Protocol-specific credential handling reduces cross-system leakage risk in mixed environments.',
-      wide: false,
-    },
-    {
-      icon: '⬡',
-      title: 'Transparent Metadata',
-      description:
-        'File size, ownership, and modified timestamps are visible before transfer, right inside Finder.',
-      wide: false,
-    },
-    {
-      icon: '⬡',
-      title: 'Reliable Reconnect',
-      description:
-        'Predictable mount lifecycle across long-running desktop sessions and unstable network windows.',
-      wide: false,
-    },
+    { key: 'nativeFinder', icon: '⬡', wide: false },
+    { key: 'workspace', icon: '⬡', wide: true },
+    { key: 'credentials', icon: '⬡', wide: false },
+    { key: 'metadata', icon: '⬡', wide: false },
+    { key: 'reconnect', icon: '⬡', wide: false },
   ]
 
   const testimonials = [
-    {
-      quote: 'MFuse replaced three mounting tools in our stack while keeping Finder behavior instantly familiar to every team.',
-      name: 'Papercube',
-      role: 'iOS Developer',
-    },
-    {
-      quote: 'Onboarding remote storage workflows now takes hours, not weeks. The backend abstraction is genuinely clean.',
-      name: 'wyy',
-      role: 'Infrastructure Lead',
-    },
-    {
-      quote: 'Teams move content between S3 and SMB with fewer handoff errors and tighter operational visibility.',
-      name: 'Eurafat45',
-      role: 'Student',
-    },
+    { key: 'papercube', name: 'Papercube' },
+    { key: 'wyy', name: 'wyy' },
+    { key: 'eurafat45', name: 'Eurafat45' },
   ]
+
+  function getLocaleBeforeRender() {
+    if (typeof window === 'undefined') return undefined
+
+    return getInitialLocale()
+  }
+
+  const initialLocale = getLocaleBeforeRender()
+
+  if (initialLocale) {
+    loadLocale(initialLocale)
+    setLocale(initialLocale)
+  }
+
+  let locale = $state(initialLocale)
+  let isMounted = $state(false)
+
+  function applyLocale(nextLocale) {
+    locale = nextLocale
+    loadLocale(nextLocale)
+    setLocale(nextLocale)
+    localStorage.setItem(localeStorageKey, nextLocale)
+  }
+
+  onMount(() => {
+    const nextLocale = locale || getInitialLocale()
+    applyLocale(nextLocale)
+    syncLocaleToUrl(nextLocale)
+
+    isMounted = true
+  })
+
+  $effect(() => {
+    if (!isMounted) return
+
+    document.documentElement.lang = $LL.meta.lang()
+    document.title = $LL.meta.title()
+    document
+      .querySelector('meta[name="description"]')
+      ?.setAttribute('content', $LL.meta.description())
+  })
+
+  function handleLocaleChange(event) {
+    const nextLocale = event.currentTarget.value
+    applyLocale(nextLocale)
+    syncLocaleToUrl(nextLocale)
+  }
 </script>
 
-<main class="site">
-  <header class="site-nav" id="top">
-    <a class="brand" href="#top">MFuse</a>
-    <nav>
-      <a href="#features">Features</a>
-      <a href="#protocols">Protocols</a>
-      <a href="#testimonials">Testimonials</a>
-    </nav>
-    <a class="nav-cta" href="#homebrew">Download</a>
-  </header>
-
-  <section class="hero" id="hero">
-    <h1>Remote filesystems,<br />native macOS speed.</h1>
-    <p class="hero-subtitle">
-      MFuse unifies distributed storage into one Finder-native workflow — SFTP, S3, WebDAV, SMB, FTP, NFS, and Google Drive, all mounted transparently.
-    </p>
-    <div class="hero-actions">
-      <a class="btn btn-primary" href="#homebrew">Download for macOS</a>
-      <a class="btn btn-secondary" href="#features">See how it works</a>
-    </div>
-  </section>
-
-  <section class="page-section" id="features">
-    <div class="section-head">
-      <h2>One mount layer. Every protocol your team depends on.</h2>
-      <p>
-        A dense capability surface with no decorative filler — every block maps to a real operational outcome.
-      </p>
-    </div>
-
-    <div class="feature-grid">
-      {#each features as feature}
-        <article class="feature-card" class:wide={feature.wide}>
-          <div class="icon">{feature.icon}</div>
-          <h3>{feature.title}</h3>
-          <p>{feature.description}</p>
-        </article>
-      {/each}
-    </div>
-  </section>
-
-  <section class="protocol-section" id="protocols">
-    <div class="section-head">
-      <h2>All the protocols. One native experience.</h2>
-      <p>
-        Each backend is a self-contained Swift package implementing the shared RemoteFileSystem interface, keeping protocol specifics isolated from the app and the File Provider extension.
-      </p>
-    </div>
-
-    <div class="protocol-badges">
-      {#each protocols as proto}
-        <span class="protocol-badge">{proto}</span>
-      {/each}
-    </div>
-
-    <div class="code-block" id="homebrew">
-      <span class="prompt"># tap the custom repo</span>
-      <span class="command">brew tap lollipopkit/taps</span>
-      <span class="prompt"># install MFuse</span>
-      <span class="command">brew install --cask mfuse</span>
-    </div>
-  </section>
-
-  <section class="page-section" id="testimonials">
-    <div class="section-head">
-      <h2>Trusted by teams that move fast.</h2>
-    </div>
-
-    <div class="testimonial-grid">
-      {#each testimonials as t}
-        <article class="testimonial-card">
-          <p class="quote">"{t.quote}"</p>
-          <div class="author">
-            <p class="name">{t.name}</p>
-            <p class="role">{t.role}</p>
-          </div>
-        </article>
-      {/each}
-    </div>
-  </section>
-
-  <section class="cta-section" id="download">
-    <div class="cta-block">
-      <h2>MFuse is free and open source under AGPLv3.</h2>
-      <p>
-        Install from the Homebrew tap or download a packaged build from GitHub Releases. Free software, no paid lock-in.
-      </p>
-      <div class="cta-actions">
-        <a class="btn btn-secondary" href="#homebrew">Install from Homebrew Tap</a>
-        <a class="btn btn-primary" href="https://github.com/lollipopkit/mfuse/releases">Download from GitHub Releases</a>
+{#if locale && isMounted}
+  <main class="site">
+    <header class="site-nav" id="top">
+      <a class="brand" href="#top">MFuse</a>
+      <nav>
+        <a href="#features">{$LL.nav.features()}</a>
+        <a href="#protocols">{$LL.nav.protocols()}</a>
+        <a href="#testimonials">{$LL.nav.testimonials()}</a>
+      </nav>
+      <div class="nav-actions">
+        <label class="language-switcher">
+          <span class="sr-only">{$LL.nav.languageLabel()}</span>
+          <select
+            id="locale"
+            name="locale"
+            aria-label={$LL.nav.languageLabel()}
+            value={locale}
+            onchange={handleLocaleChange}
+          >
+            {#each locales as item}
+              <option value={item.code}>{item.label}</option>
+            {/each}
+          </select>
+        </label>
+        <a class="nav-cta" href="#homebrew">{$LL.nav.download()}</a>
       </div>
-    </div>
-  </section>
+    </header>
 
-  <footer class="site-footer">
-    <span>© 2026 MFuse</span>
-    <div class="footer-links">
-      <a href="#features">Features</a>
-      <a href="#protocols">Protocols</a>
-      <a href="https://github.com/lollipopkit/mfuse">GitHub</a>
-      <a href="https://github.com/lollipopkit/mfuse/releases">Releases</a>
-    </div>
-  </footer>
-</main>
+    <section class="hero" id="hero">
+      <h1>{$LL.hero.titlePrefix()}<br />{$LL.hero.titleSuffix()}</h1>
+      <p class="hero-subtitle">
+        {$LL.hero.subtitle()}
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#homebrew">{$LL.hero.primaryAction()}</a>
+        <a class="btn btn-secondary" href="#features">{$LL.hero.secondaryAction()}</a>
+      </div>
+    </section>
+
+    <section class="page-section" id="features">
+      <div class="section-head">
+        <h2>{$LL.features.title()}</h2>
+        <p>
+          {$LL.features.subtitle()}
+        </p>
+      </div>
+
+      <div class="feature-grid">
+        {#each features as feature}
+          <article class="feature-card" class:wide={feature.wide}>
+            <div class="icon">{feature.icon}</div>
+            <h3>{$LL.features[feature.key].title()}</h3>
+            <p>{$LL.features[feature.key].description()}</p>
+          </article>
+        {/each}
+      </div>
+    </section>
+
+    <section class="protocol-section" id="protocols">
+      <div class="section-head">
+        <h2>{$LL.protocols.title()}</h2>
+        <p>
+          {$LL.protocols.subtitle()}
+        </p>
+      </div>
+
+      <div class="protocol-badges">
+        {#each protocols as proto}
+          <span class="protocol-badge">{proto}</span>
+        {/each}
+      </div>
+
+      <div class="code-block" id="homebrew">
+        <span class="prompt">{$LL.protocols.installTapPrompt()}</span>
+        <span class="command">brew tap lollipopkit/taps</span>
+        <span class="prompt">{$LL.protocols.installCaskPrompt()}</span>
+        <span class="command">brew install --cask mfuse</span>
+      </div>
+    </section>
+
+    <section class="page-section" id="testimonials">
+      <div class="section-head">
+        <h2>{$LL.testimonials.title()}</h2>
+      </div>
+
+      <div class="testimonial-grid">
+        {#each testimonials as t}
+          <article class="testimonial-card">
+            <p class="quote">&ldquo;{$LL.testimonials[t.key].quote()}&rdquo;</p>
+            <div class="author">
+              <p class="name">{t.name}</p>
+              <p class="role">{$LL.testimonials[t.key].role()}</p>
+            </div>
+          </article>
+        {/each}
+      </div>
+    </section>
+
+    <section class="cta-section" id="download">
+      <div class="cta-block">
+        <h2>{$LL.cta.title()}</h2>
+        <p>
+          {$LL.cta.subtitle()}
+        </p>
+        <div class="cta-actions">
+          <a class="btn btn-secondary" href="#homebrew">{$LL.cta.homebrewAction()}</a>
+          <a class="btn btn-primary" href="https://github.com/lollipopkit/mfuse/releases">{$LL.cta.githubAction()}</a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="site-footer">
+      <span>© 2026 MFuse</span>
+      <div class="footer-links">
+        <a href="#features">{$LL.footer.features()}</a>
+        <a href="#protocols">{$LL.footer.protocols()}</a>
+        <a href="https://github.com/lollipopkit/mfuse">GitHub</a>
+        <a href="https://github.com/lollipopkit/mfuse/releases">{$LL.footer.releases()}</a>
+      </div>
+    </footer>
+  </main>
+{/if}

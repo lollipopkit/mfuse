@@ -1,65 +1,44 @@
 version: 2
 updates:
   - package-ecosystem: "swift"
-    directory: "/Packages/MFuseCore"
+    directories:
+      - "/Packages/MFuseCore"
+      - "/Packages/MFuseDropbox"
+      - "/Packages/MFuseFTP"
+      - "/Packages/MFuseGoogleDrive"
+      - "/Packages/MFuseNFS"
+      - "/Packages/MFuseOneDrive"
+      - "/Packages/MFuseS3"
+      - "/Packages/MFuseSFTP"
+      - "/Packages/MFuseSMB"
+      - "/Packages/MFuseTestSupport"
+      - "/Packages/MFuseWebDAV"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+      - "swift"
+    groups:
+      swift-dependencies:
+        patterns:
+          - "*"
 
-  - package-ecosystem: "swift"
-    directory: "/Packages/MFuseFTP"
+  - package-ecosystem: "bun"
+    directory: "/website"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+      day: "monday"
+      time: "09:30"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
     labels:
       - "dependencies"
-
-  - package-ecosystem: "swift"
-    directory: "/Packages/MFuseGoogleDrive"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-
-  - package-ecosystem: "swift"
-    directory: "/Packages/MFuseNFS"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-
-  - package-ecosystem: "swift"
-    directory: "/Packages/MFuseS3"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-
-  - package-ecosystem: "swift"
-    directory: "/Packages/MFuseSFTP"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-
-  - package-ecosystem: "swift"
-    directory: "/Packages/MFuseSMB"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-
-  - package-ecosystem: "swift"
-    directory: "/Packages/MFuseWebDAV"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
+      - "website"
+    groups:
+      website-dependencies:
+        patterns:
+          - "*"
