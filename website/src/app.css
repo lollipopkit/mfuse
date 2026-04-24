@@ -115,6 +115,63 @@ body {
   color: var(--black);
 }
 
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.language-switcher {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.language-switcher select {
+  appearance: none;
+  min-width: 8.4rem;
+  border: 1px solid var(--light-gray);
+  border-radius: var(--radius-pill);
+  background: var(--white);
+  color: var(--near-black);
+  font: 500 0.86rem var(--font-body);
+  line-height: 1;
+  padding: 0.55rem 1.9rem 0.55rem 0.9rem;
+  cursor: pointer;
+}
+
+.language-switcher::after {
+  content: '';
+  position: absolute;
+  right: 0.85rem;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-right: 1.5px solid var(--stone);
+  border-bottom: 1.5px solid var(--stone);
+  pointer-events: none;
+  transform: translateY(-0.12rem) rotate(45deg);
+}
+
+.language-switcher select:focus-visible,
+.nav-cta:focus-visible,
+.site-nav a:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--ring-blue);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .nav-cta {
   text-decoration: none;
   border-radius: var(--radius-pill);
@@ -461,6 +518,10 @@ body {
     display: none;
   }
 
+  .language-switcher select {
+    min-width: 7.2rem;
+  }
+
   .feature-grid {
     grid-template-columns: 1fr;
   }
@@ -482,6 +543,22 @@ body {
   .site-nav {
     top: 0.75rem;
     padding: 0.55rem 1rem;
+  }
+
+  .language-switcher select {
+    min-width: 4.5rem;
+    max-width: 4.5rem;
+    padding-right: 1.45rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nav-actions {
+    gap: 0.4rem;
+  }
+
+  .nav-cta {
+    padding-inline: 1rem;
   }
 
   .hero {
