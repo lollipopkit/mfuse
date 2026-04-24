@@ -22,7 +22,7 @@ public final class OneDriveOAuthProvider: @unchecked Sendable {
         static let scopes = [
             "Files.ReadWrite",
             "offline_access",
-            "User.Read",
+            "User.Read"
         ]
     }
 
@@ -62,6 +62,14 @@ public final class OneDriveOAuthProvider: @unchecked Sendable {
             key: Constants.redirectURIKey,
             providerName: providerName
         )
+        guard let redirectURL = URL(string: redirectURI),
+              redirectURL.scheme?.isEmpty == false else {
+            throw OAuthConfigurationError.invalidURL(
+                providerName: providerName,
+                key: Constants.redirectURIKey,
+                value: redirectURI
+            )
+        }
         let configuredAuthority = (bundle.object(forInfoDictionaryKey: Constants.authorityKey) as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let authority = configuredAuthority.isEmpty ? "common" : configuredAuthority

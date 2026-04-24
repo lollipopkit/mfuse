@@ -563,6 +563,25 @@ import MFuseTestSupport
     #expect(provider.tokenURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/token")
 }
 
+@Test func oneDriveBuiltInOAuthRejectsInvalidRedirectURI() throws {
+    let bundle = try makeOneDriveOAuthBundle(
+        authority: "common",
+        redirectURI: "not a redirect uri"
+    )
+
+    do {
+        _ = try OneDriveOAuthProvider.builtIn(
+            bundle: bundle,
+            session: URLSession(configuration: .ephemeral)
+        )
+        Issue.record("Expected invalid redirect URI to fail during provider initialization")
+    } catch let error as OAuthConfigurationError {
+        #expect(error.localizedDescription.contains("Microsoft OneDrive"))
+        #expect(error.localizedDescription.contains("MFOneDriveRedirectURI"))
+        #expect(error.localizedDescription.contains("not a redirect uri"))
+    }
+}
+
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {
@@ -579,14 +598,17 @@ private func makeMockSession(
     )
 }
 
-private func makeOneDriveOAuthBundle(authority: String) throws -> Bundle {
+private func makeOneDriveOAuthBundle(
+    authority: String,
+    redirectURI: String = "com.example.onedrive:/oauth"
+) throws -> Bundle {
     let bundleURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("mfuse-onedrive-oauth-\(UUID().uuidString).bundle", isDirectory: true)
     try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
     let info: [String: Any] = [
         "CFBundleIdentifier": "dev.mfuse.tests.onedrive.\(UUID().uuidString)",
         "MFOneDriveClientID": "client-id",
-        "MFOneDriveRedirectURI": "com.example.onedrive:/oauth",
+        "MFOneDriveRedirectURI": redirectURI,
         "MFOneDriveAuthority": authority
     ]
     let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
