@@ -61,16 +61,16 @@ const zhCN: Translation = {
     papercube: {
       quote:
         'MFuse 替换了我们栈里的三个挂载工具，同时让每个团队都能立刻使用熟悉的 Finder 行为。',
-      role: 'iOS Developer',
+      role: 'iOS 开发者',
     },
     wyy: {
       quote:
         '远程存储工作流的 onboarding 从数周缩短到数小时，后端抽象也确实干净。',
-      role: 'Infrastructure Lead',
+      role: '基础设施负责人',
     },
     eurafat45: {
       quote: '团队在 S3 和 SMB 之间移动内容时，交接错误更少，运维可见性更强。',
-      role: 'Student',
+      role: '学生',
     },
   },
   cta: {
