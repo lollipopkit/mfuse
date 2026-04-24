@@ -8,6 +8,14 @@ public actor DropboxFileSystem: RemoteFileSystem {
         static let uploadChunkSize = 8 * 1024 * 1024
     }
 
+    private static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let isoFormatterFallback = ISO8601DateFormatter()
+
     private let config: ConnectionConfig
     private var credential: Credential
     private let onCredentialUpdated: (@Sendable (Credential) async throws -> Void)?
@@ -589,10 +597,13 @@ public actor DropboxFileSystem: RemoteFileSystem {
     }
 
     private static let jsonDecoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
+        JSONDecoder()
     }()
+
+    fileprivate static func parseISO8601(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        return isoFormatterWithFractionalSeconds.date(from: value) ?? isoFormatterFallback.date(from: value)
+    }
 }
 
 private struct DropboxListFolderResponse: Decodable {
@@ -611,8 +622,8 @@ private struct DropboxMetadata: Decodable {
     let tag: String
     let name: String
     let size: UInt64?
-    let clientModified: Date?
-    let serverModified: Date?
+    let clientModified: String?
+    let serverModified: String?
     let isDownloadable: Bool?
 
     enum CodingKeys: String, CodingKey {
@@ -624,8 +635,13 @@ private struct DropboxMetadata: Decodable {
         case isDownloadable = "is_downloadable"
     }
 
-    var modificationDate: Date? { serverModified ?? clientModified }
-    var clientModificationDate: Date? { clientModified }
+    var modificationDate: Date? {
+        DropboxFileSystem.parseISO8601(serverModified) ?? DropboxFileSystem.parseISO8601(clientModified)
+    }
+
+    var clientModificationDate: Date? {
+        DropboxFileSystem.parseISO8601(clientModified)
+    }
 
     var remoteItemType: RemoteItemType {
         tag == "folder" ? .directory : .file

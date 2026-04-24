@@ -287,6 +287,51 @@ import MFuseTestSupport
     #expect(await invalidRefreshFileSystem.isConnected == false)
 }
 
+@Test func dropboxMetadataParsesFractionalSecondTimestamps() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        if url.contains("/files/list_folder") {
+            return .http(
+                status: 200,
+                body: Data("""
+                {
+                  "entries": [
+                    {
+                      ".tag": "file",
+                      "name": "fractional.txt",
+                      "size": 7,
+                      "client_modified": "2024-01-01T12:34:56.123Z",
+                      "server_modified": "2024-01-02T12:34:56.789Z",
+                      "is_downloadable": true
+                    }
+                  ],
+                  "cursor": "cursor-1",
+                  "has_more": false
+                }
+                """.utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = DropboxFileSystem(
+        config: ConnectionConfig(name: "Dropbox", backendType: .dropbox, host: ""),
+        credential: Credential(token: "valid-token"),
+        oauthProvider: makeDropboxOAuthProvider(session: session),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    let item = try #require(try await fileSystem.enumerate(at: .root).first)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    #expect(item.name == "fractional.txt")
+    #expect(item.modificationDate == formatter.date(from: "2024-01-02T12:34:56.789Z"))
+}
+
 @Test func dropboxDisconnectClearsStoredTokenAndBlocksRequests() async throws {
     let session = try makeMockSession { request in
         let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""

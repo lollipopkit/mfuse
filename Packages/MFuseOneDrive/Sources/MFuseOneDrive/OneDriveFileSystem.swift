@@ -180,7 +180,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "name": path.name,
             "folder": [:],
-            "@microsoft.graph.conflictBehavior": "fail",
+            "@microsoft.graph.conflictBehavior": "fail"
         ])
         let (data, response) = try await data(for: request)
         try check(response: response, data: data, path: path, conflictPath: path)
@@ -210,8 +210,8 @@ public actor OneDriveFileSystem: RemoteFileSystem {
             "name": destination.name,
             "parentReference": [
                 "id": destinationParent.id,
-                "driveId": try currentDriveID(),
-            ],
+                "driveId": try currentDriveID()
+            ]
         ])
         let (data, response) = try await data(for: request)
         try check(response: response, data: data, path: source, conflictPath: destination)
@@ -242,8 +242,8 @@ public actor OneDriveFileSystem: RemoteFileSystem {
             "name": destination.name,
             "parentReference": [
                 "id": destinationParent.id,
-                "driveId": try currentDriveID(),
-            ],
+                "driveId": try currentDriveID()
+            ]
         ])
         let (data, response) = try await data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -336,8 +336,8 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         uploadRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         uploadRequest.httpBody = try JSONSerialization.data(withJSONObject: [
             "item": [
-                "@microsoft.graph.conflictBehavior": conflictBehavior,
-            ],
+                "@microsoft.graph.conflictBehavior": conflictBehavior
+            ]
         ])
         let (uploadData, uploadResponse) = try await data(for: uploadRequest)
         try check(response: uploadResponse, data: uploadData, path: path, conflictPath: path)
@@ -631,7 +631,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("Failed to build OneDrive content URL")
         }
         components.queryItems = [
-            URLQueryItem(name: "@microsoft.graph.conflictBehavior", value: conflictBehavior),
+            URLQueryItem(name: "@microsoft.graph.conflictBehavior", value: conflictBehavior)
         ]
         guard let conflictURL = components.url else {
             throw RemoteFileSystemError.operationFailed("Failed to build OneDrive content URL")
