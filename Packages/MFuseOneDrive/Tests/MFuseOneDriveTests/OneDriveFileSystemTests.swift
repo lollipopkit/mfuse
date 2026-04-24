@@ -178,13 +178,31 @@ import MFuseCore
         if url.hasSuffix("/me/drive") {
             return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
         }
+        if url.contains("/oauth2/v2.0/token") {
+            return .http(
+                status: 200,
+                body: Data("{\"access_token\":\"fresh-token\",\"refresh_token\":\"refresh-token\"}".utf8)
+            )
+        }
         throw TestFailure("Unexpected request after disconnect: \(url)")
     }
     let updates = CredentialUpdateRecorder()
+    let provider = OneDriveOAuthProvider(
+        configuration: OAuthClientConfiguration(
+            providerName: "Microsoft OneDrive",
+            clientID: "client-id",
+            redirectURI: "com.example.onedrive:/oauth",
+            authorizationURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")!,
+            tokenURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
+            scopes: ["Files.ReadWrite", "offline_access"]
+        ),
+        session: session
+    )
 
     let fileSystem = OneDriveFileSystem(
         config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
         credential: Credential(password: "refresh-token", token: "valid-token"),
+        oauthProvider: provider,
         session: session,
         onCredentialUpdated: { credential in
             await updates.record(credential)
@@ -207,6 +225,10 @@ import MFuseCore
     } catch {
         Issue.record("Expected notConnected after disconnect, got \(error)")
     }
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+    #expect(await updates.lastCredential?.token == "fresh-token")
 }
 
 @Test func oneDriveLargeUploadRejectsInvalidUploadSessionURL() async throws {

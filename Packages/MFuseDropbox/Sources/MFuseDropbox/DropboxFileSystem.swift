@@ -44,10 +44,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
     }
 
     public func connect() async throws {
-        guard let token = credential.token, !token.isEmpty else {
-            accessToken = nil
-            throw RemoteFileSystemError.authenticationFailed
-        }
+        let token = try await initialAccessToken()
 
         do {
             try await validateCurrentAccount(token: token)
@@ -391,6 +388,22 @@ public actor DropboxFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
         return token
+    }
+
+    private func initialAccessToken() async throws -> String {
+        if let token = credential.token, !token.isEmpty {
+            return token
+        }
+        guard credential.password?.isEmpty == false else {
+            accessToken = nil
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        do {
+            return try await refreshAccessToken()
+        } catch {
+            accessToken = nil
+            throw RemoteFileSystemError.authenticationFailed
+        }
     }
 
     private func jsonRequest(

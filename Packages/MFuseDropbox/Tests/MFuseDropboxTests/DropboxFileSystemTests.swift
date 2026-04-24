@@ -253,8 +253,14 @@ import MFuseCore
         let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
         let url = try #require(request.url?.absoluteString)
         if url.contains("/users/get_current_account") {
-            #expect(auth == "Bearer valid-token")
+            #expect(auth == "Bearer valid-token" || auth == "Bearer fresh-token")
             return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        if url.contains("/oauth2/token") {
+            return .http(
+                status: 200,
+                body: Data("{\"access_token\":\"fresh-token\",\"refresh_token\":\"refresh-token\"}".utf8)
+            )
         }
         throw TestFailure("Unexpected request after disconnect: \(url)")
     }
@@ -293,6 +299,10 @@ import MFuseCore
     await expectNotConnected {
         try await fileSystem.writeFile(at: RemotePath("/notes.txt"), data: Data("updated".utf8))
     }
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+    #expect(await updates.lastCredential?.token == "fresh-token")
 }
 
 @Test func dropboxRequestsRequireConnectedAccessToken() async throws {

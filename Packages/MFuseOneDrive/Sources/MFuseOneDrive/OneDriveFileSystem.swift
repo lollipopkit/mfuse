@@ -63,12 +63,8 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     }
 
     public func connect() async throws {
-        guard let token = credential.token, !token.isEmpty else {
-            resetConnectionState()
-            throw RemoteFileSystemError.authenticationFailed
-        }
-
         do {
+            let token = try await initialAccessToken()
             let drive = try await drive(usingToken: token)
             accessToken = token
             driveID = drive.id
@@ -418,6 +414,21 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         try await onCredentialUpdated?(updatedCredential)
         credential = updatedCredential
         accessToken = updatedCredential.token
+    }
+
+    private func initialAccessToken() async throws -> String {
+        if let token = credential.token, !token.isEmpty {
+            return token
+        }
+        guard credential.password?.isEmpty == false else {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        do {
+            try await refreshAccessToken()
+            return try currentToken()
+        } catch {
+            throw RemoteFileSystemError.authenticationFailed
+        }
     }
 
     private func driveItem(at path: RemotePath) async throws -> OneDriveDriveItem {
