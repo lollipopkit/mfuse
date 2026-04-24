@@ -42,15 +42,22 @@
   let locale = $state(initialLocale)
   let isMounted = $state(false)
 
+  function applyLocale(nextLocale) {
+    locale = nextLocale
+    loadLocale(nextLocale)
+    setLocale(nextLocale)
+    syncLocaleToUrl(nextLocale)
+    localStorage.setItem(localeStorageKey, nextLocale)
+  }
+
   onMount(() => {
     if (!locale) {
-      locale = getInitialLocale()
-      loadLocale(locale)
-      setLocale(locale)
+      applyLocale(getInitialLocale())
+    } else {
+      applyLocale(locale)
     }
 
     isMounted = true
-    syncLocaleToUrl(locale)
   })
 
   $effect(() => {
@@ -61,14 +68,10 @@
     document
       .querySelector('meta[name="description"]')
       ?.setAttribute('content', $LL.meta.description())
-    localStorage.setItem(localeStorageKey, locale)
   })
 
   function handleLocaleChange(event) {
-    locale = event.currentTarget.value
-    loadLocale(locale)
-    setLocale(locale)
-    syncLocaleToUrl(locale)
+    applyLocale(event.currentTarget.value)
   }
 </script>
 
