@@ -64,8 +64,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
 
     public func connect() async throws {
         guard let token = credential.token, !token.isEmpty else {
-            accessToken = nil
-            driveID = nil
+            resetConnectionState()
             throw RemoteFileSystemError.authenticationFailed
         }
 
@@ -79,20 +78,17 @@ public actor OneDriveFileSystem: RemoteFileSystem {
                 let drive = try await drive(usingToken: try currentToken())
                 driveID = drive.id
             } catch {
-                accessToken = nil
-                driveID = nil
+                resetConnectionState()
                 throw error
             }
         } catch {
-            accessToken = nil
-            driveID = nil
+            resetConnectionState()
             throw error
         }
     }
 
     public func disconnect() async throws {
-        accessToken = nil
-        driveID = nil
+        resetConnectionState()
     }
 
     public func enumerate(at path: RemotePath) async throws -> [RemoteItem] {
@@ -265,6 +261,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         destination: RemotePath
     ) async throws {
         for _ in 0..<Constants.maxCopyPollCount {
+            try requireConnected()
             var request = URLRequest(url: monitorURL)
             request.httpMethod = "GET"
             let (data, response) = try await session.data(for: request)
@@ -337,18 +334,31 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         let (uploadData, uploadResponse) = try await data(for: uploadRequest)
         try check(response: uploadResponse, data: uploadData, path: path, conflictPath: path)
         let uploadSession = try JSONDecoder().decode(OneDriveUploadSession.self, from: uploadData)
+        guard let chunkUploadURL = URL(string: uploadSession.uploadUrl),
+              let scheme = chunkUploadURL.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              chunkUploadURL.host != nil else {
+            throw RemoteFileSystemError.operationFailed(
+                "OneDrive upload failed: invalid upload session URL for \(path.absoluteString)"
+            )
+        }
 
         let fileHandle = try FileHandle(forReadingFrom: localFileURL)
         defer { try? fileHandle.close() }
 
         var offset = 0
         while offset < fileSize {
+            try requireConnected()
             let remaining = fileSize - offset
             let chunkSize = min(Constants.uploadChunkSize, remaining)
             let chunk = try fileHandle.read(upToCount: chunkSize) ?? Data()
-            if chunk.isEmpty { break }
+            guard !chunk.isEmpty else {
+                throw RemoteFileSystemError.operationFailed(
+                    "OneDrive upload failed: unexpected EOF while reading \(localFileURL.path) at offset \(offset) of \(fileSize); the file may have been modified during upload"
+                )
+            }
 
-            var chunkRequest = URLRequest(url: URL(string: uploadSession.uploadUrl)!)
+            var chunkRequest = URLRequest(url: chunkUploadURL)
             chunkRequest.httpMethod = "PUT"
             chunkRequest.setValue("\(chunk.count)", forHTTPHeaderField: "Content-Length")
             chunkRequest.setValue(
@@ -441,10 +451,19 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     }
 
     private func currentToken() throws -> String {
-        guard let token = accessToken ?? credential.token, !token.isEmpty else {
-            throw RemoteFileSystemError.authenticationFailed
+        guard let token = accessToken, !token.isEmpty else {
+            throw RemoteFileSystemError.notConnected
         }
         return token
+    }
+
+    private func resetConnectionState() {
+        accessToken = nil
+        driveID = nil
+    }
+
+    private func requireConnected() throws {
+        _ = try currentToken()
     }
 
     private func requireOAuthProvider() throws -> OneDriveOAuthProvider {
@@ -474,12 +493,19 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     }
 
     private func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try requireConnected()
         let result = try await session.data(for: request)
         if let http = result.1 as? HTTPURLResponse, http.statusCode == 401 {
-            try await refreshAccessToken()
-            var retried = request
-            retried.setValue("Bearer \(try currentToken())", forHTTPHeaderField: "Authorization")
-            return try await session.data(for: retried)
+            try requireConnected()
+            do {
+                try await refreshAccessToken()
+                var retried = request
+                retried.setValue("Bearer \(try currentToken())", forHTTPHeaderField: "Authorization")
+                return try await session.data(for: retried)
+            } catch {
+                resetConnectionState()
+                throw error
+            }
         }
         return result
     }

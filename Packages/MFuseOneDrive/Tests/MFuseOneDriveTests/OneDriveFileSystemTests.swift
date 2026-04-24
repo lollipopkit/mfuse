@@ -172,6 +172,133 @@ import MFuseCore
     }
 }
 
+@Test func oneDriveRequestsAfterDisconnectFailNotConnectedWithoutCredentialFallback() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        throw TestFailure("Unexpected request after disconnect: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    try await fileSystem.disconnect()
+    #expect(await fileSystem.isConnected == false)
+
+    do {
+        _ = try await fileSystem.enumerate(at: .root)
+        Issue.record("Expected enumerate() after disconnect to fail with notConnected")
+    } catch RemoteFileSystemError.notConnected {
+        // Expected.
+    } catch {
+        Issue.record("Expected notConnected after disconnect, got \(error)")
+    }
+}
+
+@Test func oneDriveLargeUploadRejectsInvalidUploadSessionURL() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root") {
+            return .http(status: 200, body: Data("{\"id\":\"root\",\"name\":\"root\",\"folder\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Large.bin:/createUploadSession") {
+            return .http(status: 200, body: Data("{\"uploadUrl\":\"\"}".utf8))
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mfuse-onedrive-large-\(UUID().uuidString).bin")
+    try Data(count: 8 * 1024 * 1024 + 1).write(to: fileURL)
+    defer { try? FileManager.default.removeItem(at: fileURL) }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    do {
+        try await fileSystem.createFile(at: RemotePath("/Large.bin"), from: fileURL)
+        Issue.record("Expected invalid upload session URL to fail")
+    } catch let error as RemoteFileSystemError {
+        #expect(error.localizedDescription.contains("invalid upload session URL"))
+    }
+}
+
+@Test func oneDriveRefreshFailureClearsConnectionState() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root/children") {
+            return .http(
+                status: 401,
+                body: Data("{\"error\":{\"code\":\"InvalidAuthenticationToken\",\"message\":\"Expired\"}}".utf8)
+            )
+        }
+        if url.contains("/oauth2/v2.0/token") {
+            return .http(
+                status: 400,
+                body: Data("{\"error\":\"invalid_grant\",\"error_description\":\"Refresh failed\"}".utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let provider = OneDriveOAuthProvider(
+        configuration: OAuthClientConfiguration(
+            providerName: "Microsoft OneDrive",
+            clientID: "client-id",
+            redirectURI: "com.example.onedrive:/oauth",
+            authorizationURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")!,
+            tokenURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
+            scopes: ["Files.ReadWrite", "offline_access"]
+        ),
+        session: session
+    )
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(password: "refresh-token", token: "valid-token"),
+        oauthProvider: provider,
+        session: session
+    )
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+
+    await #expect(throws: RemoteFileSystemError.self) {
+        _ = try await fileSystem.enumerate(at: .root)
+    }
+    #expect(await fileSystem.isConnected == false)
+}
+
+@Test func oneDriveBuiltInOAuthTrimsAuthorityBeforeBuildingURLs() throws {
+    let bundle = try makeOneDriveOAuthBundle(authority: " common ")
+    let provider = try OneDriveOAuthProvider.builtIn(
+        bundle: bundle,
+        session: URLSession(configuration: .ephemeral)
+    )
+    let configuration = try #require(
+        Mirror(reflecting: provider).children.first { $0.label == "configuration" }?.value
+            as? OAuthClientConfiguration
+    )
+
+    #expect(configuration.authorizationURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")
+    #expect(configuration.tokenURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/token")
+}
+
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {
@@ -186,6 +313,21 @@ private func makeMockSession(
         delegate: MockSessionHandlerCleaner(token: token),
         delegateQueue: nil
     )
+}
+
+private func makeOneDriveOAuthBundle(authority: String) throws -> Bundle {
+    let bundleURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mfuse-onedrive-oauth-\(UUID().uuidString).bundle", isDirectory: true)
+    try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+    let info: [String: Any] = [
+        "CFBundleIdentifier": "dev.mfuse.tests.onedrive.\(UUID().uuidString)",
+        "MFOneDriveClientID": "client-id",
+        "MFOneDriveRedirectURI": "com.example.onedrive:/oauth",
+        "MFOneDriveAuthority": authority,
+    ]
+    let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+    try data.write(to: bundleURL.appendingPathComponent("Info.plist"))
+    return try #require(Bundle(path: bundleURL.path))
 }
 
 private final class MockURLProtocol: URLProtocol {

@@ -86,7 +86,9 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
                 url: authorizationURL,
                 callbackURLScheme: callbackScheme
             ) { url, error in
-                self.authSession = nil
+                Task { @MainActor in
+                    self.authSession = nil
+                }
                 if let error {
                     continuation.resume(throwing: error)
                 } else if let url {

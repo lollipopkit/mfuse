@@ -54,12 +54,25 @@ public final class OneDriveOAuthProvider: @unchecked Sendable {
             key: Constants.redirectURIKey,
             providerName: providerName
         )
-        let authority = ((bundle.object(forInfoDictionaryKey: Constants.authorityKey) as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? (bundle.object(forInfoDictionaryKey: Constants.authorityKey) as? String)!
-            : "common"
-        let authorizationURL = URL(string: "https://login.microsoftonline.com/\(authority)/oauth2/v2.0/authorize")!
-        let tokenURL = URL(string: "https://login.microsoftonline.com/\(authority)/oauth2/v2.0/token")!
+        let configuredAuthority = (bundle.object(forInfoDictionaryKey: Constants.authorityKey) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let authority = configuredAuthority.isEmpty ? "common" : configuredAuthority
+        let authorizationURLString = "https://login.microsoftonline.com/\(authority)/oauth2/v2.0/authorize"
+        let tokenURLString = "https://login.microsoftonline.com/\(authority)/oauth2/v2.0/token"
+        guard let authorizationURL = URL(string: authorizationURLString) else {
+            throw OAuthConfigurationError.invalidURL(
+                providerName: providerName,
+                key: Constants.authorityKey,
+                value: authorizationURLString
+            )
+        }
+        guard let tokenURL = URL(string: tokenURLString) else {
+            throw OAuthConfigurationError.invalidURL(
+                providerName: providerName,
+                key: Constants.authorityKey,
+                value: tokenURLString
+            )
+        }
         let configuration = OAuthClientConfiguration(
             providerName: providerName,
             clientID: clientID,

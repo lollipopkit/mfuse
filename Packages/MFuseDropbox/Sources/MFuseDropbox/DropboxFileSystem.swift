@@ -69,6 +69,8 @@ public actor DropboxFileSystem: RemoteFileSystem {
 
     public func disconnect() async throws {
         accessToken = nil
+        credential = credentialWithoutAccessToken()
+        try await onCredentialUpdated?(credential)
     }
 
     public func enumerate(at path: RemotePath) async throws -> [RemoteItem] {
@@ -286,6 +288,11 @@ public actor DropboxFileSystem: RemoteFileSystem {
         defer { try? fileHandle.close() }
 
         let firstChunk = try fileHandle.read(upToCount: Constants.uploadChunkSize) ?? Data()
+        guard !firstChunk.isEmpty else {
+            throw RemoteFileSystemError.operationFailed(
+                "Dropbox upload failed: unexpected EOF while reading \(localFileURL.path) at offset 0 of \(fileSize); the file may have been modified during upload"
+            )
+        }
         var startRequest = try authorizedRequest(
             urlString: "\(Constants.contentBase)/files/upload_session/start",
             method: "POST"
@@ -302,8 +309,10 @@ public actor DropboxFileSystem: RemoteFileSystem {
 
         while true {
             let chunk = try fileHandle.read(upToCount: Constants.uploadChunkSize) ?? Data()
-            if chunk.isEmpty {
-                break
+            guard !chunk.isEmpty else {
+                throw RemoteFileSystemError.operationFailed(
+                    "Dropbox upload failed: unexpected EOF while reading \(localFileURL.path) at offset \(offset) of \(fileSize); the file may have been modified during upload"
+                )
             }
 
             let nextChunk = try fileHandle.read(upToCount: Constants.uploadChunkSize) ?? Data()
@@ -401,7 +410,8 @@ public actor DropboxFileSystem: RemoteFileSystem {
         urlString: String,
         method: String
     ) throws -> URLRequest {
-        guard let token = accessToken ?? credential.token, !token.isEmpty else {
+        let token = accessToken ?? credential.token
+        guard let token, !token.isEmpty else {
             throw RemoteFileSystemError.authenticationFailed
         }
         guard let url = URL(string: urlString) else {
@@ -411,6 +421,17 @@ public actor DropboxFileSystem: RemoteFileSystem {
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request
+    }
+
+    private func credentialWithoutAccessToken() -> Credential {
+        Credential(
+            password: credential.password,
+            privateKey: credential.privateKey,
+            passphrase: credential.passphrase,
+            accessKeyID: credential.accessKeyID,
+            secretAccessKey: credential.secretAccessKey,
+            token: nil
+        )
     }
 
     private func data(for request: URLRequest) async throws -> (Data, URLResponse) {

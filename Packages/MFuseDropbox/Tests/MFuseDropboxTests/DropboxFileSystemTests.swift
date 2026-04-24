@@ -248,6 +248,103 @@ import MFuseCore
     #expect(await invalidRefreshFileSystem.isConnected == false)
 }
 
+@Test func dropboxDisconnectClearsStoredTokenAndBlocksRequests() async throws {
+    let session = try makeMockSession { request in
+        let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            #expect(auth == "Bearer valid-token")
+            return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        throw TestFailure("Unexpected request after disconnect: \(url)")
+    }
+
+    let updates = CredentialUpdateRecorder()
+    let fileSystem = DropboxFileSystem(
+        config: ConnectionConfig(name: "Dropbox", backendType: .dropbox, host: ""),
+        credential: Credential(password: "refresh-token", token: "valid-token"),
+        oauthProvider: DropboxOAuthProvider(
+            configuration: OAuthClientConfiguration(
+                providerName: "Dropbox",
+                clientID: "client-id",
+                redirectURI: "com.example.dropbox:/oauth",
+                authorizationURL: URL(string: "https://www.dropbox.com/oauth2/authorize")!,
+                tokenURL: URL(string: "https://api.dropboxapi.com/oauth2/token")!,
+                scopes: ["files.content.read"]
+            ),
+            session: session
+        ),
+        session: session,
+        onCredentialUpdated: { credential in
+            await updates.record(credential)
+        }
+    )
+
+    try await fileSystem.connect()
+    try await fileSystem.disconnect()
+
+    let storedCredential = await updates.lastCredential
+    #expect(storedCredential?.password == "refresh-token")
+    #expect(storedCredential?.token == nil)
+
+    await #expect(throws: RemoteFileSystemError.self) {
+        try await fileSystem.enumerate(at: RemotePath.root)
+    }
+    await #expect(throws: RemoteFileSystemError.self) {
+        try await fileSystem.writeFile(at: RemotePath("/notes.txt"), data: Data("updated".utf8))
+    }
+}
+
+@Test func dropboxLargeUploadThrowsWhenFileIsTruncatedAfterSessionStart() async throws {
+    let fileURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mfuse-dropbox-large-\(UUID().uuidString).bin")
+    try Data(count: 8 * 1024 * 1024 + 1).write(to: fileURL)
+    defer { try? FileManager.default.removeItem(at: fileURL) }
+
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        if url.contains("/files/get_metadata") {
+            return .http(status: 409, body: Data("{\"error_summary\":\"path/not_found/..\"}".utf8))
+        }
+        if url.contains("/files/upload_session/start") {
+            try Data(count: 8 * 1024 * 1024).write(to: fileURL)
+            return .http(status: 200, body: Data("{\"session_id\":\"session-1\"}".utf8))
+        }
+        if url.contains("/files/upload_session/finish") || url.contains("/files/upload_session/append_v2") {
+            throw TestFailure("Unexpected upload continuation after truncated file: \(url)")
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = DropboxFileSystem(
+        config: ConnectionConfig(name: "Dropbox", backendType: .dropbox, host: ""),
+        credential: Credential(token: "valid-token"),
+        oauthProvider: DropboxOAuthProvider(
+            configuration: OAuthClientConfiguration(
+                providerName: "Dropbox",
+                clientID: "client-id",
+                redirectURI: "com.example.dropbox:/oauth",
+                authorizationURL: URL(string: "https://www.dropbox.com/oauth2/authorize")!,
+                tokenURL: URL(string: "https://api.dropboxapi.com/oauth2/token")!,
+                scopes: ["files.content.write"]
+            ),
+            session: session
+        ),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    do {
+        try await fileSystem.createFile(at: RemotePath("/Large.bin"), from: fileURL)
+        Issue.record("Expected truncated file upload to fail")
+    } catch let error as RemoteFileSystemError {
+        #expect(error.localizedDescription.contains("unexpected EOF"))
+    }
+}
+
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {
@@ -337,6 +434,14 @@ private final class MockSessionHandlerCleaner: NSObject, URLSessionDelegate {
 
     deinit {
         MockURLProtocol.unregister(token: token)
+    }
+}
+
+private actor CredentialUpdateRecorder {
+    private(set) var lastCredential: Credential?
+
+    func record(_ credential: Credential) {
+        lastCredential = credential
     }
 }
 
