@@ -180,16 +180,24 @@ import MFuseCore
         }
         throw TestFailure("Unexpected request after disconnect: \(url)")
     }
+    let updates = CredentialUpdateRecorder()
 
     let fileSystem = OneDriveFileSystem(
         config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
-        credential: Credential(token: "valid-token"),
-        session: session
+        credential: Credential(password: "refresh-token", token: "valid-token"),
+        session: session,
+        onCredentialUpdated: { credential in
+            await updates.record(credential)
+        }
     )
 
     try await fileSystem.connect()
     try await fileSystem.disconnect()
     #expect(await fileSystem.isConnected == false)
+
+    let storedCredential = await updates.lastCredential
+    #expect(storedCredential?.password == "refresh-token")
+    #expect(storedCredential?.token == nil)
 
     do {
         _ = try await fileSystem.enumerate(at: .root)
@@ -280,6 +288,60 @@ import MFuseCore
 
     await #expect(throws: RemoteFileSystemError.self) {
         _ = try await fileSystem.enumerate(at: .root)
+    }
+    #expect(await fileSystem.isConnected == false)
+}
+
+@Test func oneDriveRetriedUnauthorizedResponseClearsConnectionState() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root/children") {
+            return .http(
+                status: 401,
+                body: Data("{\"error\":{\"code\":\"InvalidAuthenticationToken\",\"message\":\"Unauthorized for \(auth)\"}}".utf8)
+            )
+        }
+        if url.contains("/oauth2/v2.0/token") {
+            return .http(
+                status: 200,
+                body: Data("{\"access_token\":\"fresh-token\",\"refresh_token\":\"refresh-token\"}".utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let provider = OneDriveOAuthProvider(
+        configuration: OAuthClientConfiguration(
+            providerName: "Microsoft OneDrive",
+            clientID: "client-id",
+            redirectURI: "com.example.onedrive:/oauth",
+            authorizationURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")!,
+            tokenURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
+            scopes: ["Files.ReadWrite", "offline_access"]
+        ),
+        session: session
+    )
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(password: "refresh-token", token: "valid-token"),
+        oauthProvider: provider,
+        session: session
+    )
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+
+    do {
+        _ = try await fileSystem.enumerate(at: .root)
+        Issue.record("Expected retried 401 response to fail")
+    } catch RemoteFileSystemError.authenticationFailed {
+        // Expected.
+    } catch {
+        Issue.record("Expected authenticationFailed, got \(error)")
     }
     #expect(await fileSystem.isConnected == false)
 }
@@ -403,6 +465,14 @@ private final class MockSessionHandlerCleaner: NSObject, URLSessionDelegate {
 
     deinit {
         MockURLProtocol.unregister(token: token)
+    }
+}
+
+private actor CredentialUpdateRecorder {
+    private(set) var lastCredential: Credential?
+
+    func record(_ credential: Credential) {
+        lastCredential = credential
     }
 }
 

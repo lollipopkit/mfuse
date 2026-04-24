@@ -89,6 +89,8 @@ public actor OneDriveFileSystem: RemoteFileSystem {
 
     public func disconnect() async throws {
         resetConnectionState()
+        credential = credentialWithoutAccessToken()
+        try await onCredentialUpdated?(credential)
     }
 
     public func enumerate(at path: RemotePath) async throws -> [RemoteItem] {
@@ -462,6 +464,17 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         driveID = nil
     }
 
+    private func credentialWithoutAccessToken() -> Credential {
+        Credential(
+            password: credential.password,
+            privateKey: credential.privateKey,
+            passphrase: credential.passphrase,
+            accessKeyID: credential.accessKeyID,
+            secretAccessKey: credential.secretAccessKey,
+            token: nil
+        )
+    }
+
     private func requireConnected() throws {
         _ = try currentToken()
     }
@@ -501,7 +514,13 @@ public actor OneDriveFileSystem: RemoteFileSystem {
                 try await refreshAccessToken()
                 var retried = request
                 retried.setValue("Bearer \(try currentToken())", forHTTPHeaderField: "Authorization")
-                return try await session.data(for: retried)
+                let retriedResult = try await session.data(for: retried)
+                if let retriedHTTP = retriedResult.1 as? HTTPURLResponse,
+                   retriedHTTP.statusCode == 401 {
+                    resetConnectionState()
+                    throw RemoteFileSystemError.authenticationFailed
+                }
+                return retriedResult
             } catch {
                 resetConnectionState()
                 throw error

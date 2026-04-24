@@ -410,9 +410,8 @@ public actor DropboxFileSystem: RemoteFileSystem {
         urlString: String,
         method: String
     ) throws -> URLRequest {
-        let token = accessToken ?? credential.token
-        guard let token, !token.isEmpty else {
-            throw RemoteFileSystemError.authenticationFailed
+        guard let token = accessToken, !token.isEmpty else {
+            throw RemoteFileSystemError.notConnected
         }
         guard let url = URL(string: urlString) else {
             throw RemoteFileSystemError.operationFailed("Invalid Dropbox URL: \(urlString)")
@@ -437,11 +436,22 @@ public actor DropboxFileSystem: RemoteFileSystem {
     private func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         let result = try await session.data(for: request)
         if let http = result.1 as? HTTPURLResponse, http.statusCode == 401 {
-            let refreshedToken = try await refreshAccessToken()
-            accessToken = refreshedToken
-            var retriedRequest = request
-            retriedRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
-            return try await session.data(for: retriedRequest)
+            do {
+                let refreshedToken = try await refreshAccessToken()
+                accessToken = refreshedToken
+                var retriedRequest = request
+                retriedRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+                let retriedResult = try await session.data(for: retriedRequest)
+                if let retriedHTTP = retriedResult.1 as? HTTPURLResponse,
+                   retriedHTTP.statusCode == 401 {
+                    accessToken = nil
+                    throw RemoteFileSystemError.authenticationFailed
+                }
+                return retriedResult
+            } catch {
+                accessToken = nil
+                throw error
+            }
         }
         return result
     }
@@ -449,11 +459,22 @@ public actor DropboxFileSystem: RemoteFileSystem {
     private func upload(for request: URLRequest, data: Data) async throws -> (Data, URLResponse) {
         let result = try await session.upload(for: request, from: data)
         if let http = result.1 as? HTTPURLResponse, http.statusCode == 401 {
-            let refreshedToken = try await refreshAccessToken()
-            accessToken = refreshedToken
-            var retriedRequest = request
-            retriedRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
-            return try await session.upload(for: retriedRequest, from: data)
+            do {
+                let refreshedToken = try await refreshAccessToken()
+                accessToken = refreshedToken
+                var retriedRequest = request
+                retriedRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+                let retriedResult = try await session.upload(for: retriedRequest, from: data)
+                if let retriedHTTP = retriedResult.1 as? HTTPURLResponse,
+                   retriedHTTP.statusCode == 401 {
+                    accessToken = nil
+                    throw RemoteFileSystemError.authenticationFailed
+                }
+                return retriedResult
+            } catch {
+                accessToken = nil
+                throw error
+            }
         }
         return result
     }
