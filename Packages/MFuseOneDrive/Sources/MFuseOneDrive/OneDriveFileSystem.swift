@@ -165,7 +165,6 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     }
 
     public func createDirectory(at path: RemotePath) async throws {
-        try await ensureAbsent(path)
         guard let parent = path.parent else {
             throw RemoteFileSystemError.operationFailed("Cannot create directory at root")
         }
@@ -275,6 +274,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         monitorURL: URL,
         destination: RemotePath
     ) async throws {
+        try validateMicrosoftMonitorURL(monitorURL)
         for _ in 0..<Constants.maxCopyPollCount {
             try requireConnected()
             var request = URLRequest(url: monitorURL)
@@ -351,7 +351,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         let uploadSession = try JSONDecoder().decode(OneDriveUploadSession.self, from: uploadData)
         guard let chunkUploadURL = URL(string: uploadSession.uploadUrl),
               let scheme = chunkUploadURL.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
+              scheme == "https",
               let chunkUploadHost = chunkUploadURL.host,
               validateHostIsMicrosoftDomain(host: chunkUploadHost) else {
             throw RemoteFileSystemError.operationFailed(
@@ -675,6 +675,14 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         ]
         return trustedDomains.contains { domain in
             normalizedHost == domain || normalizedHost.hasSuffix(".\(domain)")
+        }
+    }
+
+    private func validateMicrosoftMonitorURL(_ url: URL) throws {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host,
+              validateHostIsMicrosoftDomain(host: host) else {
+            throw RemoteFileSystemError.operationFailed("OneDrive copy monitor failed: untrusted monitor URL")
         }
     }
 

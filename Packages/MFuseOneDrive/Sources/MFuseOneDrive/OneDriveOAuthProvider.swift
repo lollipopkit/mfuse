@@ -39,6 +39,14 @@ public final class OneDriveOAuthProvider: @unchecked Sendable {
         self.session = session
     }
 
+    var authorizationURL: URL {
+        configuration.authorizationURL
+    }
+
+    var tokenURL: URL {
+        configuration.tokenURL
+    }
+
     public static func builtIn(
         bundle: Bundle = .main,
         session: URLSession = .shared

@@ -80,9 +80,9 @@ import MFuseTestSupport
             return .http(status: 404, body: Data("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"Not found\"}}".utf8))
         }
         if url.hasSuffix("/me/drive/items/src-1/copy?@microsoft.graph.conflictBehavior=fail") {
-            return .http(status: 202, body: Data(), headers: ["Location": "https://monitor.example/copy"])
+            return .http(status: 202, body: Data(), headers: ["Location": "https://graph.microsoft.com/copy-monitor"])
         }
-        if url == "https://monitor.example/copy" {
+        if url == "https://graph.microsoft.com/copy-monitor" {
             return .http(
                 status: 200,
                 body: Data("{\"status\":\"failed\",\"error\":{\"code\":\"nameAlreadyExists\",\"message\":\"Name already exists\"}}".utf8)
@@ -111,6 +111,42 @@ import MFuseTestSupport
     try await copyFileSystem.connect()
     await #expect(throws: RemoteFileSystemError.self) {
         try await copyFileSystem.copy(from: RemotePath("/Source"), to: RemotePath("/Target/Copied"))
+    }
+}
+
+@Test func oneDriveCopyRejectsUntrustedMonitorURL() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Source") {
+            return .http(status: 200, body: Data("{\"id\":\"src-1\",\"name\":\"Source\",\"folder\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Target") {
+            return .http(status: 200, body: Data("{\"id\":\"target-parent\",\"name\":\"Target\",\"folder\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Target/Copied") {
+            return .http(status: 404, body: Data("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"Not found\"}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/items/src-1/copy?@microsoft.graph.conflictBehavior=fail") {
+            return .http(status: 202, body: Data(), headers: ["Location": "https://evil.example/copy-monitor"])
+        }
+        throw TestFailure("Unexpected request for untrusted monitor URL test: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    do {
+        try await fileSystem.copy(from: RemotePath("/Source"), to: RemotePath("/Target/Copied"))
+        Issue.record("Expected untrusted monitor URL to fail")
+    } catch let error as RemoteFileSystemError {
+        #expect(error.localizedDescription.contains("untrusted monitor URL"))
     }
 }
 
@@ -177,6 +213,39 @@ import MFuseTestSupport
     try await fileSystem.connect()
     await #expect(throws: RemoteFileSystemError.self) {
         try await fileSystem.createFile(at: RemotePath("/Existing.txt"), data: Data("new".utf8))
+    }
+}
+
+@Test func oneDriveCreateDirectoryUsesAtomicConflictHandlingWithoutTargetPreflight() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Parent/Existing") {
+            throw TestFailure("createDirectory should not preflight target existence: \(url)")
+        }
+        if url.hasSuffix("/me/drive/root:/Parent") {
+            return .http(status: 200, body: Data("{\"id\":\"parent\",\"name\":\"Parent\",\"folder\":{}}".utf8))
+        }
+        if url.hasSuffix("/me/drive/root:/Parent:/children") {
+            return .http(
+                status: 409,
+                body: Data("{\"error\":{\"code\":\"nameAlreadyExists\",\"message\":\"Name already exists\"}}".utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    await #expect(throws: RemoteFileSystemError.self) {
+        try await fileSystem.createDirectory(at: RemotePath("/Parent/Existing"))
     }
 }
 
@@ -357,7 +426,7 @@ import MFuseTestSupport
             return .http(status: 200, body: Data("{\"id\":\"root\",\"name\":\"root\",\"folder\":{}}".utf8))
         }
         if url.hasSuffix("/me/drive/root:/Large.bin:/createUploadSession") {
-            return .http(status: 200, body: Data("{\"uploadUrl\":\"https://evil.example/upload\"}".utf8))
+            return .http(status: 200, body: Data("{\"uploadUrl\":\"http://graph.microsoft.com/upload\"}".utf8))
         }
         throw TestFailure("Unexpected request: \(url)")
     }
@@ -490,13 +559,8 @@ import MFuseTestSupport
         bundle: bundle,
         session: URLSession(configuration: .ephemeral)
     )
-    let configuration = try #require(
-        Mirror(reflecting: provider).children.first { $0.label == "configuration" }?.value
-            as? OAuthClientConfiguration
-    )
-
-    #expect(configuration.authorizationURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")
-    #expect(configuration.tokenURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/token")
+    #expect(provider.authorizationURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")
+    #expect(provider.tokenURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/token")
 }
 
 private func makeMockSession(
@@ -523,7 +587,7 @@ private func makeOneDriveOAuthBundle(authority: String) throws -> Bundle {
         "CFBundleIdentifier": "dev.mfuse.tests.onedrive.\(UUID().uuidString)",
         "MFOneDriveClientID": "client-id",
         "MFOneDriveRedirectURI": "com.example.onedrive:/oauth",
-        "MFOneDriveAuthority": authority,
+        "MFOneDriveAuthority": authority
     ]
     let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
     try data.write(to: bundleURL.appendingPathComponent("Info.plist"))
