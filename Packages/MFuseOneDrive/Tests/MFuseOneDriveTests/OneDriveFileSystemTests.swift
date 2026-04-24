@@ -563,6 +563,30 @@ import MFuseTestSupport
     #expect(provider.tokenURL.absoluteString == "https://login.microsoftonline.com/common/oauth2/v2.0/token")
 }
 
+@Test func oneDriveBuiltInOAuthValidatesAuthority() throws {
+    let invalidBundle = try makeOneDriveOAuthBundle(authority: "common/../../evil")
+    do {
+        _ = try OneDriveOAuthProvider.builtIn(
+            bundle: invalidBundle,
+            session: URLSession(configuration: .ephemeral)
+        )
+        Issue.record("Expected invalid authority to fail during provider initialization")
+    } catch let error as OAuthConfigurationError {
+        #expect(error.localizedDescription.contains("Microsoft OneDrive"))
+        #expect(error.localizedDescription.contains("MFOneDriveAuthority"))
+        #expect(error.localizedDescription.contains("common/../../evil"))
+    }
+
+    let tenantID = "12345678-1234-1234-1234-123456789abc"
+    let tenantBundle = try makeOneDriveOAuthBundle(authority: tenantID)
+    let provider = try OneDriveOAuthProvider.builtIn(
+        bundle: tenantBundle,
+        session: URLSession(configuration: .ephemeral)
+    )
+    #expect(provider.authorizationURL.absoluteString == "https://login.microsoftonline.com/\(tenantID)/oauth2/v2.0/authorize")
+    #expect(provider.tokenURL.absoluteString == "https://login.microsoftonline.com/\(tenantID)/oauth2/v2.0/token")
+}
+
 @Test func oneDriveBuiltInOAuthRejectsInvalidRedirectURI() throws {
     let bundle = try makeOneDriveOAuthBundle(
         authority: "common",
@@ -579,6 +603,40 @@ import MFuseTestSupport
         #expect(error.localizedDescription.contains("Microsoft OneDrive"))
         #expect(error.localizedDescription.contains("MFOneDriveRedirectURI"))
         #expect(error.localizedDescription.contains("not a redirect uri"))
+    }
+}
+
+@Test func oneDriveCurrentAccountTruncatesRawErrorBodies() async throws {
+    let secret = "secret-token-that-should-not-leak"
+    let longBody = String(repeating: "x", count: 240) + secret
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("graph.microsoft.com/v1.0/me") {
+            return .http(status: 500, body: Data(longBody.utf8))
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let provider = OneDriveOAuthProvider(
+        configuration: OAuthClientConfiguration(
+            providerName: "Microsoft OneDrive",
+            clientID: "client-id",
+            redirectURI: "com.example.onedrive:/oauth",
+            authorizationURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")!,
+            tokenURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
+            scopes: ["Files.ReadWrite", "offline_access"]
+        ),
+        session: session
+    )
+
+    do {
+        _ = try await provider.currentAccount(accessToken: "token")
+        Issue.record("Expected currentAccount to fail")
+    } catch let error as RemoteFileSystemError {
+        let message = error.localizedDescription
+        #expect(message.contains(String(repeating: "x", count: 200)))
+        #expect(message.contains("..."))
+        #expect(!message.contains(secret))
     }
 }
 

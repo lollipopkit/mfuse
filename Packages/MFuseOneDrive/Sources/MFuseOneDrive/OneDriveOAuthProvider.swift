@@ -19,6 +19,7 @@ public final class OneDriveOAuthProvider: @unchecked Sendable {
         static let redirectURIKey = "MFOneDriveRedirectURI"
         static let authorityKey = "MFOneDriveAuthority"
         static let graphMeURL = URL(string: "https://graph.microsoft.com/v1.0/me?$select=displayName,mail,userPrincipalName")!
+        static let errorPreviewLimit = 200
         static let scopes = [
             "Files.ReadWrite",
             "offline_access",
@@ -73,6 +74,13 @@ public final class OneDriveOAuthProvider: @unchecked Sendable {
         let configuredAuthority = (bundle.object(forInfoDictionaryKey: Constants.authorityKey) as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let authority = configuredAuthority.isEmpty ? "common" : configuredAuthority
+        guard isValidAuthority(authority) else {
+            throw OAuthConfigurationError.invalidURL(
+                providerName: providerName,
+                key: Constants.authorityKey,
+                value: authority
+            )
+        }
         let authorizationURLString = "https://login.microsoftonline.com/\(authority)/oauth2/v2.0/authorize"
         let tokenURLString = "https://login.microsoftonline.com/\(authority)/oauth2/v2.0/token"
         guard let authorizationURL = URL(string: authorizationURLString) else {
@@ -143,12 +151,57 @@ public final class OneDriveOAuthProvider: @unchecked Sendable {
             throw RemoteFileSystemError.operationFailed("OneDrive account lookup failed: invalid HTTP response")
         }
         guard http.statusCode == 200 else {
-            let message = String(data: data, encoding: .utf8) ?? "<empty response body>"
+            let message = Self.safeErrorSummary(from: data)
             throw RemoteFileSystemError.operationFailed(
                 "OneDrive account lookup failed with HTTP \(http.statusCode): \(message)"
             )
         }
         return try JSONDecoder().decode(OneDriveIdentity.self, from: data)
+    }
+
+    private static func isValidAuthority(_ authority: String) -> Bool {
+        let allowedAuthorities: Set<String> = ["common", "organizations", "consumers"]
+        if allowedAuthorities.contains(authority.lowercased()) {
+            return true
+        }
+
+        let tenantIDPattern = #"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"#
+        return authority.range(of: tenantIDPattern, options: .regularExpression) != nil
+    }
+
+    private static func safeErrorSummary(from data: Data) -> String {
+        if let graphError = try? JSONDecoder().decode(OneDriveGraphErrorEnvelope.self, from: data) {
+            return graphError.error.message
+        }
+        if let oauthError = try? JSONDecoder().decode(OneDriveOAuthError.self, from: data) {
+            return oauthError.errorDescription ?? oauthError.error
+        }
+        guard let rawBody = String(data: data, encoding: .utf8), !rawBody.isEmpty else {
+            return "<empty response body>"
+        }
+        if rawBody.count <= Constants.errorPreviewLimit {
+            return rawBody
+        }
+        let endIndex = rawBody.index(rawBody.startIndex, offsetBy: Constants.errorPreviewLimit)
+        return "\(rawBody[..<endIndex])..."
+    }
+}
+
+private struct OneDriveGraphErrorEnvelope: Decodable {
+    let error: OneDriveGraphError
+}
+
+private struct OneDriveGraphError: Decodable {
+    let message: String
+}
+
+private struct OneDriveOAuthError: Decodable {
+    let error: String
+    let errorDescription: String?
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case errorDescription = "error_description"
     }
 }
 
