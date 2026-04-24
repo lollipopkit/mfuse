@@ -141,6 +141,11 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         return data
     }
 
+    public func readFile(at path: RemotePath, offset: UInt64, length: UInt32) async throws -> Data {
+        _ = (path, offset, length)
+        throw RemoteFileSystemError.unsupported("OneDrive does not support partial file reads")
+    }
+
     public func writeFile(at path: RemotePath, data: Data) async throws {
         _ = try await driveItem(at: path)
         try await upload(data: data, to: path)
@@ -252,6 +257,11 @@ public actor OneDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.operationFailed("OneDrive copy did not return a monitor URL")
         }
         try await waitForCopyCompletion(monitorURL: monitorURL, destination: destination)
+    }
+
+    public func setPermissions(_ permissions: UInt16, at path: RemotePath) async throws {
+        _ = (permissions, path)
+        throw RemoteFileSystemError.unsupported("OneDrive does not support POSIX permissions")
     }
 
     private func waitForCopyCompletion(
@@ -667,7 +677,7 @@ private struct OneDriveUploadSession: Decodable {
     let uploadUrl: String
 
     enum CodingKeys: String, CodingKey {
-        case uploadUrl = "uploadUrl"
+        case uploadUrl
     }
 }
 

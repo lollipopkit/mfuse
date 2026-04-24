@@ -124,6 +124,11 @@ public actor DropboxFileSystem: RemoteFileSystem {
         return data
     }
 
+    public func readFile(at path: RemotePath, offset: UInt64, length: UInt32) async throws -> Data {
+        _ = (path, offset, length)
+        throw RemoteFileSystemError.unsupported("Dropbox does not support partial file reads")
+    }
+
     public func writeFile(at path: RemotePath, data: Data) async throws {
         _ = try await metadata(for: path)
         try await upload(data: data, to: path, mode: "overwrite", allowConflict: false)
@@ -150,7 +155,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
             endpoint: "/files/create_folder_v2",
             body: [
                 "path": pathString(for: path),
-                "autorename": false,
+                "autorename": false
             ]
         )
         let (data, response) = try await data(for: request)
@@ -174,7 +179,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
                 "from_path": pathString(for: source),
                 "to_path": pathString(for: destination),
                 "autorename": false,
-                "allow_shared_folder": true,
+                "allow_shared_folder": true
             ]
         )
         let (data, response) = try await data(for: request)
@@ -188,11 +193,16 @@ public actor DropboxFileSystem: RemoteFileSystem {
             body: [
                 "from_path": pathString(for: source),
                 "to_path": pathString(for: destination),
-                "autorename": false,
+                "autorename": false
             ]
         )
         let (data, response) = try await data(for: request)
         try check(response: response, data: data, path: source, conflictPath: destination)
+    }
+
+    public func setPermissions(_ permissions: UInt16, at path: RemotePath) async throws {
+        _ = (permissions, path)
+        throw RemoteFileSystemError.unsupported("Dropbox does not support POSIX permissions")
     }
 
     private func listFolder(path: RemotePath) async throws -> [DropboxMetadata] {
@@ -200,7 +210,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
             endpoint: "/files/list_folder",
             body: [
                 "path": pathString(for: path),
-                "include_deleted": false,
+                "include_deleted": false
             ]
         )
         let (initialData, initialResponse) = try await data(for: initialRequest)
@@ -226,7 +236,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
             endpoint: "/files/get_metadata",
             body: [
                 "path": pathString(for: path),
-                "include_deleted": false,
+                "include_deleted": false
             ]
         )
         let (data, response) = try await data(for: request)
@@ -259,7 +269,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
                 "path": pathString(for: path),
                 "mode": mode,
                 "autorename": false,
-                "strict_conflict": !allowConflict,
+                "strict_conflict": !allowConflict
             ]),
             forHTTPHeaderField: "Dropbox-API-Arg"
         )
@@ -323,14 +333,14 @@ public actor DropboxFileSystem: RemoteFileSystem {
                     try encodedDropboxAPIArg([
                         "cursor": [
                             "session_id": start.sessionID,
-                            "offset": offset,
+                            "offset": offset
                         ],
                         "commit": [
                             "path": pathString(for: path),
                             "mode": mode,
                             "autorename": false,
-                            "strict_conflict": strictConflict,
-                        ],
+                            "strict_conflict": strictConflict
+                        ]
                     ]),
                     forHTTPHeaderField: "Dropbox-API-Arg"
                 )
@@ -348,9 +358,9 @@ public actor DropboxFileSystem: RemoteFileSystem {
                 try encodedDropboxAPIArg([
                     "cursor": [
                         "session_id": start.sessionID,
-                        "offset": offset,
+                        "offset": offset
                     ],
-                    "close": false,
+                    "close": false
                 ]),
                 forHTTPHeaderField: "Dropbox-API-Arg"
             )

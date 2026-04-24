@@ -9,6 +9,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
+        .package(path: "../MFuseTestSupport")
     ],
     targets: [
         .target(
@@ -17,7 +18,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MFuseOneDriveTests",
-            dependencies: ["MFuseOneDrive"]
+            dependencies: ["MFuseOneDrive", "MFuseTestSupport"]
         ),
     ]
 )
