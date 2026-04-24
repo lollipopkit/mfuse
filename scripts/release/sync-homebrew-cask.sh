@@ -10,6 +10,7 @@ TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-taps}"
 TAP_CASK_PATH="${TAP_CASK_PATH:-}"
 EXPLICIT_TAP_CASK_PATH="${TAP_CASK_PATH:-}"
 XCARCHIVE_PATH="${1:-${XCARCHIVE_PATH:-}}"
+EXPLICIT_DMG_PATH="${DMG_PATH:-}"
 
 if [[ -n "$XCARCHIVE_PATH" ]]; then
   APP_PATH="${APP_PATH:-$XCARCHIVE_PATH/Products/Applications/${APP_NAME}.app}"
@@ -31,15 +32,15 @@ else
   APP_BUILD=""
 fi
 
-if [[ -n "$APP_VERSION" && "$APP_VERSION" != '$('* ]]; then
-  DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}}"
-fi
-
 if [[ -z "${DMG_PATH:-}" ]]; then
   if [[ -z "${DMG_BASENAME:-}" ]]; then
-    echo "DMG_PATH requires DMG_BASENAME when version is unavailable" >&2
-    echo "Provide DMG_PATH directly, or provide XCARCHIVE_PATH/APP_PATH so DMG_BASENAME can be resolved." >&2
-    exit 1
+    if [[ -n "$APP_VERSION" && "$APP_VERSION" != '$('* ]]; then
+      DMG_BASENAME="${APP_NAME}-${APP_VERSION}"
+    else
+      echo "DMG_PATH requires DMG_BASENAME when version is unavailable" >&2
+      echo "Provide DMG_PATH directly, or provide XCARCHIVE_PATH/APP_PATH so DMG_BASENAME can be resolved." >&2
+      exit 1
+    fi
   fi
   DMG_PATH="$REPO_ROOT/build/artifacts/${DMG_BASENAME}.dmg"
 fi
@@ -50,8 +51,9 @@ if [[ ! -f "$DMG_PATH" ]]; then
   exit 1
 fi
 
+dmg_filename="$(basename "$DMG_PATH")"
+
 if [[ -z "$APP_VERSION" || "$APP_VERSION" == '$('* ]]; then
-  dmg_filename="$(basename "$DMG_PATH")"
   if [[ "$dmg_filename" =~ ^${APP_NAME}-([0-9]+(\.[0-9]+){1,2})\.dmg$ ]]; then
     APP_VERSION="${BASH_REMATCH[1]}"
     APP_BUILD="${APP_BUILD:-}"
@@ -66,7 +68,13 @@ if [[ -z "$APP_VERSION" || "$APP_VERSION" == '$('* ]]; then
 fi
 
 RELEASE_TAG="${RELEASE_TAG:-v${APP_VERSION}}"
-DMG_BASENAME="${DMG_BASENAME:-${APP_NAME}-${APP_VERSION}}"
+if [[ -z "${DMG_BASENAME:-}" ]]; then
+  if [[ -n "$EXPLICIT_DMG_PATH" ]]; then
+    DMG_BASENAME="${dmg_filename%.dmg}"
+  else
+    DMG_BASENAME="${APP_NAME}-${APP_VERSION}"
+  fi
+fi
 
 if [[ -z "$TAP_CASK_PATH" && -n "$TAP_REPO_PATH" ]]; then
   TAP_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"

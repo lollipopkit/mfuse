@@ -27,7 +27,8 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     private var credential: Credential
     private let onCredentialUpdated: (@Sendable (Credential) async throws -> Void)?
     private let session: URLSession
-    private let oauthProvider: OneDriveOAuthProvider
+    private let oauthProvider: OneDriveOAuthProvider?
+    private let oauthProviderLoadError: Error?
     private var accessToken: String?
     private var driveID: String?
 
@@ -44,18 +45,21 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         self.credential = credential
         self.onCredentialUpdated = onCredentialUpdated
         self.session = session
-        self.oauthProvider = oauthProvider ?? (try? OneDriveOAuthProvider.builtIn(bundle: .main, session: session))
-            ?? OneDriveOAuthProvider(
-                configuration: OAuthClientConfiguration(
-                    providerName: "Microsoft OneDrive",
-                    clientID: "missing-client-id",
-                    redirectURI: "missing-redirect-uri",
-                    authorizationURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")!,
-                    tokenURL: URL(string: "https://login.microsoftonline.com/common/oauth2/v2.0/token")!,
-                    scopes: []
-                ),
-                session: session
-            )
+        if let oauthProvider {
+            self.oauthProvider = oauthProvider
+            self.oauthProviderLoadError = nil
+        } else {
+            do {
+                self.oauthProvider = try OneDriveOAuthProvider.builtIn(bundle: .main, session: session)
+                self.oauthProviderLoadError = nil
+            } catch {
+                let message = "OneDriveOAuthProvider.builtIn() failed: \(error.localizedDescription). " +
+                    "No valid clientID/redirectURI are available."
+                NSLog("MFuse OneDrive OAuth provider unavailable: %@", message)
+                self.oauthProvider = nil
+                self.oauthProviderLoadError = RemoteFileSystemError.operationFailed(message)
+            }
+        }
     }
 
     public func connect() async throws {
@@ -380,6 +384,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         guard let refreshToken = credential.password, !refreshToken.isEmpty else {
             throw RemoteFileSystemError.authenticationFailed
         }
+        let oauthProvider = try requireOAuthProvider()
         let refreshed = try await oauthProvider.refresh(refreshToken: refreshToken)
         let updatedCredential = oauthProvider.credential(
             from: refreshed,
@@ -427,6 +432,18 @@ public actor OneDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
         return token
+    }
+
+    private func requireOAuthProvider() throws -> OneDriveOAuthProvider {
+        if let oauthProvider {
+            return oauthProvider
+        }
+        if let oauthProviderLoadError {
+            throw oauthProviderLoadError
+        }
+        throw RemoteFileSystemError.operationFailed(
+            "OneDrive OAuth provider is unavailable. OneDriveOAuthProvider.builtIn() failed and no valid clientID/redirectURI are available."
+        )
     }
 
     private func currentDriveID() throws -> String {

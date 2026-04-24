@@ -65,7 +65,7 @@ import MFuseCore
         session: enumerateSession
     )
     try await fileSystem.connect()
-    let items = try await fileSystem.enumerate(at: .root)
+    let items = try await fileSystem.enumerate(at: RemotePath.root)
     #expect(items.count == 1)
     #expect(items.first?.name == "notes.txt")
 
@@ -103,6 +103,107 @@ import MFuseCore
     try await conflictFileSystem.connect()
     await #expect(throws: RemoteFileSystemError.self) {
         try await conflictFileSystem.createDirectory(at: RemotePath("/Docs"))
+    }
+
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        if url.contains("/files/list_folder") {
+            return .http(
+                status: 200,
+                body: Data("""
+                {
+                  "entries": [
+                    {
+                      ".tag": "folder",
+                      "name": "Projects"
+                    },
+                    {
+                      ".tag": "file",
+                      "name": "readme.txt",
+                      "size": 12,
+                      "client_modified": "2024-01-01T00:00:00Z",
+                      "server_modified": "2024-01-02T00:00:00Z",
+                      "is_downloadable": true
+                    }
+                  ],
+                  "cursor": "cursor-1",
+                  "has_more": false
+                }
+                """.utf8)
+            )
+        }
+        if url.contains("/files/get_metadata") {
+            return .http(
+                status: 200,
+                body: Data("""
+                {
+                  ".tag": "folder",
+                  "name": "Projects"
+                }
+                """.utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let folderProvider = DropboxOAuthProvider(
+        configuration: OAuthClientConfiguration(
+            providerName: "Dropbox",
+            clientID: "client-id",
+            redirectURI: "com.example.dropbox:/oauth",
+            authorizationURL: URL(string: "https://www.dropbox.com/oauth2/authorize")!,
+            tokenURL: URL(string: "https://api.dropboxapi.com/oauth2/token")!,
+            scopes: ["files.content.read"]
+        ),
+        session: session
+    )
+
+    let folderConfig = ConnectionConfig(name: "Dropbox", backendType: .dropbox, host: "")
+    let folderFileSystem = DropboxFileSystem(
+        config: folderConfig,
+        credential: Credential(token: "valid-token"),
+        oauthProvider: folderProvider,
+        session: session
+    )
+
+    try await folderFileSystem.connect()
+
+    let rootItems = try await folderFileSystem.enumerate(at: RemotePath.root)
+    #expect(rootItems.count == 2)
+    #expect(rootItems.first(where: { $0.name == "Projects" })?.isDirectory == true)
+    #expect(rootItems.first(where: { $0.name == "Projects" })?.size == 0)
+
+    let projectsInfo = try await folderFileSystem.itemInfo(at: RemotePath("/Projects"))
+    #expect(projectsInfo.isDirectory)
+    #expect(projectsInfo.size == 0)
+
+    await #expect(throws: RemoteFileSystemError.self) {
+        try await folderFileSystem.createDirectory(at: RemotePath("/Existing"))
+    }
+
+    let missingOAuthSession = try makeMockSession { request in
+        let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            if auth == "Bearer expired-token" {
+                return .http(status: 401, body: Data("{\"error_summary\":\"expired_access_token\"}".utf8))
+            }
+            return .http(status: 200, body: Data("{\"name\":{\"display_name\":\"Dropbox User\"}}".utf8))
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let missingOAuthFileSystem = DropboxFileSystem(
+        config: folderConfig,
+        credential: Credential(password: "refresh-token", token: "expired-token"),
+        session: missingOAuthSession
+    )
+
+    await #expect(throws: OAuthConfigurationError.self) {
+        try await missingOAuthFileSystem.connect()
     }
 }
 

@@ -33,6 +33,7 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
 
     private let configuration: OAuthClientConfiguration
     private let session: URLSession
+    private var temporaryPresentationAnchor: ASPresentationAnchor?
     @MainActor private var isAuthorizing = false
     @MainActor private var authSession: ASWebAuthenticationSession?
 
@@ -55,6 +56,7 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
         defer {
             isAuthorizing = false
             authSession = nil
+            temporaryPresentationAnchor = nil
         }
 
         let codeVerifier = try Self.generateCodeVerifier()
@@ -226,7 +228,55 @@ extension OAuthAuthorizationCodeFlow: ASWebAuthenticationPresentationContextProv
             return window
         }
         #endif
-        Self.logger.error("Unable to locate a presentation anchor for ASWebAuthenticationSession")
-        preconditionFailure("No valid presentation anchor available for ASWebAuthenticationSession")
+        if let temporaryPresentationAnchor {
+            return temporaryPresentationAnchor
+        }
+
+        Self.logger.error(
+            "Unable to locate a presentation anchor for ASWebAuthenticationSession; creating a temporary anchor"
+        )
+        let temporaryPresentationAnchor = makeTemporaryPresentationAnchor()
+        self.temporaryPresentationAnchor = temporaryPresentationAnchor
+        return temporaryPresentationAnchor
+    }
+
+    private func makeTemporaryPresentationAnchor() -> ASPresentationAnchor {
+        #if canImport(AppKit)
+        let window = NSWindow(
+            contentRect: CGRect(x: -10_000, y: -10_000, width: 1, height: 1),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.alphaValue = 0
+        window.orderOut(nil)
+        return window
+        #elseif canImport(UIKit)
+        let windowScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundInactive })
+            ?? UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first
+
+        let window: UIWindow
+        if let windowScene {
+            window = UIWindow(windowScene: windowScene)
+        } else {
+            window = UIWindow(frame: CGRect(x: -10_000, y: -10_000, width: 1, height: 1))
+        }
+        window.frame = CGRect(x: -10_000, y: -10_000, width: 1, height: 1)
+        window.rootViewController = UIViewController()
+        window.isHidden = true
+        return window
+        #else
+        fatalError("ASPresentationAnchor is unsupported on this platform")
+        #endif
     }
 }

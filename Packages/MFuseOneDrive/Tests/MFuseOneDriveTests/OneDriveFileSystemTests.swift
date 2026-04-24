@@ -113,6 +113,34 @@ import MFuseCore
     }
 }
 
+@Test func oneDriveFileSystemSurfacesMissingBuiltInOAuthConfiguration() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(
+                status: 401,
+                body: Data("{\"error\":{\"code\":\"InvalidAuthenticationToken\",\"message\":\"Expired\"}}".utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(password: "refresh-token", token: "expired-token"),
+        session: session
+    )
+
+    do {
+        try await fileSystem.connect()
+        Issue.record("Expected connect() to fail when built-in OneDrive OAuth configuration is unavailable")
+    } catch let error as RemoteFileSystemError {
+        let message = error.localizedDescription
+        #expect(message.contains("OneDriveOAuthProvider.builtIn() failed"))
+        #expect(message.contains("No valid clientID/redirectURI are available"))
+    }
+}
+
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {

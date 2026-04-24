@@ -12,7 +12,8 @@ public actor DropboxFileSystem: RemoteFileSystem {
     private var credential: Credential
     private let onCredentialUpdated: (@Sendable (Credential) async throws -> Void)?
     private let session: URLSession
-    private let oauthProvider: DropboxOAuthProvider
+    private let oauthProvider: DropboxOAuthProvider?
+    private let oauthProviderLoadError: Error?
     private var accessToken: String?
 
     public var isConnected: Bool { accessToken != nil }
@@ -28,18 +29,18 @@ public actor DropboxFileSystem: RemoteFileSystem {
         self.credential = credential
         self.onCredentialUpdated = onCredentialUpdated
         self.session = session
-        self.oauthProvider = oauthProvider ?? (try? DropboxOAuthProvider.builtIn(bundle: .main, session: session))
-            ?? DropboxOAuthProvider(
-                configuration: OAuthClientConfiguration(
-                    providerName: "Dropbox",
-                    clientID: "missing-client-id",
-                    redirectURI: "missing-redirect-uri",
-                    authorizationURL: URL(string: "https://www.dropbox.com/oauth2/authorize")!,
-                    tokenURL: URL(string: "https://api.dropboxapi.com/oauth2/token")!,
-                    scopes: []
-                ),
-                session: session
-            )
+        if let oauthProvider {
+            self.oauthProvider = oauthProvider
+            self.oauthProviderLoadError = nil
+        } else {
+            do {
+                self.oauthProvider = try DropboxOAuthProvider.builtIn(bundle: .main, session: session)
+                self.oauthProviderLoadError = nil
+            } catch {
+                self.oauthProvider = nil
+                self.oauthProviderLoadError = error
+            }
+        }
     }
 
     public func connect() async throws {
@@ -69,7 +70,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
             RemoteItem(
                 path: path.appending(metadata.name),
                 type: metadata.remoteItemType,
-                size: metadata.size,
+                size: metadata.size ?? 0,
                 modificationDate: metadata.modificationDate ?? Date(),
                 creationDate: metadata.clientModificationDate,
                 isHidden: metadata.name.hasPrefix(".")
@@ -86,7 +87,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
         return RemoteItem(
             path: path,
             type: metadata.remoteItemType,
-            size: metadata.size,
+            size: metadata.size ?? 0,
             modificationDate: metadata.modificationDate ?? Date(),
             creationDate: metadata.clientModificationDate,
             isHidden: metadata.name.hasPrefix(".")
@@ -362,6 +363,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
 
+        let oauthProvider = try requireOAuthProvider()
         let refreshed = try await oauthProvider.refresh(refreshToken: refreshToken)
         let updatedCredential = oauthProvider.credential(
             from: refreshed,
@@ -480,6 +482,18 @@ public actor DropboxFileSystem: RemoteFileSystem {
         path.isRoot ? "" : path.absoluteString
     }
 
+    private func requireOAuthProvider() throws -> DropboxOAuthProvider {
+        if let oauthProvider {
+            return oauthProvider
+        }
+        if let oauthProviderLoadError {
+            throw oauthProviderLoadError
+        }
+        throw RemoteFileSystemError.operationFailed(
+            "Dropbox OAuth provider is unavailable"
+        )
+    }
+
     private static let jsonDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -502,7 +516,7 @@ private struct DropboxListFolderResponse: Decodable {
 private struct DropboxMetadata: Decodable {
     let tag: String
     let name: String
-    let size: UInt64
+    let size: UInt64?
     let clientModified: Date?
     let serverModified: Date?
     let isDownloadable: Bool?
