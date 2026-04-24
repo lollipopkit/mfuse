@@ -14,6 +14,25 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.lollipopkit.mfuse.dropbox</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.lollipopkit.mfuse.dropbox</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.lollipopkit.mfuse.onedrive</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.lollipopkit.mfuse.onedrive</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>AppIdentifierPrefix</key>
@@ -28,6 +47,16 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSMainStoryboardFile</key>
 	<string></string>
+	<key>MFDropboxClientID</key>
+	<string>$(MFDROPBOX_CLIENT_ID)</string>
+	<key>MFDropboxRedirectURI</key>
+	<string>$(MFDROPBOX_REDIRECT_URI)</string>
+	<key>MFOneDriveAuthority</key>
+	<string>$(MFONEDRIVE_AUTHORITY)</string>
+	<key>MFOneDriveClientID</key>
+	<string>$(MFONEDRIVE_CLIENT_ID)</string>
+	<key>MFOneDriveRedirectURI</key>
+	<string>$(MFONEDRIVE_REDIRECT_URI)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

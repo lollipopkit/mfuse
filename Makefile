@@ -27,6 +27,8 @@ test-stable:
 	cd Packages/MFuseSMB && swift test
 	cd Packages/MFuseNFS && swift test
 	cd Packages/MFuseGoogleDrive && swift test
+	cd Packages/MFuseDropbox && swift test
+	cd Packages/MFuseOneDrive && swift test
 
 # Full verification matrix intended for CI and exhaustive validation.
 test-all:
@@ -34,6 +36,8 @@ test-all:
 	cd Packages/MFuseSMB && swift test
 	cd Packages/MFuseNFS && swift test
 	cd Packages/MFuseGoogleDrive && swift test
+	cd Packages/MFuseDropbox && swift test
+	cd Packages/MFuseOneDrive && swift test
 	cd Packages/MFuseCore && swift test
 	cd Packages/MFuseFTP && swift test
 	cd Packages/MFuseSFTP && swift test

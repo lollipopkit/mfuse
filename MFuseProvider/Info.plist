@@ -35,5 +35,15 @@
 		<key>NSExtensionPrincipalClass</key>
 		<string>$(PRODUCT_MODULE_NAME).FileProviderExtension</string>
 	</dict>
+	<key>MFDropboxClientID</key>
+	<string>$(MFDROPBOX_CLIENT_ID)</string>
+	<key>MFDropboxRedirectURI</key>
+	<string>$(MFDROPBOX_REDIRECT_URI)</string>
+	<key>MFOneDriveAuthority</key>
+	<string>$(MFONEDRIVE_AUTHORITY)</string>
+	<key>MFOneDriveClientID</key>
+	<string>$(MFONEDRIVE_CLIENT_ID)</string>
+	<key>MFOneDriveRedirectURI</key>
+	<string>$(MFONEDRIVE_REDIRECT_URI)</string>
 </dict>
 </plist>

@@ -1,5 +1,7 @@
 import SwiftUI
 import MFuseCore
+import MFuseDropbox
+import MFuseOneDrive
 import AppKit
 
 private final class EphemeralCredentialProvider: CredentialProvider, @unchecked Sendable {
@@ -33,7 +35,10 @@ struct ConnectionEditorSheet: View {
     @State private var remotePath: String
     @State private var autoMountOnLaunch: Bool
     @State private var password: String = ""
+    @State private var oauthCredential: Credential?
     @State private var oauthToken: String = ""
+    @State private var oauthAccountName: String = ""
+    @State private var oauthAccountEmail: String = ""
     @State private var privateKeyPath: String = ""
     @State private var privateKeyBookmark: String = ""
 
@@ -59,6 +64,8 @@ struct ConnectionEditorSheet: View {
     @State private var testSuccess = false
     @State private var didLoadStoredCredential = false
     @State private var currentTestTask: Task<Void, Never>?
+    @State private var oauthAuthorizationTask: Task<Void, Never>?
+    @State private var isAuthorizingOAuth = false
 
     private let existingID: UUID?
     private let draftID: UUID
@@ -91,6 +98,8 @@ struct ConnectionEditorSheet: View {
         _ftpPassive = State(initialValue: params["passive"] != "false")
         _gdClientID = State(initialValue: params["clientID"] ?? "")
         _gdRedirectURI = State(initialValue: params["redirectURI"] ?? "")
+        _oauthAccountName = State(initialValue: params["oauthAccountName"] ?? "")
+        _oauthAccountEmail = State(initialValue: params["oauthAccountEmail"] ?? "")
     }
 
     var body: some View {
@@ -130,12 +139,12 @@ struct ConnectionEditorSheet: View {
                         if !newType.supportedAuthMethods.contains(authMethod) {
                             authMethod = newType.supportedAuthMethods.first ?? .password
                         }
+                        clearOAuthAuthorizationState()
                     }
                     Toggle(AppL10n.string("editor.field.autoMountOnAppLaunch", fallback: "Auto-Mount on App Launch"), isOn: $autoMountOnLaunch)
                 }
 
-                // Hide host/port for Google Drive (cloud-only)
-                if backendType != .googleDrive {
+                if backendType.requiresServerEndpoint {
                     Section(AppL10n.string("detail.section.server", fallback: "Server")) {
                         if backendType != .s3 {
                             TextField(AppL10n.string("detail.field.host", fallback: "Host"), text: $host, prompt: Text(AppL10n.string("editor.prompt.host", fallback: "example.com")))
@@ -222,9 +231,47 @@ struct ConnectionEditorSheet: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     case .oauth:
-                        Text(AppL10n.string("editor.message.googleSignInAfterSaving", fallback: "You will be prompted to sign in with Google after saving."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        if usesBundledOAuthFlow {
+                            VStack(alignment: .leading, spacing: 10) {
+                                if hasConnectedOAuthAccount {
+                                    Label(
+                                        oauthAccountSummary,
+                                        systemImage: "person.crop.circle.badge.checkmark"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                } else {
+                                    Text(
+                                        AppL10n.string(
+                                            "editor.message.connectAccountBeforeSaving",
+                                            fallback: "Connect your account before testing or saving this mount."
+                                        )
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+
+                                HStack(spacing: 12) {
+                                    Button(
+                                        hasConnectedOAuthAccount
+                                            ? AppL10n.string("editor.action.reauthenticate", fallback: "Re-authenticate")
+                                            : AppL10n.string("editor.action.connectAccount", fallback: "Connect Account")
+                                    ) {
+                                        connectOAuthAccount()
+                                    }
+                                    .disabled(isAuthorizingOAuth)
+
+                                    if isAuthorizingOAuth {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    }
+                                }
+                            }
+                        } else {
+                            Text(AppL10n.string("editor.message.googleSignInAfterSaving", fallback: "You will be prompted to sign in with Google after saving."))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -265,8 +312,8 @@ struct ConnectionEditorSheet: View {
             // Buttons
             HStack {
                 Button(AppL10n.string("editor.action.testAccess", fallback: "Test Access")) { testConnection() }
-                    .disabled(isTesting || !isValid)
-                if isTesting {
+                    .disabled(isTesting || isAuthorizingOAuth || !isValid)
+                if isTesting || isAuthorizingOAuth {
                     ProgressView()
                         .controlSize(.small)
                 }
@@ -299,6 +346,8 @@ struct ConnectionEditorSheet: View {
         .onDisappear {
             currentTestTask?.cancel()
             currentTestTask = nil
+            oauthAuthorizationTask?.cancel()
+            oauthAuthorizationTask = nil
         }
     }
 
@@ -309,13 +358,16 @@ struct ConnectionEditorSheet: View {
         if backendType == .googleDrive {
             return !gdClientID.isEmpty && !gdRedirectURI.isEmpty
         }
+        if usesBundledOAuthFlow {
+            return hasConnectedOAuthAccount
+        }
         if backendType == .s3 {
             let hasValidPort = UInt16(port) != nil || port.isEmpty
             let hasRequiredAccessKeyCredentials =
                 authMethod != .accessKey || (!s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty)
             return !s3Bucket.isEmpty && hasValidPort && hasRequiredAccessKeyCredentials
         }
-        return !host.isEmpty && (UInt16(port) != nil || port.isEmpty)
+        return !backendType.requiresServerEndpoint || (!host.isEmpty && (UInt16(port) != nil || port.isEmpty))
     }
 
     // MARK: - Actions
@@ -426,6 +478,13 @@ struct ConnectionEditorSheet: View {
         case .anonymous:
             return Credential()
         case .oauth:
+            if usesBundledOAuthFlow {
+                guard let oauthCredential,
+                      oauthCredential.token?.isEmpty == false else {
+                    throw RemoteFileSystemError.authenticationFailed
+                }
+                return oauthCredential
+            }
             return Credential(token: oauthToken.isEmpty ? nil : oauthToken)
         }
     }
@@ -454,7 +513,9 @@ struct ConnectionEditorSheet: View {
                 s3SecretAccessKey = credential.secretAccessKey ?? ""
             }
         case .oauth:
-            if oauthToken.isEmpty {
+            if usesBundledOAuthFlow {
+                oauthCredential = credential
+            } else if oauthToken.isEmpty {
                 oauthToken = credential.token ?? ""
             }
         case .agent, .anonymous:
@@ -466,17 +527,26 @@ struct ConnectionEditorSheet: View {
         switch method {
         case .password:
             oauthToken = ""
+            oauthCredential = nil
+            oauthAccountName = ""
+            oauthAccountEmail = ""
             privateKeyPath = ""
             privateKeyBookmark = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .publicKey:
             oauthToken = ""
+            oauthCredential = nil
+            oauthAccountName = ""
+            oauthAccountEmail = ""
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .agent, .anonymous:
             password = ""
             oauthToken = ""
+            oauthCredential = nil
+            oauthAccountName = ""
+            oauthAccountEmail = ""
             privateKeyPath = ""
             privateKeyBookmark = ""
             s3AccessKeyID = ""
@@ -484,6 +554,9 @@ struct ConnectionEditorSheet: View {
         case .accessKey:
             password = ""
             oauthToken = ""
+            oauthCredential = nil
+            oauthAccountName = ""
+            oauthAccountEmail = ""
             privateKeyPath = ""
             privateKeyBookmark = ""
         case .oauth:
@@ -522,6 +595,9 @@ struct ConnectionEditorSheet: View {
             }
             params["clientID"] = gdClientID
             params["redirectURI"] = gdRedirectURI
+        case .dropbox, .oneDrive:
+            if !oauthAccountName.isEmpty { params["oauthAccountName"] = oauthAccountName }
+            if !oauthAccountEmail.isEmpty { params["oauthAccountEmail"] = oauthAccountEmail }
         default:
             break
         }
@@ -609,4 +685,102 @@ struct ConnectionEditorSheet: View {
         }
         return bookmarkData.base64EncodedString()
     }
+
+    private var usesBundledOAuthFlow: Bool {
+        backendType == .dropbox || backendType == .oneDrive
+    }
+
+    private var hasConnectedOAuthAccount: Bool {
+        if usesBundledOAuthFlow {
+            return oauthCredential?.token?.isEmpty == false
+        }
+        return !oauthToken.isEmpty
+    }
+
+    private var oauthAccountSummary: String {
+        let pieces = [oauthAccountName, oauthAccountEmail]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if pieces.isEmpty {
+            return AppL10n.string("editor.message.accountConnected", fallback: "Account connected")
+        }
+        return pieces.joined(separator: " · ")
+    }
+
+    private func clearOAuthAuthorizationState() {
+        oauthAuthorizationTask?.cancel()
+        oauthAuthorizationTask = nil
+        isAuthorizingOAuth = false
+        oauthCredential = nil
+        oauthAccountName = ""
+        oauthAccountEmail = ""
+        if usesBundledOAuthFlow {
+            oauthToken = ""
+        }
+    }
+
+    private func connectOAuthAccount() {
+        oauthAuthorizationTask?.cancel()
+        isAuthorizingOAuth = true
+        testResult = nil
+        oauthAuthorizationTask = Task {
+            do {
+                let authorized = try await authorizeOAuthAccount()
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    oauthCredential = authorized.credential
+                    oauthAccountName = authorized.displayName
+                    oauthAccountEmail = authorized.email ?? ""
+                    isAuthorizingOAuth = false
+                    oauthAuthorizationTask = nil
+                    testResult = AppL10n.string(
+                        "editor.message.accountConnected",
+                        fallback: "Account connected"
+                    )
+                    testSuccess = true
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    isAuthorizingOAuth = false
+                    oauthAuthorizationTask = nil
+                    testResult = error.localizedDescription
+                    testSuccess = false
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func authorizeOAuthAccount() async throws -> OAuthAuthorizationResult {
+        switch backendType {
+        case .dropbox:
+            let account = try await DropboxOAuthProvider.builtIn().authorize()
+            return OAuthAuthorizationResult(
+                credential: account.credential,
+                displayName: account.displayName,
+                email: account.email
+            )
+        case .oneDrive:
+            let account = try await OneDriveOAuthProvider.builtIn().authorize()
+            return OAuthAuthorizationResult(
+                credential: account.credential,
+                displayName: account.displayName,
+                email: account.email
+            )
+        default:
+            throw RemoteFileSystemError.unsupported(
+                AppL10n.string(
+                    "editor.error.oauthProviderUnavailable",
+                    fallback: "This backend does not support built-in OAuth authorization."
+                )
+            )
+        }
+    }
+}
+
+private struct OAuthAuthorizationResult {
+    let credential: Credential
+    let displayName: String
+    let email: String?
 }

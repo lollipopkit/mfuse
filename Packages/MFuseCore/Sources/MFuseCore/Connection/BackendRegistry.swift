@@ -55,7 +55,9 @@ public final class BackendRegistry: @unchecked Sendable {
         smbFactory: Factory? = nil,
         ftpFactory: Factory? = nil,
         nfsFactory: Factory? = nil,
-        googleDriveFactory: Factory? = nil
+        googleDriveFactory: Factory? = nil,
+        dropboxFactory: Factory? = nil,
+        oneDriveFactory: Factory? = nil
     ) {
         lock.lock()
         defer { lock.unlock() }
@@ -66,5 +68,7 @@ public final class BackendRegistry: @unchecked Sendable {
         if let f = ftpFactory { factories[.ftp] = f }
         if let f = nfsFactory { factories[.nfs] = f }
         if let f = googleDriveFactory { factories[.googleDrive] = f }
+        if let f = dropboxFactory { factories[.dropbox] = f }
+        if let f = oneDriveFactory { factories[.oneDrive] = f }
     }
 }

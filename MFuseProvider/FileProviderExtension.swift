@@ -7,6 +7,8 @@ import MFuseSMB
 import MFuseFTP
 import MFuseNFS
 import MFuseGoogleDrive
+import MFuseDropbox
+import MFuseOneDrive
 import UniformTypeIdentifiers
 import os.log
 
@@ -182,6 +184,22 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             },
             googleDriveFactory: { config, credential in
                 return GoogleDriveFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try FileProviderExtension.sharedCredentialStoreProvider.store(updatedCredential, for: config.id)
+                }
+            },
+            dropboxFactory: { config, credential in
+                DropboxFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try FileProviderExtension.sharedCredentialStoreProvider.store(updatedCredential, for: config.id)
+                }
+            },
+            oneDriveFactory: { config, credential in
+                OneDriveFileSystem(
                     config: config,
                     credential: credential
                 ) { updatedCredential in

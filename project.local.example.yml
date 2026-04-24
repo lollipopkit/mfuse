@@ -2,6 +2,9 @@ settings:
   base:
     # Copy this file to project.local.yml and replace with your local Apple team ID.
     DEVELOPMENT_TEAM: YOUR_TEAM_ID
+    # OAuth app IDs for bundled Dropbox / OneDrive support.
+    MFDROPBOX_CLIENT_ID: YOUR_DROPBOX_APP_KEY
+    MFONEDRIVE_CLIENT_ID: YOUR_MICROSOFT_APP_ID
 
 # If your local setup uses explicit provisioning profiles, keep the per-target
 # overrides below in project.local.yml and replace the placeholder profile names.

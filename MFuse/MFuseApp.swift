@@ -7,6 +7,8 @@ import MFuseSMB
 import MFuseFTP
 import MFuseNFS
 import MFuseGoogleDrive
+import MFuseDropbox
+import MFuseOneDrive
 import AppKit
 
 @main
@@ -57,6 +59,22 @@ struct MFuseApp: App {
             },
             googleDriveFactory: { config, credential in
                 GoogleDriveFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try await credentialProvider.store(updatedCredential, for: config.id)
+                }
+            },
+            dropboxFactory: { config, credential in
+                DropboxFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try await credentialProvider.store(updatedCredential, for: config.id)
+                }
+            },
+            oneDriveFactory: { config, credential in
+                OneDriveFileSystem(
                     config: config,
                     credential: credential
                 ) { updatedCredential in
