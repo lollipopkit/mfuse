@@ -37,8 +37,8 @@ if [[ -z "${DMG_PATH:-}" ]]; then
     if [[ -n "$APP_VERSION" && "$APP_VERSION" != '$('* ]]; then
       DMG_BASENAME="${APP_NAME}-${APP_VERSION}"
     else
-      echo "DMG_PATH requires DMG_BASENAME when version is unavailable" >&2
-      echo "Provide DMG_PATH directly, or provide XCARCHIVE_PATH/APP_PATH so DMG_BASENAME can be resolved." >&2
+      echo "DMG_PATH is not provided; when DMG_PATH is absent you must supply a resolvable version or DMG_BASENAME." >&2
+      echo "Provide DMG_PATH directly, set DMG_BASENAME, or provide XCARCHIVE_PATH/APP_PATH so the version can be derived." >&2
       exit 1
     fi
   fi

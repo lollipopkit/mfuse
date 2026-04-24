@@ -113,6 +113,37 @@ import MFuseCore
     }
 }
 
+@Test func oneDriveCreateFileUsesFailOnConflictUpload() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasSuffix("/me/drive") {
+            return .http(status: 200, body: Data("{\"id\":\"drive-1\"}".utf8))
+        }
+        if url.contains("/me/drive/root:/Existing.txt") && !url.contains(":/content?") {
+            throw TestFailure("createFile should not preflight target existence: \(url)")
+        }
+        if url.contains("/me/drive/root:/Existing.txt:/content?")
+            && url.contains("@microsoft.graph.conflictBehavior=fail") {
+            return .http(
+                status: 409,
+                body: Data("{\"error\":{\"code\":\"nameAlreadyExists\",\"message\":\"Name already exists\"}}".utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let fileSystem = OneDriveFileSystem(
+        config: ConnectionConfig(name: "OneDrive", backendType: .oneDrive, host: ""),
+        credential: Credential(token: "valid-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    await #expect(throws: RemoteFileSystemError.self) {
+        try await fileSystem.createFile(at: RemotePath("/Existing.txt"), data: Data("new".utf8))
+    }
+}
+
 @Test func oneDriveFileSystemSurfacesMissingBuiltInOAuthConfiguration() async throws {
     let session = try makeMockSession { request in
         let url = try #require(request.url?.absoluteString)
@@ -144,10 +175,17 @@ import MFuseCore
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {
-    MockURLProtocol.handler = handler
+    let token = UUID().uuidString
+    MockURLProtocol.register(handler: handler, for: token)
+
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [MockURLProtocol.self]
-    return URLSession(configuration: configuration)
+    configuration.httpAdditionalHeaders = [MockURLProtocol.sessionHeader: token]
+    return URLSession(
+        configuration: configuration,
+        delegate: MockSessionHandlerCleaner(token: token),
+        delegateQueue: nil
+    )
 }
 
 private final class MockURLProtocol: URLProtocol {
@@ -155,13 +193,34 @@ private final class MockURLProtocol: URLProtocol {
         case http(status: Int, body: Data, headers: [String: String] = [:])
     }
 
-    static var handler: (@Sendable (URLRequest) throws -> Response)?
+    typealias Handler = @Sendable (URLRequest) throws -> Response
 
-    override class func canInit(with request: URLRequest) -> Bool { true }
+    static let sessionHeader = "X-MFuse-Mock-Session"
+
+    private static let lock = NSLock()
+    private static var handlers: [String: Handler] = [:]
+
+    static func register(handler: @escaping Handler, for token: String) {
+        lock.lock()
+        handlers[token] = handler
+        lock.unlock()
+    }
+
+    static func unregister(token: String) {
+        lock.lock()
+        handlers[token] = nil
+        lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.value(forHTTPHeaderField: sessionHeader) != nil
+    }
+
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        guard let handler = Self.handler else {
+        guard let token = request.value(forHTTPHeaderField: Self.sessionHeader),
+              let handler = Self.handler(for: token) else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
@@ -185,6 +244,24 @@ private final class MockURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    private static func handler(for token: String) -> Handler? {
+        lock.lock()
+        defer { lock.unlock() }
+        return handlers[token]
+    }
+}
+
+private final class MockSessionHandlerCleaner: NSObject, URLSessionDelegate {
+    private let token: String
+
+    init(token: String) {
+        self.token = token
+    }
+
+    deinit {
+        MockURLProtocol.unregister(token: token)
+    }
 }
 
 private struct TestFailure: LocalizedError {

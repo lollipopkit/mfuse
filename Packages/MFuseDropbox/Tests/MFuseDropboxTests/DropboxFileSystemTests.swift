@@ -205,15 +205,63 @@ import MFuseCore
     await #expect(throws: OAuthConfigurationError.self) {
         try await missingOAuthFileSystem.connect()
     }
+
+    let invalidRefreshSession = try makeMockSession { request in
+        let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        let url = try #require(request.url?.absoluteString)
+        if url.contains("/users/get_current_account") {
+            if auth == "Bearer expired-token" || auth == "Bearer invalid-fresh-token" {
+                return .http(status: 401, body: Data("{\"error_summary\":\"expired_access_token\"}".utf8))
+            }
+            throw TestFailure("Unexpected account validation auth: \(auth)")
+        }
+        if url.contains("/oauth2/token") {
+            return .http(
+                status: 200,
+                body: Data("{\"access_token\":\"invalid-fresh-token\",\"refresh_token\":\"refresh-token\"}".utf8)
+            )
+        }
+        throw TestFailure("Unexpected request: \(url)")
+    }
+
+    let invalidRefreshProvider = DropboxOAuthProvider(
+        configuration: OAuthClientConfiguration(
+            providerName: "Dropbox",
+            clientID: "client-id",
+            redirectURI: "com.example.dropbox:/oauth",
+            authorizationURL: URL(string: "https://www.dropbox.com/oauth2/authorize")!,
+            tokenURL: URL(string: "https://api.dropboxapi.com/oauth2/token")!,
+            scopes: ["files.content.read"]
+        ),
+        session: invalidRefreshSession
+    )
+    let invalidRefreshFileSystem = DropboxFileSystem(
+        config: folderConfig,
+        credential: Credential(password: "refresh-token", token: "expired-token"),
+        oauthProvider: invalidRefreshProvider,
+        session: invalidRefreshSession
+    )
+
+    await #expect(throws: RemoteFileSystemError.self) {
+        try await invalidRefreshFileSystem.connect()
+    }
+    #expect(await invalidRefreshFileSystem.isConnected == false)
 }
 
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {
-    MockURLProtocol.handler = handler
+    let token = UUID().uuidString
+    MockURLProtocol.register(handler: handler, for: token)
+
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [MockURLProtocol.self]
-    return URLSession(configuration: configuration)
+    configuration.httpAdditionalHeaders = [MockURLProtocol.sessionHeader: token]
+    return URLSession(
+        configuration: configuration,
+        delegate: MockSessionHandlerCleaner(token: token),
+        delegateQueue: nil
+    )
 }
 
 private final class MockURLProtocol: URLProtocol {
@@ -221,13 +269,34 @@ private final class MockURLProtocol: URLProtocol {
         case http(status: Int, body: Data, headers: [String: String] = [:])
     }
 
-    static var handler: (@Sendable (URLRequest) throws -> Response)?
+    typealias Handler = @Sendable (URLRequest) throws -> Response
 
-    override class func canInit(with request: URLRequest) -> Bool { true }
+    static let sessionHeader = "X-MFuse-Mock-Session"
+
+    private static let lock = NSLock()
+    private static var handlers: [String: Handler] = [:]
+
+    static func register(handler: @escaping Handler, for token: String) {
+        lock.lock()
+        handlers[token] = handler
+        lock.unlock()
+    }
+
+    static func unregister(token: String) {
+        lock.lock()
+        handlers[token] = nil
+        lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.value(forHTTPHeaderField: sessionHeader) != nil
+    }
+
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        guard let handler = Self.handler else {
+        guard let token = request.value(forHTTPHeaderField: Self.sessionHeader),
+              let handler = Self.handler(for: token) else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
@@ -251,6 +320,24 @@ private final class MockURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    private static func handler(for token: String) -> Handler? {
+        lock.lock()
+        defer { lock.unlock() }
+        return handlers[token]
+    }
+}
+
+private final class MockSessionHandlerCleaner: NSObject, URLSessionDelegate {
+    private let token: String
+
+    init(token: String) {
+        self.token = token
+    }
+
+    deinit {
+        MockURLProtocol.unregister(token: token)
+    }
 }
 
 private struct TestFailure: LocalizedError {

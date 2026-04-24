@@ -65,6 +65,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     public func connect() async throws {
         guard let token = credential.token, !token.isEmpty else {
             accessToken = nil
+            driveID = nil
             throw RemoteFileSystemError.authenticationFailed
         }
 
@@ -73,11 +74,18 @@ public actor OneDriveFileSystem: RemoteFileSystem {
             accessToken = token
             driveID = drive.id
         } catch let error as OneDriveHTTPError where error.statusCode == 401 {
-            try await refreshAccessToken()
-            let drive = try await drive(usingToken: try currentToken())
-            driveID = drive.id
+            do {
+                try await refreshAccessToken()
+                let drive = try await drive(usingToken: try currentToken())
+                driveID = drive.id
+            } catch {
+                accessToken = nil
+                driveID = nil
+                throw error
+            }
         } catch {
             accessToken = nil
+            driveID = nil
             throw error
         }
     }
@@ -150,13 +158,11 @@ public actor OneDriveFileSystem: RemoteFileSystem {
     }
 
     public func createFile(at path: RemotePath, data: Data) async throws {
-        try await ensureAbsent(path)
-        try await upload(data: data, to: path)
+        try await upload(data: data, to: path, conflictBehavior: "fail")
     }
 
     public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
-        try await ensureAbsent(path)
-        try await uploadFile(from: localFileURL, to: path)
+        try await uploadFile(from: localFileURL, to: path, conflictBehavior: "fail")
     }
 
     public func createDirectory(at path: RemotePath) async throws {
@@ -293,21 +299,28 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         throw RemoteFileSystemError.operationFailed("Timed out while waiting for OneDrive copy to complete")
     }
 
-    private func upload(data: Data, to path: RemotePath) async throws {
-        var request = try authorizedRequest(url: try contentURL(for: path), method: "PUT")
+    private func upload(data: Data, to path: RemotePath, conflictBehavior: String = "replace") async throws {
+        var request = try authorizedRequest(
+            url: try contentURL(for: path, conflictBehavior: conflictBehavior),
+            method: "PUT"
+        )
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.httpBody = data
         let (responseData, response) = try await self.data(for: request)
         try check(response: response, data: responseData, path: path, conflictPath: path)
     }
 
-    private func uploadFile(from localFileURL: URL, to path: RemotePath) async throws {
+    private func uploadFile(
+        from localFileURL: URL,
+        to path: RemotePath,
+        conflictBehavior: String = "replace"
+    ) async throws {
         let parentPath = try requireParentPath(for: path)
         _ = try await driveItem(at: parentPath)
         let fileSize = try localFileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         if fileSize <= Constants.uploadChunkSize {
             let data = try Data(contentsOf: localFileURL)
-            try await upload(data: data, to: path)
+            try await upload(data: data, to: path, conflictBehavior: conflictBehavior)
             return
         }
 
@@ -318,7 +331,7 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         uploadRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         uploadRequest.httpBody = try JSONSerialization.data(withJSONObject: [
             "item": [
-                "@microsoft.graph.conflictBehavior": "replace",
+                "@microsoft.graph.conflictBehavior": conflictBehavior,
             ],
         ])
         let (uploadData, uploadResponse) = try await data(for: uploadRequest)
@@ -524,8 +537,21 @@ public actor OneDriveFileSystem: RemoteFileSystem {
         return URL(string: "\(Constants.graphBase)/me/drive/root:/\(Self.encode(path)):/children")!
     }
 
-    private func contentURL(for path: RemotePath) throws -> URL {
-        URL(string: "\(Constants.graphBase)/me/drive/root:/\(Self.encode(path)):/content")!
+    private func contentURL(for path: RemotePath, conflictBehavior: String? = nil) throws -> URL {
+        let url = URL(string: "\(Constants.graphBase)/me/drive/root:/\(Self.encode(path)):/content")!
+        guard let conflictBehavior else {
+            return url
+        }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw RemoteFileSystemError.operationFailed("Failed to build OneDrive content URL")
+        }
+        components.queryItems = [
+            URLQueryItem(name: "@microsoft.graph.conflictBehavior", value: conflictBehavior),
+        ]
+        guard let conflictURL = components.url else {
+            throw RemoteFileSystemError.operationFailed("Failed to build OneDrive content URL")
+        }
+        return conflictURL
     }
 
     private func uploadSessionURL(for path: RemotePath) throws -> URL {

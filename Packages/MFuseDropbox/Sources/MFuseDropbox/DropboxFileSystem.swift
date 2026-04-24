@@ -53,7 +53,14 @@ public actor DropboxFileSystem: RemoteFileSystem {
             try await validateCurrentAccount(token: token)
             accessToken = token
         } catch RemoteFileSystemError.authenticationFailed {
-            try await refreshAccessToken()
+            let refreshedToken = try await refreshAccessToken()
+            do {
+                try await validateCurrentAccount(token: refreshedToken)
+                accessToken = refreshedToken
+            } catch {
+                accessToken = nil
+                throw error
+            }
         } catch {
             accessToken = nil
             throw error
@@ -358,7 +365,7 @@ public actor DropboxFileSystem: RemoteFileSystem {
         try check(response: response, data: data, path: nil)
     }
 
-    private func refreshAccessToken() async throws {
+    private func refreshAccessToken() async throws -> String {
         guard let refreshToken = credential.password, !refreshToken.isEmpty else {
             throw RemoteFileSystemError.authenticationFailed
         }
@@ -371,7 +378,10 @@ public actor DropboxFileSystem: RemoteFileSystem {
         )
         try await onCredentialUpdated?(updatedCredential)
         credential = updatedCredential
-        accessToken = updatedCredential.token
+        guard let token = updatedCredential.token, !token.isEmpty else {
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        return token
     }
 
     private func jsonRequest(
@@ -406,9 +416,10 @@ public actor DropboxFileSystem: RemoteFileSystem {
     private func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         let result = try await session.data(for: request)
         if let http = result.1 as? HTTPURLResponse, http.statusCode == 401 {
-            try await refreshAccessToken()
+            let refreshedToken = try await refreshAccessToken()
+            accessToken = refreshedToken
             var retriedRequest = request
-            retriedRequest.setValue("Bearer \(accessToken ?? "")", forHTTPHeaderField: "Authorization")
+            retriedRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
             return try await session.data(for: retriedRequest)
         }
         return result
@@ -417,9 +428,10 @@ public actor DropboxFileSystem: RemoteFileSystem {
     private func upload(for request: URLRequest, data: Data) async throws -> (Data, URLResponse) {
         let result = try await session.upload(for: request, from: data)
         if let http = result.1 as? HTTPURLResponse, http.statusCode == 401 {
-            try await refreshAccessToken()
+            let refreshedToken = try await refreshAccessToken()
+            accessToken = refreshedToken
             var retriedRequest = request
-            retriedRequest.setValue("Bearer \(accessToken ?? "")", forHTTPHeaderField: "Authorization")
+            retriedRequest.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
             return try await session.upload(for: retriedRequest, from: data)
         }
         return result

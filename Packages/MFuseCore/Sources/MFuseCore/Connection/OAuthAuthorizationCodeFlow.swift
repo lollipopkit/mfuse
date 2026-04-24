@@ -33,7 +33,7 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
 
     private let configuration: OAuthClientConfiguration
     private let session: URLSession
-    private var temporaryPresentationAnchor: ASPresentationAnchor?
+    @MainActor private var temporaryPresentationAnchor: ASPresentationAnchor?
     @MainActor private var isAuthorizing = false
     @MainActor private var authSession: ASWebAuthenticationSession?
 
@@ -203,6 +203,7 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
 }
 
 extension OAuthAuthorizationCodeFlow: ASWebAuthenticationPresentationContextProviding {
+    @MainActor
     public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         #if canImport(AppKit)
         if let window = NSApplication.shared.keyWindow
@@ -240,6 +241,7 @@ extension OAuthAuthorizationCodeFlow: ASWebAuthenticationPresentationContextProv
         return temporaryPresentationAnchor
     }
 
+    @MainActor
     private func makeTemporaryPresentationAnchor() -> ASPresentationAnchor {
         #if canImport(AppKit)
         let window = NSWindow(
