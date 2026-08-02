@@ -35,15 +35,13 @@ struct ConnectionDetailView: View {
                     LabeledContent(AppL10n.string("detail.field.auth", fallback: "Auth"), value: config.authMethod.displayName)
                 }
 
-                Section(AppL10n.string("detail.section.mount", fallback: "Mount")) {
-                    LabeledContent(AppL10n.string("detail.field.state", fallback: "State")) {
-                        HStack(spacing: 6) {
-                            Image(systemName: mount.isMounted ? "folder.fill" : "folder")
-                                .foregroundStyle(iconColor)
-                                .contentTransition(.symbolEffect(.replace))
-                                .animation(AnimationConstants.mountState, value: mount.isMounted)
+                // Only surfaced on failure: while mounted this just repeated the
+                // container path, but it is the one place an error is reported.
+                if case .error = mount {
+                    Section(AppL10n.string("detail.section.mount", fallback: "Mount")) {
+                        LabeledContent(AppL10n.string("detail.field.state", fallback: "State")) {
                             Text(mount.statusText)
-                                .foregroundStyle(mountStateColor)
+                                .foregroundStyle(.red)
                                 .animation(AnimationConstants.mountState, value: mount)
                         }
                     }
@@ -139,21 +137,4 @@ struct ConnectionDetailView: View {
         .animation(AnimationConstants.mountState, value: mount.isMounted)
     }
 
-    private var iconColor: Color {
-        switch mount {
-        case .mounted:    return .green
-        case .mounting:   return .orange
-        case .error:      return .red
-        case .unmounted:  return .secondary
-        }
-    }
-
-    private var mountStateColor: Color {
-        switch mount {
-        case .unmounted:  return .secondary
-        case .mounting:   return .orange
-        case .mounted:    return .green
-        case .error:      return .red
-        }
-    }
 }

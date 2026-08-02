@@ -83,9 +83,10 @@ struct SidebarView: View {
     private func connectionRow(_ config: ConnectionConfig) -> some View {
         let mount = connectionManager.effectiveMountState(for: config.id)
         HStack(spacing: 8) {
+            // Fixed tint: mount state is carried by the trailing dot alone, so the
+            // backend icon stays a stable visual anchor for the row.
             Image(systemName: config.backendType.iconName)
-                .foregroundStyle(mount.isMounted ? .green : .secondary)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
+                .foregroundStyle(.secondary)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
@@ -97,11 +98,6 @@ struct SidebarView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Image(systemName: "folder.fill")
-                .font(.caption2)
-                .foregroundStyle(.green.opacity(0.7))
-                .opacity(mount.isMounted ? 1 : 0)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
             Circle()
                 .fill(stateColor(mount))
                 .animation(AnimationConstants.mountState, value: mount)
