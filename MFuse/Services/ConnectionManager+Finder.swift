@@ -1,7 +1,13 @@
 import Foundation
 import MFuseCore
+import os.log
 
 extension ConnectionManager {
+    private static let finderLogger = Logger(
+        subsystem: "com.lollipopkit.mfuse",
+        category: "Finder"
+    )
+
     func resolveFinderURL(for config: ConnectionConfig) async -> URL? {
         let symlinkBaseURL = mountProvider?.symlinkBaseURL
             ?? FileProviderMountProvider.defaultSymlinkBaseURL
@@ -11,8 +17,10 @@ extension ConnectionManager {
         )
 
         if let mountProvider,
-           let mountURL = try? await mountProvider.mountURL(for: config),
-           destinationExists(at: mountURL) {
+           let mountURL = try? await mountProvider.mountURL(for: config) {
+            // Deliberately not gated on `fileExists`: this app is sandboxed and cannot
+            // necessarily stat paths under ~/Library/CloudStorage, but Finder opens them
+            // fine. Requiring the check here made "Open in Finder" silently do nothing.
             if let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
                hasReachableLink(at: recreatedSymlinkURL) {
                 return recreatedSymlinkURL
@@ -25,12 +33,13 @@ extension ConnectionManager {
         }
 
         if let path = effectiveMountState(for: config.id).mountPath {
-            let url = URL(fileURLWithPath: path)
-            if destinationExists(at: url) {
-                return url
-            }
+            return URL(fileURLWithPath: path)
         }
 
+        // Callers can only ignore a nil, so record why rather than failing silently.
+        Self.finderLogger.error(
+            "No Finder location for connection \(config.id.uuidString, privacy: .public): no mount URL, no reachable symlink at \(symlinkURL.path, privacy: .private), no mount path"
+        )
         return nil
     }
 
