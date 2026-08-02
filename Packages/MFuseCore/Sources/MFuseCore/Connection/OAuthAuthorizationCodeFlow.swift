@@ -71,7 +71,7 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
             URLQueryItem(name: "scope", value: configuration.scopes.joined(separator: " ")),
             URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "state", value: state)
         ] + configuration.additionalAuthorizationQueryItems
 
         guard let authorizationURL = components?.url else {
@@ -133,7 +133,7 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
         request.httpBody = Self.formEncodedBody([
             URLQueryItem(name: "client_id", value: configuration.clientID),
             URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
+            URLQueryItem(name: "grant_type", value: "refresh_token")
         ] + configuration.additionalTokenParameters)
         return try await executeTokenRequest(request, action: "token refresh")
     }
@@ -150,7 +150,7 @@ public final class OAuthAuthorizationCodeFlow: NSObject, @unchecked Sendable {
             URLQueryItem(name: "code", value: code),
             URLQueryItem(name: "code_verifier", value: codeVerifier),
             URLQueryItem(name: "grant_type", value: "authorization_code"),
-            URLQueryItem(name: "redirect_uri", value: configuration.redirectURI),
+            URLQueryItem(name: "redirect_uri", value: configuration.redirectURI)
         ] + configuration.additionalTokenParameters)
         return try await executeTokenRequest(request, action: "token exchange")
     }

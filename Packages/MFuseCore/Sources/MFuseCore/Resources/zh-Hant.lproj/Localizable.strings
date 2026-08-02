@@ -1,4 +1,6 @@
 "backend.googleDrive" = "Google 雲端硬碟";
+"backend.dropbox" = "Dropbox";
+"backend.oneDrive" = "Microsoft OneDrive";
 "auth.password" = "密碼";
 "auth.publicKey" = "公開金鑰";
 "auth.agent" = "SSH Agent";

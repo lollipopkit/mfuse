@@ -6,27 +6,27 @@ let package = Package(
     defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseCore", targets: ["MFuseCore"]),
+        .library(name: "MFuseCore", targets: ["MFuseCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/JoshBashed/blake3-swift.git", exact: "0.2.2"),
+        .package(url: "https://github.com/JoshBashed/blake3-swift.git", exact: "0.2.2")
     ],
     targets: [
         .target(
             name: "MFuseCore",
             dependencies: [
-                .product(name: "BLAKE3", package: "blake3-swift"),
+                .product(name: "BLAKE3", package: "blake3-swift")
             ],
             resources: [
-                .process("Resources"),
+                .process("Resources")
             ],
             linkerSettings: [
-                .linkedFramework("FileProvider"),
+                .linkedFramework("FileProvider")
             ]
         ),
         .testTarget(
             name: "MFuseCoreTests",
             dependencies: ["MFuseCore"]
-        ),
+        )
     ]
 )

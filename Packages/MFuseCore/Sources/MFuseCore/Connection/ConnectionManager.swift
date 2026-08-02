@@ -428,7 +428,7 @@ public final class ConnectionManager: ObservableObject {
                 let targetName = config?.name ?? id.uuidString
                 let message = "Failed to disconnect filesystem for \(targetName): \(describe(error))"
                 logger.error(
-                    "Failed to disconnect filesystem for target \(targetName, privacy: .private): \(self.describe(error), privacy: .private)"
+                    "Failed to disconnect filesystem for target \(targetName, privacy: .private): \(self.describe(error), privacy: .public)"
                 )
                 cleanupFailures.append(message)
             }
@@ -945,7 +945,7 @@ public final class ConnectionManager: ObservableObject {
         } catch {
             let message = "Failed to disconnect filesystem for \(config.name) \(context): \(describe(error))"
             logger.error(
-                "Failed to disconnect filesystem for connection \(config.name, privacy: .private) \(context, privacy: .private): \(self.describe(error), privacy: .private)"
+                "Failed to disconnect filesystem for connection \(config.name, privacy: .private) \(context, privacy: .public): \(self.describe(error), privacy: .public)"
             )
             return message
         }

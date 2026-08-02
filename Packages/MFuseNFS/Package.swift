@@ -5,10 +5,10 @@ let package = Package(
     name: "MFuseNFS",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseNFS", targets: ["MFuseNFS"]),
+        .library(name: "MFuseNFS", targets: ["MFuseNFS"])
     ],
     dependencies: [
-        .package(path: "../MFuseCore"),
+        .package(path: "../MFuseCore")
     ],
     targets: [
         .target(
@@ -18,6 +18,6 @@ let package = Package(
         .testTarget(
             name: "MFuseNFSTests",
             dependencies: ["MFuseNFS"]
-        ),
+        )
     ]
 )

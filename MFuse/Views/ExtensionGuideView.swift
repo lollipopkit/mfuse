@@ -80,12 +80,12 @@ struct ExtensionGuideView: View {
                         verifyTask?.cancel()
                         verifyTask = Task {
                             try? await Task.sleep(nanoseconds: 500_000_000)
-                            let ok = await verifyExtension()
+                            let isEnabled = await verifyExtension()
                             guard !Task.isCancelled else { return }
                             await MainActor.run {
                                 checking = false
                                 verifyTask = nil
-                                if ok {
+                                if isEnabled {
                                     dismissGuide()
                                 } else {
                                     checkFailed = true

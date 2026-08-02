@@ -93,7 +93,7 @@ struct SidebarView: View {
                 Text(config.name)
                     .fontWeight(.medium)
                     .lineLimit(1)
-                Text("\(config.host):\(config.port)")
+                Text(verbatim: config.displayAddress)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

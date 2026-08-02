@@ -5,10 +5,10 @@ let package = Package(
     name: "MFuseGoogleDrive",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseGoogleDrive", targets: ["MFuseGoogleDrive"]),
+        .library(name: "MFuseGoogleDrive", targets: ["MFuseGoogleDrive"])
     ],
     dependencies: [
-        .package(path: "../MFuseCore"),
+        .package(path: "../MFuseCore")
     ],
     targets: [
         .target(
@@ -18,6 +18,6 @@ let package = Package(
         .testTarget(
             name: "MFuseGoogleDriveTests",
             dependencies: ["MFuseGoogleDrive"]
-        ),
+        )
     ]
 )

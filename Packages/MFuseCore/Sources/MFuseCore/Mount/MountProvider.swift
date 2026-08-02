@@ -45,7 +45,7 @@ public enum MountError: Error, Sendable, LocalizedError {
             "file provider extension",
             "provider not found",
             "cannot find extension",
-            "must be enabled",
+            "must be enabled"
         ]
         return knownIndicators.contains { normalized.contains($0) }
     }

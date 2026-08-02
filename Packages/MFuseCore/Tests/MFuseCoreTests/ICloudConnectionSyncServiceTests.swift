@@ -59,7 +59,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         try storage.saveConnections([localConfig])
         try writeCloudRecordSet(
             ICloudConnectionRecordSet(records: [
-                ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value),
+                ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value)
             ])
         )
 
@@ -93,7 +93,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         dateBox.value = Date(timeIntervalSince1970: 2_000)
         try writeCloudRecordSet(
             ICloudConnectionRecordSet(records: [
-                ICloudConnectionRecord(id: connectionID, config: cloudConfig, updatedAt: dateBox.value),
+                ICloudConnectionRecord(id: connectionID, config: cloudConfig, updatedAt: dateBox.value)
             ])
         )
 
@@ -119,7 +119,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
 
         try writeCloudRecordSet(
             ICloudConnectionRecordSet(records: [
-                ICloudConnectionRecord(id: config.id, config: config, updatedAt: dateBox.value),
+                ICloudConnectionRecord(id: config.id, config: config, updatedAt: dateBox.value)
             ])
         )
 
@@ -157,7 +157,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         try storage.saveConnections([localConfig])
         try writeCloudRecordSet(
             ICloudConnectionRecordSet(records: [
-                ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value),
+                ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value)
             ])
         )
 
@@ -187,7 +187,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
 
         let previousLocalState = try XCTUnwrap(readLocalStateRecordSet())
         let previousCloudState = ICloudConnectionRecordSet(records: [
-            ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value),
+            ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value)
         ])
         try writeCloudRecordSet(previousCloudState)
 
@@ -223,7 +223,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
 
         try writeCloudRecordSet(
             ICloudConnectionRecordSet(records: [
-                ICloudConnectionRecord(id: malformedID, config: nil, updatedAt: dateBox.value),
+                ICloudConnectionRecord(id: malformedID, config: nil, updatedAt: dateBox.value)
             ])
         )
 
@@ -258,7 +258,7 @@ final class ICloudConnectionSyncServiceTests: XCTestCase {
         try storage.saveConnections([localConfig])
         try writeCloudRecordSet(
             ICloudConnectionRecordSet(records: [
-                ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value),
+                ICloudConnectionRecord(id: cloudConfig.id, config: cloudConfig, updatedAt: dateBox.value)
             ])
         )
 

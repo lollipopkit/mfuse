@@ -218,9 +218,9 @@ struct MenuBarView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.5)))
                     }
                 }
-                Text(mount.isMounted
+                Text(verbatim: mount.isMounted
                     ? FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL)
-                    : config.host
+                    : config.displayAddress
                 )
                 .font(.system(size: 11))
                 .foregroundStyle(mount.isMounted ? .green.opacity(0.8) : .secondary)

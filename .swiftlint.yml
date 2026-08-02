@@ -8,6 +8,9 @@ disabled_rules:
   - force_cast
   - force_try
   - todo
+  # Misfires on any private `test*` method outside XCTestCase (e.g. a SwiftUI view's
+  # `testConnection()`), and its autocorrect widens visibility.
+  - private_unit_test
 
 opt_in_rules:
   - empty_count
@@ -16,7 +19,32 @@ opt_in_rules:
   - first_where
   - toggle_bool
 
+included:
+  - MFuse
+  - MFuseProvider
+  - Packages
+
 excluded:
+  # Build products and SPM dependency checkouts. Linting these buries real findings
+  # under vendored code, and some of it crashes SourceKit outright.
   - .build
+  - build
   - DerivedData
+  - Packages/*/.build
+  - Packages/*/build
   - "*.generated.swift"
+
+identifier_name:
+  # Allow the domain's standard two-letter abbreviations: db, s3, fs, fm, mp.
+  min_length: 2
+
+nesting:
+  # `CodingKeys` and nested error payload types sit two levels deep by design;
+  # Swift itself requires `CodingKeys` to be nested.
+  type_level: 2
+
+function_parameter_count:
+  # NSFileProviderReplicatedExtension dictates its own signatures, several of which
+  # take six parameters.
+  warning: 7
+  error: 10

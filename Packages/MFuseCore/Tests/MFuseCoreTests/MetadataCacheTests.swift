@@ -162,7 +162,7 @@ final class MetadataCacheTests: XCTestCase {
         XCTAssertEqual(descendants.map(\.path).sorted { $0.absoluteString < $1.absoluteString }, [
             childDirectory.path,
             nestedChild.path,
-            directChild.path,
+            directChild.path
         ].sorted { $0.absoluteString < $1.absoluteString })
         XCTAssertFalse(descendants.contains { $0.path == sibling.path })
     }

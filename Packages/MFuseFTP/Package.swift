@@ -19,6 +19,7 @@ let package = Package(
             dependencies: [
                 "MFuseCore",
                 .product(name: "NIO", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "NIOTransportServices", package: "swift-nio-transport-services")

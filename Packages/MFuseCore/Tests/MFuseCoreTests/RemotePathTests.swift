@@ -74,11 +74,11 @@ final class RemotePathTests: XCTestCase {
     }
 
     func testEquality() {
-        let a = RemotePath("/home/user")
-        let b = RemotePath("/home/user")
-        let c = RemotePath("/home/other")
-        XCTAssertEqual(a, b)
-        XCTAssertNotEqual(a, c)
+        let userPath = RemotePath("/home/user")
+        let samePath = RemotePath("/home/user")
+        let otherPath = RemotePath("/home/other")
+        XCTAssertEqual(userPath, samePath)
+        XCTAssertNotEqual(userPath, otherPath)
     }
 
     func testCodable() throws {

@@ -1,13 +1,59 @@
 import XCTest
 @testable import MFuseCore
 
+/// Minimal backend used to verify registry wiring without touching a network.
+private actor StubFileSystem: RemoteFileSystem {
+    let config: ConnectionConfig
+
+    init(config: ConnectionConfig) {
+        self.config = config
+    }
+
+    var isConnected: Bool { false }
+    func connect() async throws {}
+    func disconnect() async throws {}
+    func enumerate(at path: RemotePath) async throws -> [RemoteItem] { [] }
+    func itemInfo(at path: RemotePath) async throws -> RemoteItem {
+        throw RemoteFileSystemError.notFound(path)
+    }
+    func readFile(at path: RemotePath) async throws -> Data { Data() }
+    func writeFile(at path: RemotePath, data: Data) async throws {}
+    func createFile(at path: RemotePath, data: Data) async throws {}
+    func createDirectory(at path: RemotePath) async throws {}
+    func delete(at path: RemotePath) async throws {}
+    func move(from source: RemotePath, to destination: RemotePath) async throws {}
+}
+
 final class BackendRegistryTests: XCTestCase {
 
-    func testRegisterAndCreate() {
-        let registry = BackendRegistry.shared
-        // .sftp should already be registered in tests if MFuseApp runs,
-        // but we test the mechanism directly
-        XCTAssertTrue(registry.supportedTypes.count >= 0) // non-crash baseline
+    private func config(_ type: BackendType) -> ConnectionConfig {
+        ConnectionConfig(
+            name: "Test",
+            backendType: type,
+            host: "localhost",
+            port: type.defaultPort,
+            username: "user",
+            authMethod: type.supportedAuthMethods.first ?? .password,
+            remotePath: "/"
+        )
+    }
+
+    func testRegisterAndCreate() async {
+        // A dedicated instance rather than the shared singleton, whose contents depend on
+        // whether a host app already registered its backends.
+        let registry = BackendRegistry()
+        XCTAssertFalse(registry.isSupported(.sftp))
+        XCTAssertNil(registry.createFileSystem(config: config(.sftp), credential: Credential()))
+
+        registry.register(.sftp) { config, _ in StubFileSystem(config: config) }
+
+        XCTAssertTrue(registry.isSupported(.sftp))
+        XCTAssertEqual(registry.supportedTypes, [.sftp])
+
+        let created = registry.createFileSystem(config: config(.sftp), credential: Credential())
+        XCTAssertTrue(created is StubFileSystem)
+        // An unregistered type must still resolve to nil.
+        XCTAssertNil(registry.createFileSystem(config: config(.s3), credential: Credential()))
     }
 
     func testIsSupported() {
@@ -41,7 +87,10 @@ final class BackendRegistryTests: XCTestCase {
 final class BackendTypeTests: XCTestCase {
 
     func testAllCases() {
-        XCTAssertEqual(BackendType.allCases.count, 7)
+        XCTAssertEqual(
+            Set(BackendType.allCases),
+            [.sftp, .s3, .webdav, .smb, .nfs, .ftp, .googleDrive, .dropbox, .oneDrive]
+        )
     }
 
     func testDisplayName() {
@@ -73,6 +122,30 @@ final class BackendTypeTests: XCTestCase {
         )
     }
 
+    /// The fallbacks here deliberately differ from the expected values so a missing
+    /// resource key fails the assertion instead of silently degrading to the fallback.
+    func testEveryBackendHasLocalizedDisplayNameResource() {
+        let expectedByKey = [
+            "backend.googleDrive": "Google Drive",
+            "backend.dropbox": "Dropbox",
+            "backend.oneDrive": "Microsoft OneDrive"
+        ]
+
+        for localeIdentifier in ["en", "es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"] {
+            for (key, expected) in expectedByKey {
+                let value = MFuseCoreL10n.string(
+                    key,
+                    localeIdentifier: localeIdentifier,
+                    fallback: "<missing>"
+                )
+                XCTAssertNotEqual(value, "<missing>", "\(key) is missing from \(localeIdentifier).lproj")
+                if key != "backend.googleDrive" {
+                    XCTAssertEqual(value, expected, "\(key) in \(localeIdentifier).lproj")
+                }
+            }
+        }
+    }
+
     func testDefaultPort() {
         XCTAssertEqual(BackendType.sftp.defaultPort, 22)
         XCTAssertEqual(BackendType.s3.defaultPort, 443)
@@ -81,6 +154,8 @@ final class BackendTypeTests: XCTestCase {
         XCTAssertEqual(BackendType.nfs.defaultPort, 2049)
         XCTAssertEqual(BackendType.ftp.defaultPort, 21)
         XCTAssertEqual(BackendType.googleDrive.defaultPort, 443)
+        XCTAssertEqual(BackendType.dropbox.defaultPort, 443)
+        XCTAssertEqual(BackendType.oneDrive.defaultPort, 443)
     }
 
     func testIconName() {
@@ -159,5 +234,96 @@ final class BackendTypeTests: XCTestCase {
         XCTAssertFalse(RemoteFileSystemError.notConnected.localizedDescription.isEmpty)
         XCTAssertFalse(MountError.extensionNotEnabled.localizedDescription.isEmpty)
         XCTAssertFalse(ConnectionManagerError.cleanupFailed(UUID()).localizedDescription.isEmpty)
+    }
+}
+
+final class ConnectionConfigDisplayAddressTests: XCTestCase {
+
+    private func config(
+        _ type: BackendType,
+        host: String = "",
+        port: UInt16? = nil,
+        parameters: [String: String] = [:]
+    ) -> ConnectionConfig {
+        ConnectionConfig(
+            name: "Test",
+            backendType: type,
+            host: host,
+            port: port ?? type.defaultPort,
+            username: "user",
+            authMethod: type.supportedAuthMethods.first ?? .password,
+            remotePath: "/",
+            parameters: parameters
+        )
+    }
+
+    /// Regression: the sidebar rendered "\(host):\(port)" through SwiftUI's localized
+    /// string interpolation, which formatted 9000 as "9,000".
+    func testNonDefaultPortIsRenderedWithoutGroupingSeparator() {
+        let address = config(.sftp, host: "localhost", port: 2222).displayAddress
+        XCTAssertEqual(address, "localhost:2222")
+        XCTAssertFalse(address.contains(","))
+    }
+
+    func testDefaultPortIsOmitted() {
+        XCTAssertEqual(config(.sftp, host: "example.com", port: 22).displayAddress, "example.com")
+    }
+
+    /// Regression: S3 has no host, so the sidebar used to show a bare ":9,000".
+    func testS3FallsBackToEndpointThenBucket() {
+        XCTAssertEqual(
+            config(.s3, parameters: ["endpoint": "http://localhost:9000", "bucket": "b"]).displayAddress,
+            "http://localhost:9000"
+        )
+        XCTAssertEqual(config(.s3, parameters: ["bucket": "my-bucket"]).displayAddress, "my-bucket")
+        XCTAssertEqual(config(.s3).displayAddress, BackendType.s3.displayName)
+    }
+
+    /// What is displayed must match what the backend connects to, including for configs
+    /// that still carry the port outside the endpoint.
+    func testS3DisplayAddressShowsTheEffectiveEndpoint() {
+        XCTAssertEqual(
+            config(.s3, port: 9000, parameters: ["endpoint": "http://localhost"]).displayAddress,
+            "http://localhost:9000"
+        )
+    }
+
+    func testS3EndpointAppliesConfiguredPortOnlyWhenItAddsInformation() {
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("http://localhost", applyingConfiguredPort: 9000),
+            "http://localhost:9000"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("http://localhost:9000", applyingConfiguredPort: 443),
+            "http://localhost:9000"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("https://s3.amazonaws.com", applyingConfiguredPort: 443),
+            "https://s3.amazonaws.com"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("http://minio.internal", applyingConfiguredPort: 80),
+            "http://minio.internal"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("not a url", applyingConfiguredPort: 9000),
+            "not a url"
+        )
+    }
+
+    func testOAuthBackendsShowAccountInsteadOfEmptyHost() {
+        XCTAssertEqual(
+            config(.dropbox, parameters: ["oauthAccountEmail": "a@b.com"]).displayAddress,
+            "a@b.com"
+        )
+        XCTAssertEqual(config(.oneDrive).displayAddress, BackendType.oneDrive.displayName)
+    }
+
+    func testNoBackendRendersEmptyOrBareColon() {
+        for type in BackendType.allCases {
+            let address = config(type).displayAddress
+            XCTAssertFalse(address.isEmpty, "\(type) should have a display address")
+            XCTAssertFalse(address.hasPrefix(":"), "\(type) rendered a bare port")
+        }
     }
 }

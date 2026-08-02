@@ -122,8 +122,9 @@ public final class FileProviderItem: NSObject, NSFileProviderItem {
             let version = Data("synthetic".utf8)
             return NSFileProviderItemVersion(contentVersion: version, metadataVersion: version)
         }
-        let contentVersion = "\(remoteItem.modificationDate.timeIntervalSince1970)_\(remoteItem.size)"
-            .data(using: .utf8) ?? Data()
+        let contentVersion = Data(
+            "\(remoteItem.modificationDate.timeIntervalSince1970)_\(remoteItem.size)".utf8
+        )
         let metadataVersion = contentVersion
         return NSFileProviderItemVersion(contentVersion: contentVersion, metadataVersion: metadataVersion)
     }

@@ -184,11 +184,22 @@ public actor SFTPFileSystem: RemoteFileSystem {
 
     // MARK: - Write
 
+    /// Overwrite an existing file, creating it when absent.
+    static let overwriteFlags: SFTPOpenFileFlags = [.write, .create, .truncate]
+
+    /// Create a file that must not already exist.
+    ///
+    /// `.forceCreate` is SSH_FXF_EXCL, which the protocol requires to be paired with
+    /// SSH_FXF_CREAT (`.create`). Without `.create` the server is asked to open a file
+    /// it is not allowed to create, and answers SSH_FX_NO_SUCH_FILE — which surfaces as
+    /// a bogus "remote path not found" on every new file.
+    static let exclusiveCreateFlags: SFTPOpenFileFlags = [.write, .create, .forceCreate]
+
     public func writeFile(at path: RemotePath, data: Data) async throws {
         do {
             let sftp = try requireSFTP()
             let remotePath = resolvedPath(path)
-            try await sftp.withFile(filePath: remotePath, flags: [.write, .create, .truncate]) { file in
+            try await sftp.withFile(filePath: remotePath, flags: Self.overwriteFlags) { file in
                 try await file.write(ByteBuffer(data: data), at: 0)
             }
         } catch {
@@ -197,15 +208,14 @@ public actor SFTPFileSystem: RemoteFileSystem {
     }
 
     public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
-        try await uploadFile(at: path, from: localFileURL, flags: [.write, .create, .truncate])
+        try await uploadFile(at: path, from: localFileURL, flags: Self.overwriteFlags)
     }
 
     public func createFile(at path: RemotePath, data: Data) async throws {
         do {
             let sftp = try requireSFTP()
             let remotePath = resolvedPath(path)
-            // forceCreate fails if file already exists
-            try await sftp.withFile(filePath: remotePath, flags: [.write, .forceCreate]) { file in
+            try await sftp.withFile(filePath: remotePath, flags: Self.exclusiveCreateFlags) { file in
                 try await file.write(ByteBuffer(data: data), at: 0)
             }
         } catch {
@@ -214,7 +224,7 @@ public actor SFTPFileSystem: RemoteFileSystem {
     }
 
     public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
-        try await uploadFile(at: path, from: localFileURL, flags: [.write, .forceCreate])
+        try await uploadFile(at: path, from: localFileURL, flags: Self.exclusiveCreateFlags)
     }
 
     // MARK: - Mutations
@@ -328,23 +338,59 @@ public actor SFTPFileSystem: RemoteFileSystem {
         from localFileURL: URL,
         flags: SFTPOpenFileFlags
     ) async throws {
-        do {
-            let sftp = try requireSFTP()
-            let remotePath = resolvedPath(path)
-            let handle = try FileHandle(forReadingFrom: localFileURL)
-            defer { try? handle.close() }
+        let sftp = try requireSFTP()
+        let remotePath = resolvedPath(path)
 
+        // Failures reading the *local* source must not go through `mapOperationError`,
+        // which attributes everything to the remote path and would report a local I/O
+        // problem as a missing remote file.
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: localFileURL)
+        } catch {
+            throw Self.localSourceFailure(error, localFileURL: localFileURL)
+        }
+        defer { try? handle.close() }
+
+        do {
             try await sftp.withFile(filePath: remotePath, flags: flags) { file in
                 var offset: UInt64 = 0
 
-                while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
+                while true {
+                    let chunk: Data?
+                    do {
+                        chunk = try handle.read(upToCount: Self.uploadChunkSize)
+                    } catch {
+                        throw LocalSourceReadFailure(underlying: error)
+                    }
+                    guard let chunk, !chunk.isEmpty else { break }
+
                     try await file.write(ByteBuffer(data: chunk), at: offset)
                     offset += UInt64(chunk.count)
                 }
             }
+        } catch let failure as LocalSourceReadFailure {
+            throw Self.localSourceFailure(failure.underlying, localFileURL: localFileURL)
         } catch {
             throw mapOperationError(error, path: path)
         }
+    }
+
+    /// Marks a read of the local upload source so it is not mistaken for a remote failure.
+    private struct LocalSourceReadFailure: Error {
+        let underlying: Error
+    }
+
+    /// Keep paths and the underlying error out of the user-facing message — it reaches
+    /// the system log, which now records error descriptions publicly.
+    private static func localSourceFailure(
+        _ error: Error,
+        localFileURL: URL
+    ) -> RemoteFileSystemError {
+        logger.error(
+            "Cannot read local upload source \(localFileURL.path, privacy: .private): \(String(describing: error), privacy: .private)"
+        )
+        return .operationFailed("Cannot read the local file to upload")
     }
 
     private func requireClient() throws -> SSHClient {
@@ -1023,7 +1069,6 @@ private struct OpenSSHPrivateKeyReader {
         return (Array(derived[..<keyLength]), Array(derived[keyLength...]))
     }
 
-    // swiftlint:disable:next identifier_name
     private func decryptAESCTR(_ data: Data, cipherName: String, key: [UInt8], iv: [UInt8]) throws -> Data {
         guard !data.isEmpty else {
             throw RemoteFileSystemError.unsupported("Empty OpenSSH encrypted payload")
