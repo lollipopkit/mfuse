@@ -1,7 +1,25 @@
 import XCTest
 @testable import MFuseSFTP
 import MFuseCore
+import Citadel
 final class SFTPFileSystemTests: XCTestCase {
+
+    /// Regression: `createFile` once used `[.write, .forceCreate]`. SSH_FXF_EXCL without
+    /// SSH_FXF_CREAT makes servers answer SSH_FX_NO_SUCH_FILE, so creating any new file
+    /// over SFTP failed with a misleading "remote path not found".
+    func testOpenFlagsAlwaysRequestCreation() {
+        XCTAssertTrue(
+            SFTPFileSystem.exclusiveCreateFlags.contains(.create),
+            "SSH_FXF_EXCL requires SSH_FXF_CREAT alongside it"
+        )
+        XCTAssertTrue(SFTPFileSystem.exclusiveCreateFlags.contains(.forceCreate))
+        XCTAssertTrue(SFTPFileSystem.overwriteFlags.contains(.create))
+        XCTAssertTrue(SFTPFileSystem.overwriteFlags.contains(.truncate))
+        XCTAssertFalse(
+            SFTPFileSystem.overwriteFlags.contains(.forceCreate),
+            "Overwriting must not be exclusive or it fails on existing files"
+        )
+    }
 
     /// Test that SFTPFileSystem can be instantiated.
     func testInit() {
@@ -195,7 +213,7 @@ private enum TestSSHKeyFixtures {
             "-t", algorithm,
             "-f", keyURL.path,
             "-C", comment,
-            "-N", passphrase ?? "",
+            "-N", passphrase ?? ""
         ] + extraArguments
 
         let stderr = Pipe()
