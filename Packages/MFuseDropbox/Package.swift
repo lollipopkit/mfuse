@@ -5,7 +5,7 @@ let package = Package(
     name: "MFuseDropbox",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseDropbox", targets: ["MFuseDropbox"]),
+        .library(name: "MFuseDropbox", targets: ["MFuseDropbox"])
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
@@ -19,6 +19,6 @@ let package = Package(
         .testTarget(
             name: "MFuseDropboxTests",
             dependencies: ["MFuseDropbox", "MFuseTestSupport"]
-        ),
+        )
     ]
 )

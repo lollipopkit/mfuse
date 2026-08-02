@@ -5,10 +5,10 @@ let package = Package(
     name: "MFuseWebDAV",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseWebDAV", targets: ["MFuseWebDAV"]),
+        .library(name: "MFuseWebDAV", targets: ["MFuseWebDAV"])
     ],
     dependencies: [
-        .package(path: "../MFuseCore"),
+        .package(path: "../MFuseCore")
     ],
     targets: [
         .target(
@@ -18,6 +18,6 @@ let package = Package(
         .testTarget(
             name: "MFuseWebDAVTests",
             dependencies: ["MFuseWebDAV"]
-        ),
+        )
     ]
 )

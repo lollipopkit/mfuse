@@ -61,14 +61,14 @@ public final class BackendRegistry: @unchecked Sendable {
     ) {
         lock.lock()
         defer { lock.unlock() }
-        if let f = sftpFactory { factories[.sftp] = f }
-        if let f = s3Factory { factories[.s3] = f }
-        if let f = webdavFactory { factories[.webdav] = f }
-        if let f = smbFactory { factories[.smb] = f }
-        if let f = ftpFactory { factories[.ftp] = f }
-        if let f = nfsFactory { factories[.nfs] = f }
-        if let f = googleDriveFactory { factories[.googleDrive] = f }
-        if let f = dropboxFactory { factories[.dropbox] = f }
-        if let f = oneDriveFactory { factories[.oneDrive] = f }
+        if let factory = sftpFactory { factories[.sftp] = factory }
+        if let factory = s3Factory { factories[.s3] = factory }
+        if let factory = webdavFactory { factories[.webdav] = factory }
+        if let factory = smbFactory { factories[.smb] = factory }
+        if let factory = ftpFactory { factories[.ftp] = factory }
+        if let factory = nfsFactory { factories[.nfs] = factory }
+        if let factory = googleDriveFactory { factories[.googleDrive] = factory }
+        if let factory = dropboxFactory { factories[.dropbox] = factory }
+        if let factory = oneDriveFactory { factories[.oneDrive] = factory }
     }
 }

@@ -69,14 +69,14 @@ struct FTPDirectoryParser {
 
         // With time
         formatter.dateFormat = "MMM dd HH:mm"
-        if let d = formatter.date(from: str) {
+        if let parsedDate = formatter.date(from: str) {
             // Infer the most recent plausible year for listings without a year field.
             var cal = Calendar.current
             cal.timeZone = TimeZone(identifier: "UTC")!
             let now = Date()
             let year = cal.component(.year, from: now)
             let currentMonth = cal.component(.month, from: now)
-            var comps = cal.dateComponents([.month, .day, .hour, .minute], from: d)
+            var comps = cal.dateComponents([.month, .day, .hour, .minute], from: parsedDate)
             let parsedMonth = comps.month ?? currentMonth
             comps.year = parsedMonth > currentMonth ? year - 1 : year
             return cal.date(from: comps)

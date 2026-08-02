@@ -24,7 +24,7 @@ public final class DropboxOAuthProvider: @unchecked Sendable {
             "files.metadata.read",
             "files.metadata.write",
             "files.content.read",
-            "files.content.write",
+            "files.content.write"
         ]
     }
 
@@ -64,7 +64,7 @@ public final class DropboxOAuthProvider: @unchecked Sendable {
             tokenURL: Constants.tokenURL,
             scopes: Constants.scopes,
             additionalAuthorizationQueryItems: [
-                URLQueryItem(name: "token_access_type", value: "offline"),
+                URLQueryItem(name: "token_access_type", value: "offline")
             ]
         )
         return DropboxOAuthProvider(configuration: configuration, session: session)

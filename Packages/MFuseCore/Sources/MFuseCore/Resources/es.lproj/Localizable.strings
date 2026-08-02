@@ -1,4 +1,6 @@
 "backend.googleDrive" = "Google Drive";
+"backend.dropbox" = "Dropbox";
+"backend.oneDrive" = "Microsoft OneDrive";
 "auth.password" = "Contraseña";
 "auth.publicKey" = "Clave pública";
 "auth.agent" = "SSH Agent";

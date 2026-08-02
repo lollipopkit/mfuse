@@ -1,11 +1,12 @@
 import Foundation
 import Darwin
 import NIO
+import NIOConcurrencyHelpers
 import NIOFoundationCompat
 import NIOSSL
 import NIOTLS
 
-private final class TLSHandshakeCompletionHandler: ChannelInboundHandler, RemovableChannelHandler {
+private final class TLSHandshakeCompletionHandler: ChannelInboundHandler, RemovableChannelHandler, Sendable {
     typealias InboundIn = ByteBuffer
 
     private let promise: EventLoopPromise<Void>
@@ -158,7 +159,10 @@ final class FTPConnection: @unchecked Sendable {
         let (pasvHost, dataPort) = try parsePASV(response.text)
         let dataHost = normalizedDataConnectionHost(pasvHost)
         let dataHandlerPromise = group.next().makePromise(of: FTPDataHandler.self)
-        var handshakeFuture: EventLoopFuture<Void>?
+        // The channel initializer runs on the channel's event loop while this function
+        // reads the result afterwards, so the handshake future is handed over through a
+        // locked box instead of a captured `var`.
+        let handshakeFutureBox = NIOLockedValueBox<EventLoopFuture<Void>?>(nil)
 
         let bootstrap = ClientBootstrap(group: group)
             .channelInitializer { channel in
@@ -169,7 +173,7 @@ final class FTPConnection: @unchecked Sendable {
                     do {
                         let handler = try self.makeTLSHandler(serverHostname: pasvHost)
                         let handshakePromise = channel.eventLoop.makePromise(of: Void.self)
-                        handshakeFuture = handshakePromise.futureResult
+                        handshakeFutureBox.withLockedValue { $0 = handshakePromise.futureResult }
                         try channel.pipeline.syncOperations.addHandler(handler)
                         try channel.pipeline.syncOperations.addHandler(TLSHandshakeCompletionHandler(promise: handshakePromise))
                         try channel.pipeline.syncOperations.addHandler(dataHandler)
@@ -186,7 +190,8 @@ final class FTPConnection: @unchecked Sendable {
             bootstrap.connect(host: dataHost, port: dataPort)
         )
         let dataHandler = try await waitForFuture(dataHandlerPromise.futureResult)
-        if let handshakeFuture {
+        // `connect` only completes after the initializer has run, so the box is settled here.
+        if let handshakeFuture = handshakeFutureBox.withLockedValue({ $0 }) {
             do {
                 try await waitForFuture(handshakeFuture)
             } catch {
@@ -202,11 +207,13 @@ final class FTPConnection: @unchecked Sendable {
         return try NIOSSLClientHandler(context: sslContext, serverHostname: serverHostname)
     }
 
-    private func waitForFuture<T>(_ future: EventLoopFuture<T>) async throws -> T {
+    private func waitForFuture<T: Sendable>(_ future: EventLoopFuture<T>) async throws -> T {
         let timeoutPromise = future.eventLoop.makePromise(of: T.self)
-        var didTimeOut = false
+        // Both the scheduled task and the completion callback run on `future.eventLoop`,
+        // so the flag is only ever touched from that one loop.
+        let didTimeOut = NIOLockedValueBox(false)
         let timeoutTask = future.eventLoop.scheduleTask(in: Self.operationTimeout) {
-            didTimeOut = true
+            didTimeOut.withLockedValue { $0 = true }
             timeoutPromise.fail(FTPError.connectionTimedOut)
         }
 
@@ -215,7 +222,7 @@ final class FTPConnection: @unchecked Sendable {
 
             switch result {
             case .success(let value):
-                if didTimeOut {
+                if didTimeOut.withLockedValue({ $0 }) {
                     if let channel = value as? Channel {
                         channel.close(promise: nil)
                     }
@@ -223,7 +230,7 @@ final class FTPConnection: @unchecked Sendable {
                 }
                 timeoutPromise.succeed(value)
             case .failure(let error):
-                guard !didTimeOut else { return }
+                guard !didTimeOut.withLockedValue({ $0 }) else { return }
                 timeoutPromise.fail(error)
             }
         }
@@ -427,11 +434,13 @@ final class FTPResponseHandler: ChannelInboundHandler, @unchecked Sendable {
     private var terminalError: Error?
     private var multilineCode: Int?
     private var multilineText = ""
-    private var context: ChannelHandlerContext?
+    // The channel rather than the handler context: `Channel` is `Sendable` and its
+    // `close` is safe to call from the timeout callback's arbitrary thread.
+    private var channel: Channel?
 
     func handlerAdded(context: ChannelHandlerContext) {
         lock.lock()
-        self.context = context
+        self.channel = context.channel
         lock.unlock()
     }
 
@@ -562,7 +571,7 @@ final class FTPResponseHandler: ChannelInboundHandler, @unchecked Sendable {
 
     private func failContinuationIfPending(id: UUID, error: Error) {
         let continuations: [CheckedContinuation<FTPResponse, Error>]
-        let context: ChannelHandlerContext?
+        let channel: Channel?
 
         lock.lock()
         if let index = self.continuations.firstIndex(where: { $0.id == id }) {
@@ -571,20 +580,16 @@ final class FTPResponseHandler: ChannelInboundHandler, @unchecked Sendable {
             var pending = self.continuations
             let timedOut = pending.remove(at: index)
             continuations = [timedOut.continuation] + pending.map(\.continuation)
-            context = self.context
+            channel = self.channel
             self.continuations.removeAll()
         } else {
             continuations = []
-            context = nil
+            channel = nil
         }
         lock.unlock()
 
         continuations.forEach { $0.resume(throwing: error) }
-        if let context {
-            context.eventLoop.execute {
-                context.close(promise: nil)
-            }
-        }
+        channel?.close(promise: nil)
     }
 }
 
@@ -604,11 +609,11 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
     private var continuations: [PendingContinuation] = []
     private var completed = false
     private var terminalError: Error?
-    private var context: ChannelHandlerContext?
+    private var channel: Channel?
 
     func handlerAdded(context: ChannelHandlerContext) {
         lock.lock()
-        self.context = context
+        self.channel = context.channel
         lock.unlock()
     }
 
@@ -691,7 +696,7 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
 
     private func failContinuationIfPending(id: UUID, error: Error) {
         let continuationsToResume: [CheckedContinuation<Data, Error>]
-        let context: ChannelHandlerContext?
+        let channel: Channel?
 
         lock.lock()
         if let index = self.continuations.firstIndex(where: { $0.id == id }) {
@@ -700,20 +705,16 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
             var pending = self.continuations
             let timedOut = pending.remove(at: index)
             continuationsToResume = [timedOut.continuation] + pending.map(\.continuation)
-            context = self.context
+            channel = self.channel
             self.continuations.removeAll()
         } else {
             continuationsToResume = []
-            context = nil
+            channel = nil
         }
         lock.unlock()
 
         continuationsToResume.forEach { $0.resume(throwing: error) }
-        if let context {
-            context.eventLoop.execute {
-                context.close(promise: nil)
-            }
-        }
+        channel?.close(promise: nil)
     }
 }
 
