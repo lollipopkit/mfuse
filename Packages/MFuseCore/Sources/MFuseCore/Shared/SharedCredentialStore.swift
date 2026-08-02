@@ -244,7 +244,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
         )
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
@@ -320,7 +320,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: account
         ]
         if let group = accessGroup {
             query[kSecAttrAccessGroup as String] = group

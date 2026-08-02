@@ -5,23 +5,23 @@ let package = Package(
     name: "MFuseSMB",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseSMB", targets: ["MFuseSMB"]),
+        .library(name: "MFuseSMB", targets: ["MFuseSMB"])
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
-        .package(url: "https://github.com/kishikawakatsumi/SMBClient.git", .upToNextMinor(from: "0.3.1")),
+        .package(url: "https://github.com/kishikawakatsumi/SMBClient.git", .upToNextMinor(from: "0.3.1"))
     ],
     targets: [
         .target(
             name: "MFuseSMB",
             dependencies: [
                 "MFuseCore",
-                "SMBClient",
+                "SMBClient"
             ]
         ),
         .testTarget(
             name: "MFuseSMBTests",
             dependencies: ["MFuseSMB"]
-        ),
+        )
     ]
 )

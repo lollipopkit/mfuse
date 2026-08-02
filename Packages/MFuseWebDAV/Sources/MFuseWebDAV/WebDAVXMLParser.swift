@@ -25,10 +25,10 @@ final class WebDAVXMLParser: NSObject, XMLParserDelegate {
     private var insideResourceType = false
 
     private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return f
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter
     }()
 
     private static let iso8601Formatter = ISO8601DateFormatter()

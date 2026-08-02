@@ -312,7 +312,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 let parentID = parentIdentifier(for: path)
                 completionHandler(FileProviderItem(remoteItem: remoteItem, parentID: parentID), nil)
             } catch {
-                logger.error("item(for:) failed: \(error.localizedDescription)")
+                logger.error("item(for:) failed: \(error.localizedDescription, privacy: .public)")
                 completionHandler(nil, nsError(from: error))
             }
         }
@@ -369,7 +369,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 domainVersionState.advance()
                 completionHandler(cachedURL, item, nil)
             } catch {
-                logger.error("fetchContents failed: \(error.localizedDescription)")
+                logger.error("fetchContents failed: \(error.localizedDescription, privacy: .public)")
                 completionHandler(nil, nil, nsError(from: error))
             }
         }
@@ -427,7 +427,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     do {
                         _ = try await storeContentCache(fileAt: createdFileURL, for: remoteItem, using: context)
                     } catch {
-                        logger.error("createItem content cache store failed: \(error.localizedDescription)")
+                        logger.error("createItem content cache store failed: \(error.localizedDescription, privacy: .public)")
                         await context.contentCache.invalidate(path: remoteItem.path)
                     }
                 }
@@ -438,7 +438,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 domainVersionState.advance()
                 completionHandler(newItem, [], false, nil)
             } catch {
-                logger.error("createItem failed: \(error.localizedDescription)")
+                logger.error("createItem failed: \(error.localizedDescription, privacy: .public)")
                 completionHandler(nil, [], false, nsError(from: error))
             }
         }
@@ -499,7 +499,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     do {
                         _ = try await storeContentCache(fileAt: updatedFileURL, for: remoteItem, using: context)
                     } catch {
-                        logger.error("modifyItem content cache store failed: \(error.localizedDescription)")
+                        logger.error("modifyItem content cache store failed: \(error.localizedDescription, privacy: .public)")
                         await context.contentCache.invalidate(path: remoteItem.path)
                     }
                 } else {
@@ -508,7 +508,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 domainVersionState.advance()
                 completionHandler(FileProviderItem(remoteItem: remoteItem, parentID: parentID), [], false, nil)
             } catch {
-                logger.error("modifyItem failed: \(error.localizedDescription)")
+                logger.error("modifyItem failed: \(error.localizedDescription, privacy: .public)")
                 completionHandler(nil, [], false, nsError(from: error))
             }
         }
@@ -550,7 +550,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 domainVersionState.advance()
                 completionHandler(nil)
             } catch {
-                logger.error("deleteItem failed: \(error.localizedDescription)")
+                logger.error("deleteItem failed: \(error.localizedDescription, privacy: .public)")
                 completionHandler(nsError(from: error))
             }
         }

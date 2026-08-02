@@ -190,7 +190,7 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
         )
         let updateAttrs: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
 
         let updateStatus = SecItemUpdate(searchQuery as CFDictionary, updateAttrs as CFDictionary)
@@ -271,7 +271,7 @@ public final class KeychainService: CredentialProvider, @unchecked Sendable {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: account
         ]
         if let group = accessGroup {
             query[kSecAttrAccessGroup as String] = group

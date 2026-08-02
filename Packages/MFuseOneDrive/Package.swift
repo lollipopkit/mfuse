@@ -5,7 +5,7 @@ let package = Package(
     name: "MFuseOneDrive",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MFuseOneDrive", targets: ["MFuseOneDrive"]),
+        .library(name: "MFuseOneDrive", targets: ["MFuseOneDrive"])
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
@@ -19,6 +19,6 @@ let package = Package(
         .testTarget(
             name: "MFuseOneDriveTests",
             dependencies: ["MFuseOneDrive", "MFuseTestSupport"]
-        ),
+        )
     ]
 )
