@@ -128,7 +128,7 @@ final class BackendTypeTests: XCTestCase {
         let expectedByKey = [
             "backend.googleDrive": "Google Drive",
             "backend.dropbox": "Dropbox",
-            "backend.oneDrive": "Microsoft OneDrive"
+            "backend.oneDrive": "OneDrive"
         ]
 
         for localeIdentifier in ["en", "es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"] {
@@ -325,5 +325,31 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
             XCTAssertFalse(address.isEmpty, "\(type) should have a display address")
             XCTAssertFalse(address.hasPrefix(":"), "\(type) rendered a bare port")
         }
+    }
+}
+
+final class ConnectionConfigSubtitleTests: XCTestCase {
+
+    private func config(_ type: BackendType, host: String = "", parameters: [String: String] = [:]) -> ConnectionConfig {
+        ConnectionConfig(
+            name: "Test",
+            backendType: type,
+            host: host,
+            port: type.defaultPort,
+            username: "user",
+            authMethod: type.supportedAuthMethods.first ?? .password,
+            remotePath: "/",
+            parameters: parameters
+        )
+    }
+
+    func testSubtitleCombinesTypeAndAddress() {
+        XCTAssertEqual(config(.sftp, host: "example.com").displaySubtitle, "SFTP · example.com")
+    }
+
+    /// The type must not be printed twice when displayAddress already fell back to it.
+    func testSubtitleDoesNotRepeatTypeWhenAddressIsUnknown() {
+        XCTAssertEqual(config(.dropbox).displaySubtitle, BackendType.dropbox.displayName)
+        XCTAssertEqual(config(.s3).displaySubtitle, BackendType.s3.displayName)
     }
 }

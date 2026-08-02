@@ -83,16 +83,11 @@ struct SidebarView: View {
     private func connectionRow(_ config: ConnectionConfig) -> some View {
         let mount = connectionManager.effectiveMountState(for: config.id)
         HStack(spacing: 8) {
-            // Fixed tint: mount state is carried by the trailing dot alone, so the
-            // backend icon stays a stable visual anchor for the row.
-            Image(systemName: config.backendType.iconName)
-                .foregroundStyle(.secondary)
-                .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
                     .fontWeight(.medium)
                     .lineLimit(1)
-                Text(verbatim: config.displayAddress)
+                Text(verbatim: config.displaySubtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

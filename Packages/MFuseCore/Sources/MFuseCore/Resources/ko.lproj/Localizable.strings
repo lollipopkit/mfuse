@@ -1,6 +1,6 @@
 "backend.googleDrive" = "Google Drive";
 "backend.dropbox" = "Dropbox";
-"backend.oneDrive" = "Microsoft OneDrive";
+"backend.oneDrive" = "OneDrive";
 "auth.password" = "암호";
 "auth.publicKey" = "공개 키";
 "auth.agent" = "SSH Agent";

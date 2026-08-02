@@ -1,6 +1,6 @@
 "backend.googleDrive" = "Google Drive";
 "backend.dropbox" = "Dropbox";
-"backend.oneDrive" = "Microsoft OneDrive";
+"backend.oneDrive" = "OneDrive";
 "auth.password" = "Kata sandi";
 "auth.publicKey" = "Kunci publik";
 "auth.agent" = "SSH Agent";

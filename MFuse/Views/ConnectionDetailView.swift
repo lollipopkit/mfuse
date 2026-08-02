@@ -60,9 +60,7 @@ struct ConnectionDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(config.name)
                     .font(.title2.bold())
-                Text(verbatim: config.displayAddress == config.backendType.displayName
-                    ? config.displayAddress
-                    : "\(config.backendType.displayName) — \(config.displayAddress)")
+                Text(verbatim: config.displaySubtitle)
                     .foregroundStyle(.secondary)
             }
             Spacer()

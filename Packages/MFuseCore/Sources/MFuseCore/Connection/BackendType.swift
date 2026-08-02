@@ -35,7 +35,7 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
         case .oneDrive:
             return MFuseCoreL10n.string(
                 "backend.oneDrive",
-                fallback: "Microsoft OneDrive"
+                fallback: "OneDrive"
             )
         }
     }

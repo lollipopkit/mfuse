@@ -72,6 +72,16 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         }
     }
 
+    /// Backend type and address on one line, e.g. "SFTP · example.com".
+    ///
+    /// Identifies the connection in list rows now that the backend is named rather than
+    /// drawn as an icon. When the address falls back to the type name — a backend with no
+    /// host and nothing configured yet — the name is not repeated.
+    public var displaySubtitle: String {
+        let type = backendType.displayName
+        return displayAddress == type ? type : "\(type) · \(displayAddress)"
+    }
+
     /// The S3 endpoint this connection actually reaches, or nil when none is configured.
     ///
     /// Resolved through `s3Endpoint(_:applyingConfiguredPort:)` so what is displayed

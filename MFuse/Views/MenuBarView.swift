@@ -212,20 +212,13 @@ struct MenuBarView: View {
         let mount = connectionManager.effectiveMountState(for: config.id)
 
         HStack(spacing: 10) {
-            // Fixed tint: the trailing dot is the only mount indicator.
-            ZStack {
-                Circle()
-                    .fill(.quaternary)
-                    .frame(width: 30, height: 30)
-                Image(systemName: config.backendType.iconName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            // Info
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
                     .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                Text(verbatim: config.displaySubtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                 if case .error(let msg) = mount {
                     Text(msg)
