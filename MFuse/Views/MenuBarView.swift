@@ -106,11 +106,10 @@ struct MenuBarView: View {
             } label: {
                 Label(AppL10n.string("common.action.mountAll", fallback: "Mount All"), systemImage: "arrow.up.circle")
                     .font(.system(size: 11))
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
             .disabled(mountedCount + mountingCount == connectionManager.connections.count)
-
-            Spacer()
 
             Button {
                 dismissMenuBarPanel()
@@ -129,6 +128,7 @@ struct MenuBarView: View {
             } label: {
                 Label(AppL10n.string("common.action.unmountAll", fallback: "Unmount All"), systemImage: "arrow.down.circle")
                     .font(.system(size: 11))
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
             .disabled(mountedCount == 0)
@@ -149,7 +149,6 @@ struct MenuBarView: View {
                 AppDelegate.activateMainInterface()
                 openWindow(id: MFuseApp.mainWindowID)
             }
-            Spacer()
             footerButton(
                 AppL10n.string("menuBar.action.settings", fallback: "Settings"),
                 systemImage: "gearshape"
@@ -157,7 +156,6 @@ struct MenuBarView: View {
                 dismissMenuBarPanel()
                 openSettings()
             }
-            Spacer()
             footerButton(
                 AppL10n.string("menuBar.action.quit", fallback: "Quit"),
                 systemImage: "power"
@@ -179,7 +177,13 @@ struct MenuBarView: View {
                     .font(.system(size: 12))
                 Text(title)
                     .font(.system(size: 10))
+                    .lineLimit(1)
             }
+            // Equal-width cells: spacers would distribute the leftover space instead of
+            // the cells themselves, spacing the icons unevenly because the labels differ
+            // in width.
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
