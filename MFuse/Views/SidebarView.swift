@@ -82,8 +82,6 @@ struct SidebarView: View {
     @ViewBuilder
     private func connectionRow(_ config: ConnectionConfig) -> some View {
         let mount = connectionManager.effectiveMountState(for: config.id)
-        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
         HStack(spacing: 8) {
             Image(systemName: config.backendType.iconName)
                 .foregroundStyle(mount.isMounted ? .green : .secondary)
@@ -97,15 +95,6 @@ struct SidebarView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text(mount.isMounted
-                    ? FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL)
-                    : ""
-                )
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .opacity(mount.isMounted ? 1 : 0)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
             }
             Spacer()
             Image(systemName: "folder.fill")

@@ -215,8 +215,6 @@ struct MenuBarView: View {
     @ViewBuilder
     private func menuBarRow(_ config: ConnectionConfig) -> some View {
         let mount = connectionManager.effectiveMountState(for: config.id)
-        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
 
         HStack(spacing: 10) {
             // Backend icon with state ring
@@ -243,14 +241,6 @@ struct MenuBarView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.5)))
                     }
                 }
-                Text(verbatim: mount.isMounted
-                    ? FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL)
-                    : config.displayAddress
-                )
-                .font(.system(size: 11))
-                .foregroundStyle(mount.isMounted ? .green.opacity(0.8) : .secondary)
-                .lineLimit(1)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
                 if case .error(let msg) = mount {
                     Text(msg)
                         .font(.system(size: 10))
