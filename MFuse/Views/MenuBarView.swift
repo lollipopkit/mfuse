@@ -212,6 +212,12 @@ struct MenuBarView: View {
         let mount = connectionManager.effectiveMountState(for: config.id)
 
         HStack(spacing: 10) {
+            // The sole mount indicator, leading the row.
+            Circle()
+                .fill(stateColor(mount))
+                .frame(width: 8, height: 8)
+                .animation(AnimationConstants.mountState, value: mount)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
                     .font(.system(size: 13, weight: .medium))
@@ -248,12 +254,6 @@ struct MenuBarView: View {
                 toggleButton(config: config, mountState: mount)
             }
             .animation(AnimationConstants.mountState, value: mount.isMounted)
-
-            // The sole mount indicator, matching the sidebar.
-            Circle()
-                .fill(stateColor(mount))
-                .frame(width: 8, height: 8)
-                .animation(AnimationConstants.mountState, value: mount)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
