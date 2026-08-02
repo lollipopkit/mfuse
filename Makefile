@@ -53,8 +53,12 @@ clean:
 lint:
 	swiftlint
 
+# Deliberately does NOT pass $(CODESIGN_FLAGS): an ad-hoc signed bundle has no team
+# identifier, so the File Provider extension never registers with the system
+# (`pluginkit` cannot see it) and no domain can be mounted. Installing a debug build
+# that is useful for testing requires real signing, which comes from project.local.yml.
 debug-install:
-	xcodebuild -scheme $(SCHEME) -configuration Debug -derivedDataPath $(DEBUG_DERIVED_DATA) build $(CODESIGN_FLAGS)
+	xcodebuild -scheme $(SCHEME) -configuration Debug -derivedDataPath $(DEBUG_DERIVED_DATA) build
 	rm -rf /Applications/$(APP_NAME).app
 	ditto $(DEBUG_APP_PATH) /Applications/$(APP_NAME).app
 
