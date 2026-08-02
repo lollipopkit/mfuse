@@ -30,6 +30,14 @@ struct ConnectionDetailView: View {
                         LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
                     } else {
                         LabeledContent(AppL10n.string("detail.field.address", fallback: "Address"), value: config.displayAddress)
+                        // displayAddress prefers the endpoint, so without this an S3
+                        // target with both set would never show its bucket, and two
+                        // buckets on one endpoint would look identical here.
+                        if config.backendType == .s3,
+                           let bucket = config.s3Bucket,
+                           bucket != config.displayAddress {
+                            LabeledContent(AppL10n.string("editor.field.bucket", fallback: "Bucket"), value: bucket)
+                        }
                     }
                     LabeledContent(AppL10n.string("detail.field.remotePath", fallback: "Remote Path"), value: config.remotePath)
                     LabeledContent(AppL10n.string("detail.field.auth", fallback: "Auth"), value: config.authMethod.displayName)

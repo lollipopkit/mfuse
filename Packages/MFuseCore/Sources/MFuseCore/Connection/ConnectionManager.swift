@@ -37,6 +37,7 @@ public final class ConnectionManager: ObservableObject {
     private var connectionGenerations: [UUID: Int] = [:]
     private var inFlightConnectionIDs: Set<UUID> = []
     private var interruptedConnectionIDs: Set<UUID> = []
+    private var inFlightDisconnectIDs: Set<UUID> = []
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
     var staleDomainRemover: ((String) async throws -> Void)?
@@ -256,6 +257,12 @@ public final class ConnectionManager: ObservableObject {
         let localGeneration = connectionGenerations[id, default: 0]
         interruptedConnectionIDs.remove(id)
         states[id] = .connecting
+        // effectiveMountState gives a mount error precedence over the handshake, so a
+        // retry would keep showing the previous failure — and an enabled Mount action —
+        // for its whole duration unless the stale error is cleared first.
+        if case .error = mountState(for: id) {
+            setMountState(.unmounted, for: config)
+        }
         defer {
             inFlightConnectionIDs.remove(id)
             interruptedConnectionIDs.remove(id)
@@ -381,6 +388,16 @@ public final class ConnectionManager: ObservableObject {
     }
 
     private func disconnect(_ id: UUID, using configOverride: ConnectionConfig?) async {
+        // A row stays effectively mounted until cleanup finishes, so a second click or an
+        // overlapping Unmount All can arrive here for the same id. Running the teardown
+        // twice repeats removeSymlink and the provider/filesystem disconnects, and a
+        // failure in the duplicate pass can mark a connection that unmounted cleanly as
+        // errored.
+        guard inFlightDisconnectIDs.insert(id).inserted else {
+            return
+        }
+        defer { inFlightDisconnectIDs.remove(id) }
+
         advanceConnectionGeneration(for: id)
         if inFlightConnectionIDs.contains(id) {
             interruptedConnectionIDs.insert(id)
@@ -639,14 +656,24 @@ public final class ConnectionManager: ObservableObject {
             return
         }
 
+        let generation = connectionGenerations[id, default: 0]
+
         do {
             if let mountURL = try await mountProvider.mountURL(for: config) {
+                // The user can unmount while the provider call above is suspended;
+                // writing the observed state unconditionally would resurrect the mount.
+                guard isCurrentConnectionAttempt(for: id, generation: generation) else {
+                    return
+                }
                 do {
                     _ = try await mountProvider.createSymlink(for: config)
                 } catch {
                     logger.warning(
                         "Failed to recreate convenience symlink for \(config.domainIdentifier, privacy: .public): \(String(describing: error), privacy: .public)"
                     )
+                }
+                guard isCurrentConnectionAttempt(for: id, generation: generation) else {
+                    return
                 }
                 setMountState(.mounted(path: mountURL.path), for: config)
                 return

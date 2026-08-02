@@ -56,6 +56,7 @@ struct SidebarView: View {
                             }
                         }
                     }
+                    .disabled(mountableCount == 0)
                     Button(AppL10n.string("common.action.unmountAll", fallback: "Unmount All")) {
                         Task {
                             let configsToUnmount = connectionManager.connections.filter {
@@ -70,6 +71,7 @@ struct SidebarView: View {
                             }
                         }
                     }
+                    .disabled(mountedCount == 0)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -166,6 +168,21 @@ struct SidebarView: View {
                 }
             }
         )
+    }
+
+    /// Eligibility for the batch actions, matching what each one actually operates on so
+    /// the menu cannot offer a run that would do nothing.
+    private var mountableCount: Int {
+        connectionManager.connections.filter {
+            let state = connectionManager.effectiveMountState(for: $0.id)
+            return !state.isMounted && !state.isMounting
+        }.count
+    }
+
+    private var mountedCount: Int {
+        connectionManager.connections.filter {
+            connectionManager.effectiveMountState(for: $0.id).isMounted
+        }.count
     }
 
     private func stateColor(_ state: MountState) -> Color {

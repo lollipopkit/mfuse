@@ -4,14 +4,25 @@ import SotoCore
 import SotoS3
 import NIOCore
 import NIOFoundationCompat
+import os.log
 
 /// S3 implementation of `RemoteFileSystem` using Soto.
 public actor S3FileSystem: RemoteFileSystem {
+
+    // Qualified: SotoCore re-exports swift-log's `Logger`, which would win here.
+    private static let logger = os.Logger(
+        subsystem: "com.lollipopkit.mfuse.s3",
+        category: "S3FileSystem"
+    )
 
     private let config: ConnectionConfig
     private let credential: MFuseCore.Credential
     private var awsClient: AWSClient?
     private var s3: S3?
+    /// Deduplicates overlapping `connect()` calls. This is an actor, but `connect`
+    /// suspends on the connectivity probe, so a second caller could otherwise enter and
+    /// build a second client that overwrites — and leaks — the first.
+    private var connectTask: Task<Void, Error>?
 
     public var isConnected: Bool { s3 != nil }
 
@@ -45,6 +56,17 @@ public actor S3FileSystem: RemoteFileSystem {
         if awsClient != nil, s3 != nil {
             return
         }
+        if let connectTask {
+            return try await connectTask.value
+        }
+
+        let task = Task { try await performConnect() }
+        connectTask = task
+        defer { connectTask = nil }
+        try await task.value
+    }
+
+    private func performConnect() async throws {
         // A previous attempt can leave a client behind — the File Provider extension
         // times out and retries `connect()`, and Soto asserts in `AWSClient.deinit` if a
         // client is released without being shut down.
@@ -85,10 +107,22 @@ public actor S3FileSystem: RemoteFileSystem {
             _ = try await serviceConfig!.listObjectsV2(request)
         } catch {
             await Self.shutdown(client)
+            // Cancellation is not a connection failure; misreporting it makes callers
+            // retry work that was deliberately stopped.
+            if error is CancellationError || Task.isCancelled {
+                throw error
+            }
             // Raw SDK errors are not RemoteFileSystemError, so callers such as the File
             // Provider extension cannot classify them and fall back to "server
             // unreachable" even for bad credentials.
             throw Self.mapConnectionError(error, bucket: bucket)
+        }
+
+        // `disconnect()` may have run while the probe above was suspended; publishing now
+        // would resurrect a connection the caller already tore down.
+        guard !Task.isCancelled else {
+            await Self.shutdown(client)
+            throw CancellationError()
         }
 
         self.awsClient = client
@@ -131,10 +165,18 @@ public actor S3FileSystem: RemoteFileSystem {
         if normalized.contains("nosuchbucket") {
             return .connectionFailed("S3 bucket \(bucket) does not exist")
         }
-        return .connectionFailed("S3 bucket \(bucket): \(description)")
+        // The raw description can carry response diagnostics from a custom endpoint, and
+        // error descriptions are logged with public privacy — keep it out of the message.
+        Self.logger.error(
+            "S3 connection to bucket \(bucket, privacy: .private) failed: \(description, privacy: .private)"
+        )
+        return .connectionFailed("Could not reach the S3 endpoint")
     }
 
     public func disconnect() async throws {
+        // Stop any probe still in flight so it cannot publish a client afterwards.
+        connectTask?.cancel()
+        connectTask = nil
         let client = awsClient
         // Clear the references first so a failing shutdown cannot leave a client that
         // callers still consider connected.

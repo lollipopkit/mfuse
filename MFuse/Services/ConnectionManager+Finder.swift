@@ -18,12 +18,23 @@ extension ConnectionManager {
 
         if let mountProvider,
            let mountURL = try? await mountProvider.mountURL(for: config) {
+            // The provider calls suspend, and disconnect is not tracked or cancelled by
+            // this task, so re-check before acting on anything observed before them —
+            // otherwise a reveal racing an unmount recreates a link to, and opens, a
+            // domain that is already gone.
+            guard effectiveMountState(for: config.id).isMounted else {
+                return nil
+            }
             // Deliberately not gated on `fileExists`: this app is sandboxed and cannot
             // necessarily stat paths under ~/Library/CloudStorage, but Finder opens them
             // fine. Requiring the check here made "Open in Finder" silently do nothing.
             if let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config),
+               effectiveMountState(for: config.id).isMounted,
                hasReachableLink(at: recreatedSymlinkURL) {
                 return recreatedSymlinkURL
+            }
+            guard effectiveMountState(for: config.id).isMounted else {
+                return nil
             }
             return mountURL
         }

@@ -124,14 +124,22 @@ final class BackendTypeTests: XCTestCase {
 
     /// The fallbacks here deliberately differ from the expected values so a missing
     /// resource key fails the assertion instead of silently degrading to the fallback.
+    ///
+    /// Every locale asserts the actual value, including Google Drive's two translated
+    /// names — checking only for presence would let a wrong provider name through.
     func testEveryBackendHasLocalizedDisplayNameResource() {
-        let expectedByKey = [
-            "backend.googleDrive": "Google Drive",
-            "backend.dropbox": "Dropbox",
-            "backend.oneDrive": "OneDrive"
+        let locales = ["en", "es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"]
+        let translatedGoogleDrive = [
+            "zh-Hans": "Google 云端硬盘",
+            "zh-Hant": "Google 雲端硬碟"
         ]
 
-        for localeIdentifier in ["en", "es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"] {
+        for localeIdentifier in locales {
+            let expectedByKey = [
+                "backend.googleDrive": translatedGoogleDrive[localeIdentifier] ?? "Google Drive",
+                "backend.dropbox": "Dropbox",
+                "backend.oneDrive": "OneDrive"
+            ]
             for (key, expected) in expectedByKey {
                 let value = MFuseCoreL10n.string(
                     key,
@@ -139,9 +147,7 @@ final class BackendTypeTests: XCTestCase {
                     fallback: "<missing>"
                 )
                 XCTAssertNotEqual(value, "<missing>", "\(key) is missing from \(localeIdentifier).lproj")
-                if key != "backend.googleDrive" {
-                    XCTAssertEqual(value, expected, "\(key) in \(localeIdentifier).lproj")
-                }
+                XCTAssertEqual(value, expected, "\(key) in \(localeIdentifier).lproj")
             }
         }
     }
@@ -304,6 +310,15 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         XCTAssertEqual(
             ConnectionConfig.s3Endpoint("http://minio.internal", applyingConfiguredPort: 80),
             "http://minio.internal"
+        )
+        // Regression: a new S3 config keeps the backend default port because the editor
+        // no longer offers the field, so it must not be written onto a plain-HTTP endpoint.
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint(
+                "http://localhost",
+                applyingConfiguredPort: BackendType.s3.defaultPort
+            ),
+            "http://localhost"
         )
         XCTAssertEqual(
             ConnectionConfig.s3Endpoint("not a url", applyingConfiguredPort: 9000),

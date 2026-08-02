@@ -56,13 +56,15 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             if let endpoint = s3Endpoint {
                 return endpoint
             }
-            if let bucket = parameters["bucket"], !bucket.isEmpty {
+            if let bucket = s3Bucket {
                 return bucket
             }
             return backendType.displayName
         case .googleDrive, .dropbox, .oneDrive:
-            let account = parameters["oauthAccountEmail"] ?? parameters["oauthAccountName"]
-            if let account, !account.isEmpty {
+            // Coalesce on emptiness, not just nil: a stored-but-blank email would
+            // otherwise mask a perfectly good account name.
+            if let account = Self.trimmedParameter(parameters["oauthAccountEmail"])
+                ?? Self.trimmedParameter(parameters["oauthAccountName"]) {
                 return account
             }
             return backendType.displayName
@@ -87,11 +89,28 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// Resolved through `s3Endpoint(_:applyingConfiguredPort:)` so what is displayed
     /// matches what the backend connects to.
     public var s3Endpoint: String? {
-        guard let raw = parameters["endpoint"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+        guard let raw = Self.trimmedParameter(parameters["endpoint"]) else {
             return nil
         }
-        return Self.s3Endpoint(raw, applyingConfiguredPort: port)
+        return Self.s3Endpoint(
+            raw,
+            applyingConfiguredPort: port,
+            backendDefaultPort: backendType.defaultPort
+        )
+    }
+
+    /// The configured S3 bucket, or nil when unset or blank.
+    public var s3Bucket: String? {
+        Self.trimmedParameter(parameters["bucket"])
+    }
+
+    /// A parameter with surrounding whitespace removed, or nil when it holds nothing.
+    static func trimmedParameter(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     /// Apply a connection's port to a custom S3 endpoint that doesn't carry one.
@@ -102,7 +121,11 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// Without this the port is dropped and the client connects to the scheme default
     /// (80/443), failing with "connection refused". New configs carry the port in the
     /// endpoint, because the editor no longer offers a separate Port field for S3.
-    public static func s3Endpoint(_ endpoint: String, applyingConfiguredPort port: UInt16) -> String {
+    public static func s3Endpoint(
+        _ endpoint: String,
+        applyingConfiguredPort port: UInt16,
+        backendDefaultPort: UInt16 = BackendType.s3.defaultPort
+    ) -> String {
         guard var components = URLComponents(string: endpoint), components.port == nil else {
             return endpoint
         }
@@ -117,8 +140,11 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             schemeDefaultPort = nil
         }
 
-        // A port equal to the scheme default carries no information, and port 0 is unset.
-        guard port != 0, port != schemeDefaultPort else {
+        // Port 0 is unset, a port matching the scheme default adds nothing, and a port
+        // still at the backend default was never chosen by anyone — the editor no longer
+        // offers the field. Without that last check "http://host" would be rewritten to
+        // "http://host:443" simply because S3 defaults to 443.
+        guard port != 0, port != schemeDefaultPort, port != backendDefaultPort else {
             return endpoint
         }
 

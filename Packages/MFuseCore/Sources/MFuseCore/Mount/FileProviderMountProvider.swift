@@ -313,8 +313,14 @@ public final class FileProviderMountProvider: MountProvider {
                 }
             }
 
-            // Replace any managed same-name symlink so the current config always points
-            // at the latest CloudStorage mount instead of a stale legacy container path.
+            // Replace a stale link of ours so the config points at the current mount, but
+            // apply the same ownership test as the branch below: a link with a matching
+            // name that resolves outside CloudStorage was put there by the user, and
+            // reveal now runs this on every click. createSymlink leaves the path alone and
+            // warns instead.
+            guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
+                return
+            }
             try fm.removeItem(at: symlinkURL)
             return
         }
