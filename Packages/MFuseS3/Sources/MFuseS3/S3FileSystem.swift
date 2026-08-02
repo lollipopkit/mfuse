@@ -24,46 +24,9 @@ public actor S3FileSystem: RemoteFileSystem {
 
     private var bucket: String { config.parameters["bucket"] ?? "" }
     private var region: String { config.parameters["region"] ?? "us-east-1" }
-    private var customEndpoint: String? {
-        guard let raw = config.parameters["endpoint"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            return nil
-        }
-        return Self.endpoint(raw, applyingConfiguredPort: config.port)
-    }
+    // Resolved in MFuseCore so the address shown in the UI is the one connected to.
+    private var customEndpoint: String? { config.s3Endpoint }
     private var pathStyle: Bool { config.parameters["pathStyle"] == "true" }
-
-    /// Apply the connection's port to a custom endpoint that doesn't carry one.
-    ///
-    /// TODO: remove once no configs predate the editor change. The editor used to show a
-    /// Port field for S3 even though the backend only ever used the endpoint, so existing
-    /// self-hosted setups are stored as endpoint `http://localhost` plus port `9000`.
-    /// Without this compatibility shim those configs connect to the scheme default
-    /// (80/443) and fail with "connection refused". New configs put the port in the
-    /// endpoint, because the editor no longer offers a separate Port field for S3.
-    static func endpoint(_ endpoint: String, applyingConfiguredPort port: UInt16) -> String {
-        guard var components = URLComponents(string: endpoint), components.port == nil else {
-            return endpoint
-        }
-
-        let schemeDefaultPort: UInt16?
-        switch components.scheme?.lowercased() {
-        case "http":
-            schemeDefaultPort = 80
-        case "https":
-            schemeDefaultPort = 443
-        default:
-            schemeDefaultPort = nil
-        }
-
-        // A port equal to the scheme default carries no information, and port 0 is unset.
-        guard port != 0, port != schemeDefaultPort else {
-            return endpoint
-        }
-
-        components.port = Int(port)
-        return components.string ?? endpoint
-    }
 
     private func isNotFoundError(_ error: Error) -> Bool {
         if let awsError = error as? AWSErrorType {

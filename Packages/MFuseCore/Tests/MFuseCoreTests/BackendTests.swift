@@ -1,13 +1,59 @@
 import XCTest
 @testable import MFuseCore
 
+/// Minimal backend used to verify registry wiring without touching a network.
+private actor StubFileSystem: RemoteFileSystem {
+    let config: ConnectionConfig
+
+    init(config: ConnectionConfig) {
+        self.config = config
+    }
+
+    var isConnected: Bool { false }
+    func connect() async throws {}
+    func disconnect() async throws {}
+    func enumerate(at path: RemotePath) async throws -> [RemoteItem] { [] }
+    func itemInfo(at path: RemotePath) async throws -> RemoteItem {
+        throw RemoteFileSystemError.notFound(path)
+    }
+    func readFile(at path: RemotePath) async throws -> Data { Data() }
+    func writeFile(at path: RemotePath, data: Data) async throws {}
+    func createFile(at path: RemotePath, data: Data) async throws {}
+    func createDirectory(at path: RemotePath) async throws {}
+    func delete(at path: RemotePath) async throws {}
+    func move(from source: RemotePath, to destination: RemotePath) async throws {}
+}
+
 final class BackendRegistryTests: XCTestCase {
 
-    func testRegisterAndCreate() {
-        let registry = BackendRegistry.shared
-        // Which types are registered depends on whether a host app ran its registration,
-        // so this only asserts that reading the registry does not crash.
-        _ = registry.supportedTypes
+    private func config(_ type: BackendType) -> ConnectionConfig {
+        ConnectionConfig(
+            name: "Test",
+            backendType: type,
+            host: "localhost",
+            port: type.defaultPort,
+            username: "user",
+            authMethod: type.supportedAuthMethods.first ?? .password,
+            remotePath: "/"
+        )
+    }
+
+    func testRegisterAndCreate() async {
+        // A dedicated instance rather than the shared singleton, whose contents depend on
+        // whether a host app already registered its backends.
+        let registry = BackendRegistry()
+        XCTAssertFalse(registry.isSupported(.sftp))
+        XCTAssertNil(registry.createFileSystem(config: config(.sftp), credential: Credential()))
+
+        registry.register(.sftp) { config, _ in StubFileSystem(config: config) }
+
+        XCTAssertTrue(registry.isSupported(.sftp))
+        XCTAssertEqual(registry.supportedTypes, [.sftp])
+
+        let created = registry.createFileSystem(config: config(.sftp), credential: Credential())
+        XCTAssertTrue(created is StubFileSystem)
+        // An unregistered type must still resolve to nil.
+        XCTAssertNil(registry.createFileSystem(config: config(.s3), credential: Credential()))
     }
 
     func testIsSupported() {
@@ -231,6 +277,38 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         )
         XCTAssertEqual(config(.s3, parameters: ["bucket": "my-bucket"]).displayAddress, "my-bucket")
         XCTAssertEqual(config(.s3).displayAddress, BackendType.s3.displayName)
+    }
+
+    /// What is displayed must match what the backend connects to, including for configs
+    /// that still carry the port outside the endpoint.
+    func testS3DisplayAddressShowsTheEffectiveEndpoint() {
+        XCTAssertEqual(
+            config(.s3, port: 9000, parameters: ["endpoint": "http://localhost"]).displayAddress,
+            "http://localhost:9000"
+        )
+    }
+
+    func testS3EndpointAppliesConfiguredPortOnlyWhenItAddsInformation() {
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("http://localhost", applyingConfiguredPort: 9000),
+            "http://localhost:9000"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("http://localhost:9000", applyingConfiguredPort: 443),
+            "http://localhost:9000"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("https://s3.amazonaws.com", applyingConfiguredPort: 443),
+            "https://s3.amazonaws.com"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("http://minio.internal", applyingConfiguredPort: 80),
+            "http://minio.internal"
+        )
+        XCTAssertEqual(
+            ConnectionConfig.s3Endpoint("not a url", applyingConfiguredPort: 9000),
+            "not a url"
+        )
     }
 
     func testOAuthBackendsShowAccountInsteadOfEmptyHost() {

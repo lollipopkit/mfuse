@@ -341,16 +341,14 @@ public actor SFTPFileSystem: RemoteFileSystem {
         let sftp = try requireSFTP()
         let remotePath = resolvedPath(path)
 
-        // Opening the *local* source must not be mapped through `mapOperationError`,
-        // which attributes failures to the remote path and would report a local I/O
+        // Failures reading the *local* source must not go through `mapOperationError`,
+        // which attributes everything to the remote path and would report a local I/O
         // problem as a missing remote file.
         let handle: FileHandle
         do {
             handle = try FileHandle(forReadingFrom: localFileURL)
         } catch {
-            throw RemoteFileSystemError.operationFailed(
-                "Cannot read local source \(localFileURL.path) for upload to \(path.absoluteString): \(error.localizedDescription)"
-            )
+            throw Self.localSourceFailure(error, localFileURL: localFileURL)
         }
         defer { try? handle.close() }
 
@@ -358,14 +356,41 @@ public actor SFTPFileSystem: RemoteFileSystem {
             try await sftp.withFile(filePath: remotePath, flags: flags) { file in
                 var offset: UInt64 = 0
 
-                while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
+                while true {
+                    let chunk: Data?
+                    do {
+                        chunk = try handle.read(upToCount: Self.uploadChunkSize)
+                    } catch {
+                        throw LocalSourceReadFailure(underlying: error)
+                    }
+                    guard let chunk, !chunk.isEmpty else { break }
+
                     try await file.write(ByteBuffer(data: chunk), at: offset)
                     offset += UInt64(chunk.count)
                 }
             }
+        } catch let failure as LocalSourceReadFailure {
+            throw Self.localSourceFailure(failure.underlying, localFileURL: localFileURL)
         } catch {
             throw mapOperationError(error, path: path)
         }
+    }
+
+    /// Marks a read of the local upload source so it is not mistaken for a remote failure.
+    private struct LocalSourceReadFailure: Error {
+        let underlying: Error
+    }
+
+    /// Keep paths and the underlying error out of the user-facing message — it reaches
+    /// the system log, which now records error descriptions publicly.
+    private static func localSourceFailure(
+        _ error: Error,
+        localFileURL: URL
+    ) -> RemoteFileSystemError {
+        logger.error(
+            "Cannot read local upload source \(localFileURL.path, privacy: .private): \(String(describing: error), privacy: .private)"
+        )
+        return .operationFailed("Cannot read the local file to upload")
     }
 
     private func requireClient() throws -> SSHClient {

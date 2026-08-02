@@ -53,8 +53,7 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     public var displayAddress: String {
         switch backendType {
         case .s3:
-            if let endpoint = parameters["endpoint"]?
-                .trimmingCharacters(in: .whitespacesAndNewlines), !endpoint.isEmpty {
+            if let endpoint = s3Endpoint {
                 return endpoint
             }
             if let bucket = parameters["bucket"], !bucket.isEmpty {
@@ -71,6 +70,50 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             guard !host.isEmpty else { return backendType.displayName }
             return port == backendType.defaultPort ? host : "\(host):\(String(port))"
         }
+    }
+
+    /// The S3 endpoint this connection actually reaches, or nil when none is configured.
+    ///
+    /// Resolved through `s3Endpoint(_:applyingConfiguredPort:)` so what is displayed
+    /// matches what the backend connects to.
+    public var s3Endpoint: String? {
+        guard let raw = parameters["endpoint"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return Self.s3Endpoint(raw, applyingConfiguredPort: port)
+    }
+
+    /// Apply a connection's port to a custom S3 endpoint that doesn't carry one.
+    ///
+    /// TODO: remove once no configs predate the editor change. The editor used to show a
+    /// Port field for S3 even though the backend only ever used the endpoint, so existing
+    /// self-hosted setups are stored as endpoint `http://localhost` plus port `9000`.
+    /// Without this the port is dropped and the client connects to the scheme default
+    /// (80/443), failing with "connection refused". New configs carry the port in the
+    /// endpoint, because the editor no longer offers a separate Port field for S3.
+    public static func s3Endpoint(_ endpoint: String, applyingConfiguredPort port: UInt16) -> String {
+        guard var components = URLComponents(string: endpoint), components.port == nil else {
+            return endpoint
+        }
+
+        let schemeDefaultPort: UInt16?
+        switch components.scheme?.lowercased() {
+        case "http":
+            schemeDefaultPort = 80
+        case "https":
+            schemeDefaultPort = 443
+        default:
+            schemeDefaultPort = nil
+        }
+
+        // A port equal to the scheme default carries no information, and port 0 is unset.
+        guard port != 0, port != schemeDefaultPort else {
+            return endpoint
+        }
+
+        components.port = Int(port)
+        return components.string ?? endpoint
     }
 
     enum CodingKeys: String, CodingKey {

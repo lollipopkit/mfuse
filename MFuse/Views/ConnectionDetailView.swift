@@ -24,9 +24,13 @@ struct ConnectionDetailView: View {
             Form {
                 Section(AppL10n.string("detail.section.server", fallback: "Server")) {
                     LabeledContent(AppL10n.string("detail.field.type", fallback: "Type"), value: config.backendType.displayName)
-                    LabeledContent(AppL10n.string("detail.field.host", fallback: "Host"), value: config.host)
-                    LabeledContent(AppL10n.string("detail.field.port", fallback: "Port"), value: "\(config.port)")
-                    LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
+                    if config.backendType.usesHostBasedAddressing {
+                        LabeledContent(AppL10n.string("detail.field.host", fallback: "Host"), value: config.host)
+                        LabeledContent(AppL10n.string("detail.field.port", fallback: "Port"), value: String(config.port))
+                        LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
+                    } else {
+                        LabeledContent(AppL10n.string("detail.field.address", fallback: "Address"), value: config.displayAddress)
+                    }
                     LabeledContent(AppL10n.string("detail.field.remotePath", fallback: "Remote Path"), value: config.remotePath)
                     LabeledContent(AppL10n.string("detail.field.auth", fallback: "Auth"), value: config.authMethod.displayName)
                 }

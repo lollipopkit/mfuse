@@ -77,6 +77,20 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// Whether the connection is addressed by host, port and username.
+    ///
+    /// S3 addresses the server through its endpoint parameter and the OAuth providers
+    /// through the signed-in account, so for those the three fields hold no meaningful
+    /// value and must not be offered or displayed.
+    public var usesHostBasedAddressing: Bool {
+        switch self {
+        case .sftp, .webdav, .smb, .nfs, .ftp:
+            return true
+        case .s3, .googleDrive, .dropbox, .oneDrive:
+            return false
+        }
+    }
+
     /// Auth methods applicable to this backend type.
     public var supportedAuthMethods: [AuthMethod] {
         switch self {

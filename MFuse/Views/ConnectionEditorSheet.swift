@@ -131,8 +131,13 @@ struct ConnectionEditorSheet: View {
                             Text(type.displayName).tag(type)
                         }
                     }
-                    .onChange(of: backendType) { _, newType in
-                        if port.isEmpty || UInt16(port) == nil {
+                    .onChange(of: backendType) { oldType, newType in
+                        if !newType.usesHostBasedAddressing && oldType.usesHostBasedAddressing {
+                            // The port field is hidden from here on, so a value carried
+                            // over from the previous backend would be invisible yet still
+                            // reach the endpoint compatibility shim in S3FileSystem.
+                            port = "\(newType.defaultPort)"
+                        } else if port.isEmpty || UInt16(port) == nil {
                             port = "\(newType.defaultPort)"
                         }
                         // Reset auth method if not supported
@@ -146,11 +151,9 @@ struct ConnectionEditorSheet: View {
 
                 if backendType.requiresServerEndpoint {
                     Section(AppL10n.string("detail.section.server", fallback: "Server")) {
-                        // S3 addresses the server entirely through its endpoint, so Host,
-                        // Port and Username have no effect there. Showing a Port field
-                        // that is silently ignored invites configurations like
+                        // Showing fields the backend ignores invites configurations like
                         // "http://localhost" + port 9000, which connect to port 80.
-                        if backendType != .s3 {
+                        if backendType.usesHostBasedAddressing {
                             TextField(AppL10n.string("detail.field.host", fallback: "Host"), text: $host, prompt: Text(AppL10n.string("editor.prompt.host", fallback: "example.com")))
                             TextField(AppL10n.string("detail.field.port", fallback: "Port"), text: $port, prompt: Text("\(backendType.defaultPort)"))
                             TextField(AppL10n.string("detail.field.username", fallback: "Username"), text: $username, prompt: Text(AppL10n.string("editor.prompt.username", fallback: "user")))
