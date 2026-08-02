@@ -5,6 +5,10 @@ import MFuseCore
 /// Menu bar extra window content showing mount status and quick actions.
 struct MenuBarView: View {
 
+    /// Beyond this many connections the list scrolls instead of growing the window.
+    private static let rowsBeforeScrolling = 7
+    private static let scrollingListHeight: CGFloat = 320
+
     @EnvironmentObject var connectionManager: ConnectionManager
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -73,15 +77,29 @@ struct MenuBarView: View {
 
     // MARK: - Connection List
 
+    /// Rows are shown directly until there are enough of them to be worth scrolling.
+    ///
+    /// A ScrollView derives its ideal height from the space its parent offers, not from
+    /// its content. A menu bar window sizes itself to its content, so the two wait on
+    /// each other and the ScrollView collapses to zero height — the rows disappear
+    /// entirely. Giving it an explicit height only once it is actually needed avoids
+    /// that, and a short list no longer scrolls for no reason.
+    @ViewBuilder
     private var connectionList: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ForEach(connectionManager.connections) { config in
-                    menuBarRow(config)
-                }
+        let rows = VStack(spacing: 0) {
+            ForEach(connectionManager.connections) { config in
+                menuBarRow(config)
             }
         }
-        .frame(maxHeight: 320)
+
+        if connectionManager.connections.count > Self.rowsBeforeScrolling {
+            ScrollView {
+                rows
+            }
+            .frame(height: Self.scrollingListHeight)
+        } else {
+            rows
+        }
     }
 
     // MARK: - Batch Actions

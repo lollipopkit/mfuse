@@ -95,12 +95,19 @@ struct ConnectionDetailView: View {
     private var mountButton: some View {
         Group {
             if mount.isMounted {
-                Button(AppL10n.string("common.action.unmount", fallback: "Unmount")) {
+                Button {
                     Task {
                         await connectionManager.disconnect(config.id)
                     }
+                } label: {
+                    Image(systemName: "eject.fill")
                 }
+                .buttonStyle(.bordered)
                 .tint(.red)
+                // An icon-only control still needs both a pointer tooltip and a label
+                // for VoiceOver.
+                .help(AppL10n.string("common.action.unmount", fallback: "Unmount"))
+                .accessibilityLabel(AppL10n.string("common.action.unmount", fallback: "Unmount"))
             } else if case .mounting = mount {
                 ProgressView()
                     .controlSize(.small)
