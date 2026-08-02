@@ -45,6 +45,34 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// Used as the File Provider domain identifier.
     public var domainIdentifier: String { id.uuidString }
 
+    /// Short address shown in lists and menus.
+    ///
+    /// Built as plain text so the port is never rendered as a localized number (SwiftUI
+    /// would turn 9000 into "9,000"), and so backends without a host — S3 and the OAuth
+    /// providers — show something meaningful instead of a bare ":443".
+    public var displayAddress: String {
+        switch backendType {
+        case .s3:
+            if let endpoint = parameters["endpoint"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !endpoint.isEmpty {
+                return endpoint
+            }
+            if let bucket = parameters["bucket"], !bucket.isEmpty {
+                return bucket
+            }
+            return backendType.displayName
+        case .googleDrive, .dropbox, .oneDrive:
+            let account = parameters["oauthAccountEmail"] ?? parameters["oauthAccountName"]
+            if let account, !account.isEmpty {
+                return account
+            }
+            return backendType.displayName
+        case .sftp, .webdav, .smb, .nfs, .ftp:
+            guard !host.isEmpty else { return backendType.displayName }
+            return port == backendType.defaultPort ? host : "\(host):\(String(port))"
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case name

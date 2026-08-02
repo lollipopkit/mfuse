@@ -58,7 +58,9 @@ struct ConnectionDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(config.name)
                     .font(.title2.bold())
-                Text("\(config.backendType.displayName) — \(config.host)")
+                Text(verbatim: config.displayAddress == config.backendType.displayName
+                    ? config.displayAddress
+                    : "\(config.backendType.displayName) — \(config.displayAddress)")
                     .foregroundStyle(.secondary)
             }
             Spacer()
