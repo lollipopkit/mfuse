@@ -172,6 +172,9 @@ struct MenuBarView: View {
                 systemImage: "gearshape"
             ) {
                 dismissMenuBarPanel()
+                // Without this the app stays an accessory and Settings opens behind
+                // whatever is frontmost, which reads as the button doing nothing.
+                AppDelegate.activateMainInterface()
                 openSettings()
             }
             footerButton(
@@ -345,6 +348,16 @@ struct MenuBarView: View {
 
     @MainActor
     private func dismissMenuBarPanel() {
-        NSApp.keyWindow?.orderOut(nil)
+        // The menu bar panel does not become the key window while the app runs as an
+        // accessory, so closing `NSApp.keyWindow` silently does nothing and the panel
+        // stays open over the action it just triggered. Fall back to the frontmost
+        // panel-level window, which is the menu bar extra itself.
+        if let key = NSApp.keyWindow {
+            key.orderOut(nil)
+            return
+        }
+        NSApp.windows
+            .first { $0.isVisible && $0.level.rawValue > NSWindow.Level.normal.rawValue }?
+            .orderOut(nil)
     }
 }

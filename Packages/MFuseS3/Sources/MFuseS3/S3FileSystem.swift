@@ -42,6 +42,18 @@ public actor S3FileSystem: RemoteFileSystem {
     // MARK: - Lifecycle
 
     public func connect() async throws {
+        if awsClient != nil, s3 != nil {
+            return
+        }
+        // A previous attempt can leave a client behind — the File Provider extension
+        // times out and retries `connect()`, and Soto asserts in `AWSClient.deinit` if a
+        // client is released without being shut down.
+        if let stale = awsClient {
+            await Self.shutdown(stale)
+            awsClient = nil
+            s3 = nil
+        }
+
         guard let keyID = credential.accessKeyID,
               let secret = credential.secretAccessKey else {
             throw RemoteFileSystemError.authenticationFailed
@@ -72,7 +84,7 @@ public actor S3FileSystem: RemoteFileSystem {
             let request = S3.ListObjectsV2Request(bucket: bucket, maxKeys: 1)
             _ = try await serviceConfig!.listObjectsV2(request)
         } catch {
-            try? await client.shutdown()
+            await Self.shutdown(client)
             // Raw SDK errors are not RemoteFileSystemError, so callers such as the File
             // Provider extension cannot classify them and fall back to "server
             // unreachable" even for bad credentials.
@@ -81,6 +93,17 @@ public actor S3FileSystem: RemoteFileSystem {
 
         self.awsClient = client
         self.s3 = serviceConfig
+    }
+
+    /// Every path that drops an `AWSClient` must go through here: Soto asserts in
+    /// `AWSClient.deinit` when a client is released without a shutdown, which crashes
+    /// the File Provider extension in debug builds.
+    private static func shutdown(_ client: AWSClient) async {
+        do {
+            try await client.shutdown()
+        } catch {
+            // `alreadyShutdown` is benign, and nothing else here is actionable.
+        }
     }
 
     /// Classify an SDK error raised while establishing the connection.
@@ -112,11 +135,13 @@ public actor S3FileSystem: RemoteFileSystem {
     }
 
     public func disconnect() async throws {
-        if let client = awsClient {
-            try await client.shutdown()
-        }
-        s3 = nil
+        let client = awsClient
+        // Clear the references first so a failing shutdown cannot leave a client that
+        // callers still consider connected.
         awsClient = nil
+        s3 = nil
+        guard let client else { return }
+        await Self.shutdown(client)
     }
 
     // MARK: - Enumeration
