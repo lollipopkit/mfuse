@@ -101,7 +101,6 @@ struct ConnectionDetailView: View {
                     Image(systemName: "eject.fill")
                 }
                 .buttonStyle(.bordered)
-                .tint(.red)
                 // An icon-only control still needs both a pointer tooltip and a label
                 // for VoiceOver.
                 .help(AppL10n.string("common.action.unmount", fallback: "Unmount"))
@@ -115,7 +114,7 @@ struct ConnectionDetailView: View {
                         await connectionManager.connect(config.id)
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
             }
         }
     }

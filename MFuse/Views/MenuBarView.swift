@@ -107,7 +107,6 @@ struct MenuBarView: View {
     private var batchActions: some View {
         HStack(spacing: 6) {
             Button {
-                dismissMenuBarPanel()
                 Task {
                     let configsToMount = connectionManager.connections.filter {
                         let state = connectionManager.effectiveMountState(for: $0.id)
@@ -130,7 +129,6 @@ struct MenuBarView: View {
             .disabled(mountedCount + mountingCount == connectionManager.connections.count)
 
             Button {
-                dismissMenuBarPanel()
                 Task {
                     let configsToUnmount = connectionManager.connections.filter {
                         connectionManager.effectiveMountState(for: $0.id).isMounted
@@ -163,7 +161,6 @@ struct MenuBarView: View {
                 AppL10n.string("menuBar.action.openMFuse", fallback: "Open MFuse"),
                 systemImage: "app"
             ) {
-                dismissMenuBarPanel()
                 AppDelegate.activateMainInterface()
                 openWindow(id: MFuseApp.mainWindowID)
             }
@@ -171,7 +168,6 @@ struct MenuBarView: View {
                 AppL10n.string("menuBar.action.settings", fallback: "Settings"),
                 systemImage: "gearshape"
             ) {
-                dismissMenuBarPanel()
                 // Without this the app stays an accessory and Settings opens behind
                 // whatever is frontmost, which reads as the button doing nothing.
                 AppDelegate.activateMainInterface()
@@ -181,7 +177,6 @@ struct MenuBarView: View {
                 AppL10n.string("menuBar.action.quit", fallback: "Quit"),
                 systemImage: "power"
             ) {
-                dismissMenuBarPanel()
                 isQuitting = true
                 AppDelegate.requestFullTermination()
             }
@@ -217,30 +212,21 @@ struct MenuBarView: View {
         let mount = connectionManager.effectiveMountState(for: config.id)
 
         HStack(spacing: 10) {
-            // Backend icon with state ring
+            // Fixed tint: the trailing dot is the only mount indicator.
             ZStack {
                 Circle()
-                    .fill(stateColor(mount).opacity(0.12))
+                    .fill(.quaternary)
                     .frame(width: 30, height: 30)
                 Image(systemName: config.backendType.iconName)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(stateColor(mount))
-                    .animation(AnimationConstants.mountState, value: mount)
+                    .foregroundStyle(.secondary)
             }
 
             // Info
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(config.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                    if mount.isMounted {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 6, height: 6)
-                            .transition(.opacity.combined(with: .scale(scale: 0.5)))
-                    }
-                }
+                Text(config.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
                 if case .error(let msg) = mount {
                     Text(msg)
                         .font(.system(size: 10))
@@ -255,7 +241,6 @@ struct MenuBarView: View {
             HStack(spacing: 4) {
                 if mount.isMounted {
                     Button {
-                        dismissMenuBarPanel()
                         revealInFinder(config: config)
                     } label: {
                         Image(systemName: "folder")
@@ -270,6 +255,12 @@ struct MenuBarView: View {
                 toggleButton(config: config, mountState: mount)
             }
             .animation(AnimationConstants.mountState, value: mount.isMounted)
+
+            // The sole mount indicator, matching the sidebar.
+            Circle()
+                .fill(stateColor(mount))
+                .frame(width: 8, height: 8)
+                .animation(AnimationConstants.mountState, value: mount)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
@@ -283,7 +274,6 @@ struct MenuBarView: View {
                 .accessibilityLabel(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…"))
         } else {
             Button {
-                dismissMenuBarPanel()
                 Task {
                     if mountState.isMounted {
                         await connectionManager.disconnect(config.id)
@@ -294,7 +284,7 @@ struct MenuBarView: View {
             } label: {
                 Image(systemName: mountState.isMounted ? "eject.circle" : "play.circle")
                     .font(.system(size: 16))
-                    .foregroundStyle(mountState.isMounted ? .red : .green)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
@@ -334,20 +324,5 @@ struct MenuBarView: View {
                 }
             }
         }
-    }
-
-    @MainActor
-    private func dismissMenuBarPanel() {
-        // The menu bar panel does not become the key window while the app runs as an
-        // accessory, so closing `NSApp.keyWindow` silently does nothing and the panel
-        // stays open over the action it just triggered. Fall back to the frontmost
-        // panel-level window, which is the menu bar extra itself.
-        if let key = NSApp.keyWindow {
-            key.orderOut(nil)
-            return
-        }
-        NSApp.windows
-            .first { $0.isVisible && $0.level.rawValue > NSWindow.Level.normal.rawValue }?
-            .orderOut(nil)
     }
 }
