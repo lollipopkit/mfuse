@@ -131,7 +131,7 @@ struct ConnectionEditorSheet: View {
                             Text(type.displayName).tag(type)
                         }
                     }
-                    .onChange(of: backendType) { newType in
+                    .onChange(of: backendType) { _, newType in
                         if port.isEmpty || UInt16(port) == nil {
                             port = "\(newType.defaultPort)"
                         }
@@ -146,11 +146,13 @@ struct ConnectionEditorSheet: View {
 
                 if backendType.requiresServerEndpoint {
                     Section(AppL10n.string("detail.section.server", fallback: "Server")) {
+                        // S3 addresses the server entirely through its endpoint, so Host,
+                        // Port and Username have no effect there. Showing a Port field
+                        // that is silently ignored invites configurations like
+                        // "http://localhost" + port 9000, which connect to port 80.
                         if backendType != .s3 {
                             TextField(AppL10n.string("detail.field.host", fallback: "Host"), text: $host, prompt: Text(AppL10n.string("editor.prompt.host", fallback: "example.com")))
-                        }
-                        TextField(AppL10n.string("detail.field.port", fallback: "Port"), text: $port, prompt: Text("\(backendType.defaultPort)"))
-                        if backendType != .s3 {
+                            TextField(AppL10n.string("detail.field.port", fallback: "Port"), text: $port, prompt: Text("\(backendType.defaultPort)"))
                             TextField(AppL10n.string("detail.field.username", fallback: "Username"), text: $username, prompt: Text(AppL10n.string("editor.prompt.username", fallback: "user")))
                         }
                         TextField(AppL10n.string("detail.field.remotePath", fallback: "Remote Path"), text: $remotePath, prompt: Text("/"))
@@ -160,11 +162,20 @@ struct ConnectionEditorSheet: View {
                 // Backend-specific parameters
                 switch backendType {
                 case .s3:
-                    Section(AppL10n.string("editor.section.s3", fallback: "S3 Settings")) {
+                    Section {
                         TextField(AppL10n.string("editor.field.bucket", fallback: "Bucket"), text: $s3Bucket, prompt: Text(AppL10n.string("editor.prompt.bucket", fallback: "my-bucket")))
                         TextField(AppL10n.string("editor.field.region", fallback: "Region"), text: $s3Region, prompt: Text("us-east-1"))
-                        TextField(AppL10n.string("editor.field.customEndpoint", fallback: "Custom Endpoint (optional)"), text: $s3Endpoint, prompt: Text("https://s3.amazonaws.com"))
+                        TextField(AppL10n.string("editor.field.customEndpoint", fallback: "Custom Endpoint (optional)"), text: $s3Endpoint, prompt: Text("http://localhost:9000"))
                         Toggle(AppL10n.string("editor.field.pathStyleAccess", fallback: "Path-Style Access"), isOn: $s3PathStyle)
+                    } header: {
+                        Text(AppL10n.string("editor.section.s3", fallback: "S3 Settings"))
+                    } footer: {
+                        Text(AppL10n.string(
+                            "editor.footer.s3Endpoint",
+                            fallback: "Leave the endpoint empty for AWS. For a self-hosted server, include the port in the endpoint."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                 case .webdav:
                     Section(AppL10n.string("editor.section.webdav", fallback: "WebDAV Settings")) {
@@ -330,10 +341,10 @@ struct ConnectionEditorSheet: View {
         .task(id: existingID) {
             await loadStoredCredentialIfNeeded()
         }
-        .onChange(of: authMethod) { newMethod in
+        .onChange(of: authMethod) { _, newMethod in
             clearCredentialState(except: newMethod)
         }
-        .onChange(of: privateKeyPath) { newPath in
+        .onChange(of: privateKeyPath) { _, newPath in
             guard authMethod == .publicKey else { return }
             if newPath.isEmpty {
                 privateKeyBookmark = ""

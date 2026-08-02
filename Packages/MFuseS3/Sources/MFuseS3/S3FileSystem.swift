@@ -24,8 +24,46 @@ public actor S3FileSystem: RemoteFileSystem {
 
     private var bucket: String { config.parameters["bucket"] ?? "" }
     private var region: String { config.parameters["region"] ?? "us-east-1" }
-    private var customEndpoint: String? { config.parameters["endpoint"] }
+    private var customEndpoint: String? {
+        guard let raw = config.parameters["endpoint"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return Self.endpoint(raw, applyingConfiguredPort: config.port)
+    }
     private var pathStyle: Bool { config.parameters["pathStyle"] == "true" }
+
+    /// Apply the connection's port to a custom endpoint that doesn't carry one.
+    ///
+    /// TODO: remove once no configs predate the editor change. The editor used to show a
+    /// Port field for S3 even though the backend only ever used the endpoint, so existing
+    /// self-hosted setups are stored as endpoint `http://localhost` plus port `9000`.
+    /// Without this compatibility shim those configs connect to the scheme default
+    /// (80/443) and fail with "connection refused". New configs put the port in the
+    /// endpoint, because the editor no longer offers a separate Port field for S3.
+    static func endpoint(_ endpoint: String, applyingConfiguredPort port: UInt16) -> String {
+        guard var components = URLComponents(string: endpoint), components.port == nil else {
+            return endpoint
+        }
+
+        let schemeDefaultPort: UInt16?
+        switch components.scheme?.lowercased() {
+        case "http":
+            schemeDefaultPort = 80
+        case "https":
+            schemeDefaultPort = 443
+        default:
+            schemeDefaultPort = nil
+        }
+
+        // A port equal to the scheme default carries no information, and port 0 is unset.
+        guard port != 0, port != schemeDefaultPort else {
+            return endpoint
+        }
+
+        components.port = Int(port)
+        return components.string ?? endpoint
+    }
 
     private func isNotFoundError(_ error: Error) -> Bool {
         if let awsError = error as? AWSErrorType {
@@ -72,11 +110,42 @@ public actor S3FileSystem: RemoteFileSystem {
             _ = try await serviceConfig!.listObjectsV2(request)
         } catch {
             try? await client.shutdown()
-            throw error
+            // Raw SDK errors are not RemoteFileSystemError, so callers such as the File
+            // Provider extension cannot classify them and fall back to "server
+            // unreachable" even for bad credentials.
+            throw Self.mapConnectionError(error, bucket: bucket)
         }
 
         self.awsClient = client
         self.s3 = serviceConfig
+    }
+
+    /// Classify an SDK error raised while establishing the connection.
+    ///
+    /// Credential problems must surface as `.authenticationFailed` so the UI prompts for
+    /// new keys instead of blaming the network.
+    static func mapConnectionError(_ error: Error, bucket: String) -> RemoteFileSystemError {
+        if let remoteError = error as? RemoteFileSystemError {
+            return remoteError
+        }
+
+        let description = String(describing: error)
+        let normalized = description.lowercased()
+        let authenticationIndicators = [
+            "accessdenied",
+            "invalidaccesskeyid",
+            "signaturedoesnotmatch",
+            "invalidsecurity",
+            "notauthorized",
+            "unauthorized"
+        ]
+        if authenticationIndicators.contains(where: { normalized.contains($0) }) {
+            return .authenticationFailed
+        }
+        if normalized.contains("nosuchbucket") {
+            return .connectionFailed("S3 bucket \(bucket) does not exist")
+        }
+        return .connectionFailed("S3 bucket \(bucket): \(description)")
     }
 
     public func disconnect() async throws {
