@@ -14,9 +14,16 @@ bun run build           # install --frozen-lockfile, then check, then vite build
 ## Editing translations
 
 Translation sources are `src/i18n/<locale>/index.ts`; everything else under `src/i18n/`
-is generated and committed. The `typesafe-i18n` script in `package.json` **cannot
-regenerate them in this project**: `typesafe-i18n@5.27.1` calls `ts.createProgram`, which
-the TypeScript 7 API no longer exposes, so it crashes against the manifest's TypeScript.
+is generated and committed.
+
+`en` is the base locale (`.typesafe-i18n.json`), which is what the generated types are
+derived from: **a new key goes into `src/i18n/en/index.ts` first**, and only then into the
+other locales. Adding it elsewhere first leaves it out of `Translation`, so the locale
+that has it fails `bun run check` as an unknown property.
+
+The `typesafe-i18n` script in `package.json` **cannot regenerate the output in this
+project**: `typesafe-i18n@5.27.1` calls `ts.createProgram`, which the TypeScript 7 API no
+longer exposes, so it crashes against the manifest's TypeScript.
 
 Regenerate with a pinned generator that lives outside this project, so neither
 `package.json` nor `bun.lock` is touched (installing TypeScript 6 here would silently
@@ -25,7 +32,7 @@ revert the TypeScript 7 migration, and a half-restored manifest breaks the froze
 ```bash
 # 1. one-off toolchain, anywhere outside the repo
 mkdir -p /tmp/mfuse-i18n && cd /tmp/mfuse-i18n
-bun add typesafe-i18n@5.27.1 typescript@5.9.3
+bun add --exact typesafe-i18n@5.27.1 typescript@5.9.3
 
 # 2. run it from website/ — cwd is where it reads .typesafe-i18n.json and writes output
 cd /path/to/mfuse/website
