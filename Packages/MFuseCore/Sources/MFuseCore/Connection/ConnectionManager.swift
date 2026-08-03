@@ -155,6 +155,11 @@ public final class ConnectionManager: ObservableObject {
             // the domain this method is about to unregister.
             || mountRepairTasks[config.id] != nil
             || refreshTasks[config.id] != nil
+            // An attempt still in its handshake is invisible to every check above — it
+            // holds `.connecting`, no mount state and no published filesystem — yet it
+            // can register the very domain `unregister` is about to remove. Routing it
+            // through `disconnect` is what cancels and waits for it first.
+            || connectTasks[config.id] != nil
             || fileSystems[config.id] != nil
         if shouldCleanupMount {
             await disconnect(config.id)
@@ -566,10 +571,7 @@ public final class ConnectionManager: ObservableObject {
         }
         reconnectTasks[id]?.cancel()
         reconnectTasks.removeValue(forKey: id)
-        // Before the symlink work below, because a refresh can start a repair on its way
-        // out — waiting for it here means that repair is already accounted for.
-        await cancelAndAwaitRefresh(for: id)
-        await cancelAndAwaitSymlinkWork(for: id)
+        await cancelAndAwaitMountStateWork(for: id)
 
         let config = configOverride ?? connections.first(where: { $0.id == id })
         var cleanupFailures: [String] = []
@@ -657,6 +659,16 @@ public final class ConnectionManager: ObservableObject {
         }
     }
 
+    /// Stop everything that could still publish a mount state or a convenience link for
+    /// `id`, and wait for it.
+    ///
+    /// Refresh first: a failing refresh starts a repair on its way out, so waiting for
+    /// the refresh means that repair is already covered by the symlink wait behind it.
+    private func cancelAndAwaitMountStateWork(for id: UUID) async {
+        await cancelAndAwaitRefresh(for: id)
+        await cancelAndAwaitSymlinkWork(for: id)
+    }
+
     /// Stop a refresh that would otherwise rewrite the bootstrap snapshot of a connection
     /// being torn down, edited, or removed.
     private func cancelAndAwaitRefresh(for id: UUID) async {
@@ -700,12 +712,19 @@ public final class ConnectionManager: ObservableObject {
         // Cancelled here but awaited by each teardown below, so a pass suspended inside
         // createSymlink cannot recreate the link after its connection is torn down. A
         // repair belongs in the same set: it creates the same symlink and publishes the
-        // same mounted state, so a connection with one pending still needs a teardown.
-        let pendingSymlinkWorkIDs = Set(mountResolutionTasks.keys).union(mountRepairTasks.keys)
+        // same mounted state, so a connection with one pending still needs a teardown —
+        // and so does a refresh, which rewrites the bootstrap snapshot and can start a
+        // repair of its own.
+        let pendingMountStateWorkIDs = Set(mountResolutionTasks.keys)
+            .union(mountRepairTasks.keys)
+            .union(refreshTasks.keys)
         for task in mountResolutionTasks.values {
             task.cancel()
         }
         for task in mountRepairTasks.values {
+            task.cancel()
+        }
+        for task in refreshTasks.values {
             task.cancel()
         }
         // A connect that has not installed a filesystem or reached mounting yet is still
@@ -727,14 +746,14 @@ public final class ConnectionManager: ObservableObject {
             }() ||
             mountState(for: config.id).isMounted ||
             mountState(for: config.id) == .mounting ||
-            pendingSymlinkWorkIDs.contains(config.id) ||
+            pendingMountStateWorkIDs.contains(config.id) ||
             pendingConnectIDs.contains(config.id) ||
             fileSystems[config.id] != nil {
             await disconnect(config.id)
         }
 
-        for id in Set(mountResolutionTasks.keys).union(mountRepairTasks.keys) {
-            await cancelAndAwaitSymlinkWork(for: id)
+        for id in Set(mountResolutionTasks.keys).union(mountRepairTasks.keys).union(refreshTasks.keys) {
+            await cancelAndAwaitMountStateWork(for: id)
         }
     }
 
@@ -1111,8 +1130,9 @@ public final class ConnectionManager: ObservableObject {
                     if domainState.isDisconnected {
                         // Awaited, not just cancelled: a pass suspended inside
                         // createSymlink would otherwise finish after the removal below
-                        // and leave a link for a domain just classified as unmounted.
-                        await cancelAndAwaitSymlinkWork(for: config.id)
+                        // and leave a link for a domain just classified as unmounted, and
+                        // a refresh in flight would repair the state right back.
+                        await cancelAndAwaitMountStateWork(for: config.id)
                         guard isCurrentConnectionAttempt(for: config.id, generation: generation) else {
                             continue
                         }
@@ -1146,7 +1166,7 @@ public final class ConnectionManager: ObservableObject {
                         if isMissingFileProviderExtensionError(error) {
                             needsExtensionSetup = true
                         }
-                        await cancelAndAwaitSymlinkWork(for: config.id)
+                        await cancelAndAwaitMountStateWork(for: config.id)
                         guard isCurrentConnectionAttempt(for: config.id, generation: generation) else {
                             continue
                         }
@@ -1157,7 +1177,7 @@ public final class ConnectionManager: ObservableObject {
                         await removeSymlinkPreservingCurrentMount(for: config, using: mp)
                     }
                 } else {
-                    await cancelAndAwaitSymlinkWork(for: config.id)
+                    await cancelAndAwaitMountStateWork(for: config.id)
                     guard isCurrentConnectionAttempt(for: config.id, generation: generation) else {
                         continue
                     }

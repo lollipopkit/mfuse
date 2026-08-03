@@ -938,6 +938,54 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(reconnectInvocations, [config.domainIdentifier])
     }
 
+    /// An attempt still in its handshake holds `.connecting`, no mount state and no
+    /// published filesystem, so nothing in the removal's cleanup check saw it — and
+    /// `unregister` ran while the attempt could still register the same domain.
+    func testRemoveTearsDownAConnectStillInItsHandshake() async throws {
+        let config = ConnectionConfig(
+            name: "RemoveDuringHandshake",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        let fileSystem = MockFileSystem()
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in fileSystem }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        // Held inside the backend handshake, past the point where the attempt has already
+        // checked the generation: only cancelling it stops the session from opening.
+        await fileSystem.setConnectDelay(nanoseconds: 2_000_000_000)
+        let attempt = Task { @MainActor in await manager.connect(config.id) }
+        for _ in 0..<200 {
+            if await fileSystem.connectCallCount > 0 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(manager.state(for: config.id), .connecting)
+        XCTAssertNil(manager.fileSystem(for: config.id))
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+
+        try await manager.remove(config)
+        await attempt.value
+
+        XCTAssertTrue(manager.connections.isEmpty)
+        let isConnected = await fileSystem.isConnected
+        XCTAssertFalse(isConnected, "the attempt opened a session for a connection already removed")
+        let disconnectCalled = await fileSystem.disconnectCalled
+        XCTAssertFalse(
+            disconnectCalled,
+            "the handshake should have been cancelled by the removal, not completed and thrown away"
+        )
+        let ensureRegisteredInvocations = await mountProvider.ensureRegisteredInvocations
+        XCTAssertTrue(
+            ensureRegisteredInvocations.isEmpty,
+            "the interrupted attempt must not register the domain the removal just unregistered"
+        )
+    }
+
     /// Refresh is the manager's own operation, so it decides on the state at the moment it
     /// runs — `signalEnumerator` rewrites the extension's bootstrap snapshot, and a view
     /// firing it from a captured config would do that for a connection that is no longer
