@@ -236,6 +236,35 @@ final class BackendTypeTests: XCTestCase {
         )
     }
 
+    /// The connection lifecycle messages are the only report of a failed removal or
+    /// rollback, so a locale missing one — or dropping a positional placeholder — would
+    /// leave the user with an unusable error.
+    func testConnectionManagerErrorResourcesExistInEveryLocale() {
+        let placeholderCounts = [
+            "connectionManager.error.cleanupFailed": 1,
+            "connectionManager.error.restoreRemovedConnection": 1,
+            "connectionManager.error.restoreCredential": 1,
+            "connectionManager.error.deleteCredentialWithRestoreFailures": 3,
+            "connectionManager.error.deleteCredentialRecovered": 2,
+            "connectionManager.error.unsupportedBackend": 1
+        ]
+        let locales = ["en", "es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"]
+
+        for locale in locales {
+            for (key, expectedPlaceholders) in placeholderCounts {
+                let sentinel = "<missing>"
+                let template = MFuseCoreL10n.string(key, localeIdentifier: locale, fallback: sentinel)
+                XCTAssertNotEqual(template, sentinel, "\(key) is missing for \(locale)")
+                XCTAssertFalse(template.isEmpty, "\(key) is empty for \(locale)")
+                XCTAssertEqual(
+                    template.components(separatedBy: "%").count - 1,
+                    expectedPlaceholders,
+                    "\(key) has the wrong number of placeholders for \(locale)"
+                )
+            }
+        }
+    }
+
     func testLocalizedErrorsAreNonEmpty() {
         XCTAssertFalse(RemoteFileSystemError.notConnected.localizedDescription.isEmpty)
         XCTAssertFalse(MountError.extensionNotEnabled.localizedDescription.isEmpty)
@@ -273,6 +302,24 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
 
     func testDefaultPortIsOmitted() {
         XCTAssertEqual(config(.sftp, host: "example.com", port: 22).displayAddress, "example.com")
+    }
+
+    /// A stored host of pure whitespace is nothing to show, so it must fall back like an
+    /// empty one instead of rendering blanks or a bare ":2222".
+    func testBlankHostFallsBackToTheBackendName() {
+        XCTAssertEqual(config(.sftp, host: "   ").displayAddress, BackendType.sftp.displayName)
+        XCTAssertEqual(
+            config(.sftp, host: "   ", port: 2222).displayAddress,
+            BackendType.sftp.displayName
+        )
+        XCTAssertEqual(config(.sftp, host: "  example.com  ").displayAddress, "example.com")
+    }
+
+    /// An IPv6 literal is all colons, so the port has to be told apart with brackets.
+    func testIPv6HostIsBracketedBeforeThePort() {
+        XCTAssertEqual(config(.sftp, host: "2001:db8::1", port: 2222).displayAddress, "[2001:db8::1]:2222")
+        XCTAssertEqual(config(.sftp, host: "[2001:db8::1]", port: 2222).displayAddress, "[2001:db8::1]:2222")
+        XCTAssertEqual(config(.sftp, host: "2001:db8::1", port: 22).displayAddress, "2001:db8::1")
     }
 
     /// Regression: S3 has no host, so the sidebar used to show a bare ":9,000".

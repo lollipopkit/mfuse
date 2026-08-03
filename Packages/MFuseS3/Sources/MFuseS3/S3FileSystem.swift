@@ -24,11 +24,22 @@ public actor S3FileSystem: RemoteFileSystem {
     /// build a second client that overwrites — and leaks — the first.
     private var connectTask: Task<Void, Error>?
 
+    /// Test seam: replaces the connectivity probe so a connection attempt can be held at
+    /// the exact suspension point where `disconnect()` interleaves. Never set in production.
+    var connectivityProbe: (@Sendable () async throws -> Void)?
+
+    /// Test seam: whether a connection attempt is still registered for deduplication.
+    var hasPendingConnectTask: Bool { connectTask != nil }
+
     public var isConnected: Bool { s3 != nil }
 
     public init(config: ConnectionConfig, credential: MFuseCore.Credential) {
         self.config = config
         self.credential = credential
+    }
+
+    func setConnectivityProbe(_ probe: (@Sendable () async throws -> Void)?) {
+        connectivityProbe = probe
     }
 
     // MARK: - Config Helpers
@@ -62,8 +73,22 @@ public actor S3FileSystem: RemoteFileSystem {
 
         let task = Task { try await performConnect() }
         connectTask = task
-        defer { connectTask = nil }
-        try await task.value
+        // `disconnect()` can clear this while we are suspended below, after which another
+        // caller registers its own task. Clearing unconditionally would drop that newer
+        // task and let the next caller start a second, overlapping connection attempt.
+        defer {
+            if connectTask == task {
+                connectTask = nil
+            }
+        }
+        // Cancellation does not reach into an unstructured task, so without this a
+        // cancelled caller would keep waiting for a probe that then publishes a client
+        // nobody is left to disconnect.
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     private func performConnect() async throws {
@@ -102,15 +127,24 @@ public actor S3FileSystem: RemoteFileSystem {
         }
 
         do {
-            // Test connectivity by listing with max 1 key
-            let request = S3.ListObjectsV2Request(bucket: bucket, maxKeys: 1)
-            _ = try await serviceConfig!.listObjectsV2(request)
+            if let connectivityProbe {
+                try await connectivityProbe()
+            } else {
+                // Test connectivity by listing with max 1 key
+                let request = S3.ListObjectsV2Request(bucket: bucket, maxKeys: 1)
+                _ = try await serviceConfig!.listObjectsV2(request)
+            }
         } catch {
             await Self.shutdown(client)
             // Cancellation is not a connection failure; misreporting it makes callers
-            // retry work that was deliberately stopped.
-            if error is CancellationError || Task.isCancelled {
+            // retry work that was deliberately stopped. A cancelled request surfaces as
+            // an SDK transport error rather than a `CancellationError`, so report the
+            // cancellation itself — callers only test for `CancellationError`.
+            if error is CancellationError {
                 throw error
+            }
+            if Task.isCancelled {
+                throw CancellationError()
             }
             // Raw SDK errors are not RemoteFileSystemError, so callers such as the File
             // Provider extension cannot classify them and fall back to "server
@@ -140,6 +174,16 @@ public actor S3FileSystem: RemoteFileSystem {
         }
     }
 
+    /// AWS error codes that mean the credentials, not the endpoint, are the problem.
+    private static let authenticationIndicators: Set<String> = [
+        "accessdenied",
+        "invalidaccesskeyid",
+        "signaturedoesnotmatch",
+        "invalidsecurity",
+        "notauthorized",
+        "unauthorized"
+    ]
+
     /// Classify an SDK error raised while establishing the connection.
     ///
     /// Credential problems must surface as `.authenticationFailed` so the UI prompts for
@@ -149,17 +193,23 @@ public actor S3FileSystem: RemoteFileSystem {
             return remoteError
         }
 
+        // Classify from the structured code wherever the SDK provides one. The scan below
+        // reads the whole error, endpoint hostname included, so a transport failure
+        // against `unauthorized.example.com` would otherwise be blamed on the keys.
+        if let awsError = error as? AWSErrorType {
+            let code = awsError.errorCode.lowercased()
+            if Self.authenticationIndicators.contains(code) {
+                return .authenticationFailed
+            }
+            if code == "nosuchbucket" {
+                return .connectionFailed("S3 bucket \(bucket) does not exist")
+            }
+        }
+
+        // Fallback for SDK errors that carry no structured code.
         let description = String(describing: error)
         let normalized = description.lowercased()
-        let authenticationIndicators = [
-            "accessdenied",
-            "invalidaccesskeyid",
-            "signaturedoesnotmatch",
-            "invalidsecurity",
-            "notauthorized",
-            "unauthorized"
-        ]
-        if authenticationIndicators.contains(where: { normalized.contains($0) }) {
+        if Self.authenticationIndicators.contains(where: { normalized.contains($0) }) {
             return .authenticationFailed
         }
         if normalized.contains("nosuchbucket") {

@@ -27,7 +27,11 @@ struct ConnectionDetailView: View {
                     if config.backendType.usesHostBasedAddressing {
                         LabeledContent(AppL10n.string("detail.field.host", fallback: "Host"), value: config.host)
                         LabeledContent(AppL10n.string("detail.field.port", fallback: "Port"), value: String(config.port))
-                        LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
+                        // NFS is anonymous-only, and FTP/WebDAV can be too, so the row
+                        // would otherwise stand empty for a value the backend never uses.
+                        if !config.username.isEmpty {
+                            LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
+                        }
                     } else {
                         LabeledContent(AppL10n.string("detail.field.address", fallback: "Address"), value: config.displayAddress)
                         // displayAddress prefers the endpoint, so without this an S3
@@ -130,12 +134,20 @@ struct ConnectionDetailView: View {
             if mount.isMounted {
                 Button {
                     Task {
-                        try? await connectionManager.mountProvider?.signalEnumerator(for: config)
+                        do {
+                            try await connectionManager.mountProvider?.signalEnumerator(for: config)
+                        } catch {
+                            // A refresh that cannot reach the domain means the mount is
+                            // gone; repairing reconciles the row instead of leaving it
+                            // green with actions that cannot work.
+                            await connectionManager.repairMountState(for: config.id)
+                        }
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
+                .accessibilityLabel(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
                 .transition(.opacity)
             }
         }

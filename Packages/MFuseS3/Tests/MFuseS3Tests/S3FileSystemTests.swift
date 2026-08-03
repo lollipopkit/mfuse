@@ -1,5 +1,6 @@
 import Testing
 import MFuseCore
+import SotoCore
 
 @testable import MFuseS3
 
@@ -58,7 +59,137 @@ import MFuseCore
     }
 }
 
+/// `connect()` deduplicates overlapping attempts through `connectTask`. A first attempt
+/// finishing after `disconnect()` must not deregister the attempt that replaced it, or the
+/// next caller opens a second, overlapping connection.
+@Test func completingConnectAttemptKeepsTheAttemptThatReplacedIt() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+    }
+
+    let first = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    // Cancels the first probe and clears the registered attempt.
+    try await fileSystem.disconnect()
+
+    let second = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 2)
+
+    _ = await first.result
+    #expect(await fileSystem.hasPendingConnectTask)
+
+    // Only `disconnect()` reaches the probe: `connect()` awaits an unstructured task, so
+    // cancelling `second` would leave the second probe sleeping.
+    try await fileSystem.disconnect()
+    _ = await second.result
+}
+
+/// The probe runs in an unstructured task, which cancellation does not reach on its own.
+/// Without propagation the caller waits for a connection it no longer wants, and the actor
+/// publishes a client nobody is left to disconnect.
+@Test func cancellingConnectStopsTheProbeInsteadOfPublishing() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+    }
+
+    let attempt = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    attempt.cancel()
+    switch await attempt.result {
+    case .success:
+        Issue.record("expected the cancelled connect to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+
+    #expect(await fileSystem.isConnected == false)
+    #expect(await fileSystem.hasPendingConnectTask == false)
+}
+
+/// Endpoint diagnostics carry the configured hostname, so classifying by scanning the
+/// whole description can blame the credentials for an unrelated transport failure.
+@Test func structuredErrorCodesOutrankTheDescriptionScan() {
+    let mapped = S3FileSystem.mapConnectionError(
+        StubAWSError(errorCode: "NoSuchBucket"),
+        bucket: "photos"
+    )
+    guard case .connectionFailed(let message) = mapped else {
+        Issue.record("expected .connectionFailed, got \(mapped)")
+        return
+    }
+    #expect(message.contains("photos"))
+}
+
+/// The description scan still classifies SDK errors that carry no structured code.
+@Test func descriptionScanRemainsForErrorsWithoutACode() {
+    let mapped = S3FileSystem.mapConnectionError(StubError(text: "AccessDenied"), bucket: "b")
+    guard case .authenticationFailed = mapped else {
+        Issue.record("expected .authenticationFailed, got \(mapped)")
+        return
+    }
+}
+
+private actor ProbeCoordinator {
+    private var started = 0
+    private var waiters: [(threshold: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    func probeStarted() {
+        started += 1
+        let ready = waiters.filter { $0.threshold <= started }
+        waiters.removeAll { $0.threshold <= started }
+        for waiter in ready {
+            waiter.continuation.resume()
+        }
+    }
+
+    func waitForProbes(count: Int) async {
+        guard started < count else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append((count, continuation))
+        }
+    }
+}
+
 private struct StubError: Error, CustomStringConvertible {
     let text: String
     var description: String { text }
+}
+
+/// An SDK error whose description points at an endpoint that reads like an auth failure.
+private struct StubAWSError: AWSErrorType {
+    let errorCode: String
+    var context: AWSErrorContext? { nil }
+    var description: String { "https://unauthorized.internal.example is unreachable" }
+
+    init(errorCode: String) {
+        self.errorCode = errorCode
+    }
+
+    init?(errorCode: String, context: AWSErrorContext) {
+        nil
+    }
 }

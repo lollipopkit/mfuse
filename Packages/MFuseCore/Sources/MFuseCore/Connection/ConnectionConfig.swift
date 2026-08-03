@@ -69,8 +69,14 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             }
             return backendType.displayName
         case .sftp, .webdav, .smb, .nfs, .ftp:
-            guard !host.isEmpty else { return backendType.displayName }
-            return port == backendType.defaultPort ? host : "\(host):\(String(port))"
+            // Trimmed like the parameters above: a stored blank host is nothing to show,
+            // and rendering it leaves the row displaying whitespace or a bare ":2222".
+            guard let host = Self.trimmedParameter(host) else { return backendType.displayName }
+            guard port != backendType.defaultPort else { return host }
+            // An IPv6 literal is all colons, so "2001:db8::1:2222" cannot be read as
+            // host plus port. Brackets are what separates the two.
+            let address = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+            return "\(address):\(String(port))"
         }
     }
 

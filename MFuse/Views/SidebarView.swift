@@ -59,8 +59,12 @@ struct SidebarView: View {
                     .disabled(mountableCount == 0)
                     Button(AppL10n.string("common.action.unmountAll", fallback: "Unmount All")) {
                         Task {
+                            // Mounting rows are included: disconnect interrupts an
+                            // in-flight connect, and skipping them left the batch
+                            // finishing with mounts that came up moments later.
                             let configsToUnmount = connectionManager.connections.filter {
-                                connectionManager.effectiveMountState(for: $0.id).isMounted
+                                let state = connectionManager.effectiveMountState(for: $0.id)
+                                return state.isMounted || state.isMounting
                             }
                             await withTaskGroup(of: Void.self) { group in
                                 for config in configsToUnmount {
@@ -71,7 +75,7 @@ struct SidebarView: View {
                             }
                         }
                     }
-                    .disabled(mountedCount == 0)
+                    .disabled(unmountableCount == 0)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -179,9 +183,10 @@ struct SidebarView: View {
         }.count
     }
 
-    private var mountedCount: Int {
+    private var unmountableCount: Int {
         connectionManager.connections.filter {
-            connectionManager.effectiveMountState(for: $0.id).isMounted
+            let state = connectionManager.effectiveMountState(for: $0.id)
+            return state.isMounted || state.isMounting
         }.count
     }
 

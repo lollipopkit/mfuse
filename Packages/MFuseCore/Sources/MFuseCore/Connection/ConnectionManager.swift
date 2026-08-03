@@ -37,9 +37,11 @@ public final class ConnectionManager: ObservableObject {
     private var connectionGenerations: [UUID: Int] = [:]
     private var inFlightConnectionIDs: Set<UUID> = []
     private var interruptedConnectionIDs: Set<UUID> = []
-    private var inFlightDisconnectIDs: Set<UUID> = []
+    private var removingConnectionIDs: Set<UUID> = []
+    private var disconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
+    private var mountRepairTasks: [UUID: Task<Void, Never>] = [:]
     var staleDomainRemover: ((String) async throws -> Void)?
 
     /// Optional mount provider – when set, connect() activates a registered domain and disconnect() keeps it registered but disconnected.
@@ -109,6 +111,11 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func remove(_ config: ConnectionConfig) async throws {
+        // Removal suspends repeatedly while the row is still on screen. A Mount landing in
+        // one of those windows passes its own membership check and re-registers the domain
+        // this method already unregistered, orphaning it once the config is gone.
+        removingConnectionIDs.insert(config.id)
+        defer { removingConnectionIDs.remove(config.id) }
         advanceConnectionGeneration(for: config.id)
         let shouldCleanupMount = states[config.id]?.isConnected == true
             || {
@@ -242,13 +249,11 @@ public final class ConnectionManager: ObservableObject {
 
     public func connect(_ id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }) else { return }
+        guard !removingConnectionIDs.contains(id) else { return }
         if case .connecting = states[id] {
             return
         }
         if case .connected = states[id] {
-            return
-        }
-        guard fileSystems[id] == nil else {
             return
         }
         guard inFlightConnectionIDs.insert(id).inserted else {
@@ -269,6 +274,13 @@ public final class ConnectionManager: ObservableObject {
         }
 
         do {
+            // A teardown that could not disconnect the filesystem leaves it behind while
+            // the row goes on offering Mount. Clearing it is what makes that retry work:
+            // `connect` used to return on a lingering filesystem, pinning the connection
+            // in its error state until the app restarted.
+            if let lingering = fileSystems.removeValue(forKey: id) {
+                try? await lingering.disconnect()
+            }
             let credential = try await credentialProvider.credential(for: id) ?? Credential()
             guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
                   !interruptedConnectionIDs.contains(id) else {
@@ -291,8 +303,11 @@ public final class ConnectionManager: ObservableObject {
                 return
             }
             try await connectFileSystemWithRetry(fs, for: config)
+            // Cancellation is checked alongside the generation: a backend that ignores it
+            // can hand back a live connection to an attempt nobody is waiting for.
             if !isCurrentConnectionAttempt(for: id, generation: localGeneration)
-                || interruptedConnectionIDs.contains(id) {
+                || interruptedConnectionIDs.contains(id)
+                || Task.isCancelled {
                 try? await fs.disconnect()
                 return
             }
@@ -392,20 +407,32 @@ public final class ConnectionManager: ObservableObject {
         // overlapping Unmount All can arrive here for the same id. Running the teardown
         // twice repeats removeSymlink and the provider/filesystem disconnects, and a
         // failure in the duplicate pass can mark a connection that unmounted cleanly as
-        // errored.
-        guard inFlightDisconnectIDs.insert(id).inserted else {
+        // errored. Overlapping callers therefore join the pass already running instead of
+        // returning early: `remove` and `reloadConnectionsFromStorage` check
+        // `isCleanupComplete` as soon as this returns, and would otherwise judge a
+        // teardown that is still in flight.
+        if let inFlight = disconnectTasks[id] {
+            await inFlight.value
             return
         }
-        defer { inFlightDisconnectIDs.remove(id) }
 
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performDisconnect(id, using: configOverride)
+            self.disconnectTasks.removeValue(forKey: id)
+        }
+        disconnectTasks[id] = task
+        await task.value
+    }
+
+    private func performDisconnect(_ id: UUID, using configOverride: ConnectionConfig?) async {
         advanceConnectionGeneration(for: id)
         if inFlightConnectionIDs.contains(id) {
             interruptedConnectionIDs.insert(id)
         }
         reconnectTasks[id]?.cancel()
         reconnectTasks.removeValue(forKey: id)
-        mountResolutionTasks[id]?.cancel()
-        mountResolutionTasks.removeValue(forKey: id)
+        await cancelAndAwaitSymlinkWork(for: id)
 
         let config = configOverride ?? connections.first(where: { $0.id == id })
         var cleanupFailures: [String] = []
@@ -471,17 +498,41 @@ public final class ConnectionManager: ObservableObject {
         }
     }
 
+    /// Stop anything that may still create the convenience symlink for `id`.
+    ///
+    /// Cancelling is not enough: mount resolution and mount repair can both be suspended
+    /// *inside* `createSymlink`, so the link would be recreated after the teardown below
+    /// removed it, leaving a symlink pointing at a connection that is gone. Awaiting the
+    /// cancelled task serializes the two.
+    private func cancelAndAwaitSymlinkWork(for id: UUID) async {
+        if let task = mountResolutionTasks[id] {
+            task.cancel()
+            await task.value
+            if mountResolutionTasks[id] == task {
+                mountResolutionTasks.removeValue(forKey: id)
+            }
+        }
+        if let task = mountRepairTasks[id] {
+            task.cancel()
+            await task.value
+            if mountRepairTasks[id] == task {
+                mountRepairTasks.removeValue(forKey: id)
+            }
+        }
+    }
+
     /// Disconnect and unmount all known connections before terminating the app.
     public func shutdown() async {
         for task in reconnectTasks.values {
             task.cancel()
         }
         reconnectTasks.removeAll()
+        // Cancelled here but awaited by each teardown below, so a pass suspended inside
+        // createSymlink cannot recreate the link after its connection is torn down.
         let pendingMountResolutionIDs = Set(mountResolutionTasks.keys)
         for task in mountResolutionTasks.values {
             task.cancel()
         }
-        mountResolutionTasks.removeAll()
 
         for config in connections where
             states[config.id]?.isConnected == true ||
@@ -496,6 +547,10 @@ public final class ConnectionManager: ObservableObject {
             pendingMountResolutionIDs.contains(config.id) ||
             fileSystems[config.id] != nil {
             await disconnect(config.id)
+        }
+
+        for id in Set(mountResolutionTasks.keys).union(mountRepairTasks.keys) {
+            await cancelAndAwaitSymlinkWork(for: id)
         }
     }
 
@@ -615,6 +670,8 @@ public final class ConnectionManager: ObservableObject {
             reconnectTasks.removeValue(forKey: removedConfig.id)
             mountResolutionTasks[removedConfig.id]?.cancel()
             mountResolutionTasks.removeValue(forKey: removedConfig.id)
+            mountRepairTasks[removedConfig.id]?.cancel()
+            mountRepairTasks.removeValue(forKey: removedConfig.id)
         }
 
         connections = nextConnections
@@ -650,7 +707,25 @@ public final class ConnectionManager: ObservableObject {
     }
 
     /// Best-effort mount state repair for already-registered File Provider domains.
+    ///
+    /// The repair recreates the convenience symlink, so it is tracked as a task that
+    /// `disconnect` can cancel and wait for — see `cancelAndAwaitSymlinkWork(for:)`.
     public func repairMountState(for id: UUID) async {
+        if let inFlight = mountRepairTasks[id] {
+            await inFlight.value
+            return
+        }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performMountRepair(for: id)
+            self.mountRepairTasks.removeValue(forKey: id)
+        }
+        mountRepairTasks[id] = task
+        await task.value
+    }
+
+    private func performMountRepair(for id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }),
               let mountProvider else {
             return
@@ -659,6 +734,23 @@ public final class ConnectionManager: ObservableObject {
         let generation = connectionGenerations[id, default: 0]
 
         do {
+            // A registered domain that was deliberately disconnected keeps a usable
+            // CloudStorage URL, so the URL alone cannot say whether it is mounted —
+            // startup sync classifies such a domain as unmounted, and so must this.
+            let domainState = try await mountProvider.domainStates()
+                .first { $0.identifier == config.domainIdentifier }
+            guard isCurrentConnectionAttempt(for: id, generation: generation) else {
+                return
+            }
+            guard let domainState, !domainState.isDisconnected else {
+                // Reconciles a mount that disappeared behind the app's back: leaving the
+                // row green keeps offering reveal and unmount for a domain that is gone.
+                if mountState(for: id).isMounted {
+                    setMountState(.unmounted, for: config)
+                }
+                return
+            }
+
             if let mountURL = try await mountProvider.mountURL(for: config) {
                 // The user can unmount while the provider call above is suspended;
                 // writing the observed state unconditionally would resurrect the mount.
@@ -851,7 +943,9 @@ public final class ConnectionManager: ObservableObject {
                 logger.warning(
                     "Retrying transient connection failure for \(config.domainIdentifier, privacy: .public): \(self.describe(error), privacy: .public)"
                 )
-                try? await Task.sleep(nanoseconds: Self.transientConnectionRetryDelay)
+                // Not `try?`: swallowing cancellation here would run another attempt and
+                // establish a connection for a caller that already gave up.
+                try await Task.sleep(nanoseconds: Self.transientConnectionRetryDelay)
             }
         }
 
@@ -865,33 +959,56 @@ public final class ConnectionManager: ObservableObject {
         using mountProvider: any MountProvider
     ) {
         mountResolutionTasks[config.id]?.cancel()
+        let generation = connectionGenerations[config.id, default: 0]
         mountResolutionTasks[config.id] = Task { @MainActor [weak self] in
             guard let self else { return }
+            await self.resolveMountState(
+                for: config,
+                using: mountProvider,
+                generation: generation
+            )
+            // A replaced task is cancelled before the replacement is stored, so this
+            // cannot delete the entry of the task that superseded it. Teardown clears
+            // cancelled tasks itself, once it has waited for them.
+            if !Task.isCancelled {
+                self.mountResolutionTasks.removeValue(forKey: config.id)
+            }
+        }
+    }
+
+    private func resolveMountState(
+        for config: ConnectionConfig,
+        using mountProvider: any MountProvider,
+        generation: Int
+    ) async {
+        do {
+            let path = try await resolveMountPath(for: config, using: mountProvider)
+            try Task.checkCancellation()
             do {
-                let path = try await self.resolveMountPath(for: config, using: mountProvider)
-                try Task.checkCancellation()
-                do {
-                    if try await mountProvider.createSymlink(for: config) == nil {
-                        self.logger.warning(
-                            "Mounted domain \(config.domainIdentifier, privacy: .public) without creating convenience symlink"
-                        )
-                    }
-                } catch {
-                    self.logger.warning(
-                        "Mounted domain \(config.domainIdentifier, privacy: .public) but failed to create convenience symlink: \(String(describing: error), privacy: .public)"
+                if try await mountProvider.createSymlink(for: config) == nil {
+                    logger.warning(
+                        "Mounted domain \(config.domainIdentifier, privacy: .public) without creating convenience symlink"
                     )
                 }
-                try Task.checkCancellation()
-                self.setMountState(.mounted(path: path), for: config)
             } catch {
-                if Task.isCancelled { return }
-                let desc = self.describe(error)
-                if self.isMissingFileProviderExtensionError(error) {
-                    self.needsExtensionSetup = true
-                }
-                self.setMountState(.error(desc), for: config)
+                logger.warning(
+                    "Mounted domain \(config.domainIdentifier, privacy: .public) but failed to create convenience symlink: \(String(describing: error), privacy: .public)"
+                )
             }
-            self.mountResolutionTasks.removeValue(forKey: config.id)
+            try Task.checkCancellation()
+            // The provider calls above suspend, and a task that was replaced rather than
+            // cancelled still gets here — publishing then would resurrect a mount the
+            // user has already torn down.
+            guard isCurrentConnectionAttempt(for: config.id, generation: generation) else { return }
+            setMountState(.mounted(path: path), for: config)
+        } catch {
+            if Task.isCancelled { return }
+            let desc = describe(error)
+            if isMissingFileProviderExtensionError(error) {
+                needsExtensionSetup = true
+            }
+            guard isCurrentConnectionAttempt(for: config.id, generation: generation) else { return }
+            setMountState(.error(desc), for: config)
         }
     }
 

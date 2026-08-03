@@ -106,6 +106,42 @@ actor MockFileSystem: RemoteFileSystem {
     func move(from source: RemotePath, to destination: RemotePath) async throws {}
 }
 
+// MARK: - Test Gate
+
+/// Holds a mock provider call at a chosen suspension point so a test can interleave
+/// another operation with it.
+actor TestGate {
+    private var isOpen = false
+    private var entered = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        entered = true
+        let pendingEntryWaiters = entryWaiters
+        entryWaiters = []
+        for continuation in pendingEntryWaiters {
+            continuation.resume()
+        }
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pendingWaiters = waiters
+        waiters = []
+        for continuation in pendingWaiters {
+            continuation.resume()
+        }
+    }
+}
+
 // MARK: - Mock MountProvider
 
 actor MockMountProvider: MountProvider {
@@ -126,6 +162,8 @@ actor MockMountProvider: MountProvider {
     var unmountShouldFail = false
     var unregisterShouldFail = false
     var removeSymlinkShouldFail = false
+    var disconnectGate: TestGate?
+    var createSymlinkGate: TestGate?
 
     init(symlinkBaseURL: URL) {
         self.symlinkBaseURL = symlinkBaseURL
@@ -162,6 +200,14 @@ actor MockMountProvider: MountProvider {
         removeSymlinkShouldFail = shouldFail
     }
 
+    func setDisconnectGate(_ gate: TestGate?) {
+        disconnectGate = gate
+    }
+
+    func setCreateSymlinkGate(_ gate: TestGate?) {
+        createSymlinkGate = gate
+    }
+
     func ensureRegistered(config: ConnectionConfig) async throws {
         ensureRegisteredInvocations.append(config.domainIdentifier)
         registeredDomainIDs.insert(config.domainIdentifier)
@@ -190,6 +236,9 @@ actor MockMountProvider: MountProvider {
             throw MountError.domainNotFound(config.domainIdentifier)
         }
         disconnectInvocations.append(config.domainIdentifier)
+        if let disconnectGate {
+            await disconnectGate.wait()
+        }
         if unmountShouldFail {
             throw MountError.unmountFailed("mock unmount failure")
         }
@@ -219,6 +268,9 @@ actor MockMountProvider: MountProvider {
 
     func createSymlink(for config: ConnectionConfig) async throws -> URL? {
         createSymlinkInvocations.append(config.domainIdentifier)
+        if let createSymlinkGate {
+            await createSymlinkGate.wait()
+        }
         guard let mountURL = mountURLs[config.domainIdentifier] else { return nil }
         let symlinkURL = symlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
@@ -537,6 +589,229 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(credentialProvider.credentials[config.id], Credential(password: "pass"))
         XCTAssertTrue(credentialProvider.deletedConnectionIDs.isEmpty)
         XCTAssertEqual(try storage.loadConnections(), [config])
+    }
+
+    /// `remove` checks `isCleanupComplete` as soon as `disconnect` returns, so a caller
+    /// that arrives while a teardown is already running has to wait for it — returning
+    /// early would fail the removal of a connection that unmounts cleanly.
+    func testRemoveWaitsForInFlightDisconnectBeforeCheckingCleanup() async throws {
+        let config = ConnectionConfig(
+            name: "OverlappingDisconnect",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-overlap-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+
+        let firstDisconnect = Task { @MainActor in await manager.disconnect(config.id) }
+        await gate.waitUntilEntered()
+
+        let removal = Task { @MainActor in try await manager.remove(config) }
+        for _ in 0..<5 {
+            await Task.yield()
+        }
+        await gate.open()
+
+        await firstDisconnect.value
+        try await removal.value
+
+        XCTAssertTrue(manager.connections.isEmpty)
+        XCTAssertNil(manager.fileSystem(for: config.id))
+        XCTAssertNil(credentialProvider.credentials[config.id])
+        XCTAssertTrue(try storage.loadConnections().isEmpty)
+        let disconnectInvocations = await mountProvider.disconnectInvocations
+        XCTAssertEqual(disconnectInvocations, [config.domainIdentifier])
+    }
+
+    /// A mount repair suspended inside `createSymlink` must finish before the teardown
+    /// removes the link, otherwise the link is recreated for a connection that is gone.
+    func testDisconnectWaitsForSymlinkRepairBeforeRemovingTheSymlink() async throws {
+        let config = ConnectionConfig(
+            name: "RepairDuringTeardown",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-repair-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+
+        let symlinkURL = testSymlinkBaseURL
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
+
+        let gate = TestGate()
+        await mountProvider.setCreateSymlinkGate(gate)
+
+        let repair = Task { @MainActor in await manager.repairMountState(for: config.id) }
+        await gate.waitUntilEntered()
+
+        let disconnect = Task { @MainActor in await manager.disconnect(config.id) }
+        for _ in 0..<5 {
+            await Task.yield()
+        }
+        await gate.open()
+
+        await repair.value
+        await disconnect.value
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: symlinkURL.path))
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+    }
+
+    /// A teardown that could not disconnect the filesystem keeps it around while the row
+    /// goes on offering Mount, so the retry has to clear it — otherwise the connection is
+    /// stuck in its error state for the life of the process.
+    func testConnectRecoversFromAFailedFileSystemTeardown() async throws {
+        let config = ConnectionConfig(
+            name: "StuckTeardown",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        let fileSystem = try XCTUnwrap(lastCreatedFileSystem)
+        await fileSystem.setDisconnectShouldFail(true)
+
+        await manager.disconnect(config.id)
+        guard case .error = manager.state(for: config.id) else {
+            return XCTFail("Expected an error state after the filesystem refused to disconnect")
+        }
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+
+        await fileSystem.setDisconnectShouldFail(false)
+        await manager.connect(config.id)
+
+        XCTAssertEqual(manager.state(for: config.id), .connected)
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+    }
+
+    /// Removal suspends while the row is still on screen; a Mount arriving then would
+    /// re-register the domain removal had just unregistered.
+    func testConnectIsRejectedWhileRemovalIsInFlight() async throws {
+        let config = ConnectionConfig(
+            name: "RemovalRace",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-removal-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        let registrationsBefore = await mountProvider.ensureRegisteredInvocations.count
+
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+        let removal = Task { @MainActor in try await manager.remove(config) }
+        await gate.waitUntilEntered()
+
+        await manager.connect(config.id)
+        let registrationsDuringRemoval = await mountProvider.ensureRegisteredInvocations.count
+        XCTAssertEqual(registrationsDuringRemoval, registrationsBefore)
+
+        await gate.open()
+        try await removal.value
+
+        XCTAssertTrue(manager.connections.isEmpty)
+        let registrationsAfter = await mountProvider.ensureRegisteredInvocations.count
+        XCTAssertEqual(registrationsAfter, registrationsBefore)
+    }
+
+    /// A registered domain that was disconnected behind the app's back still resolves to a
+    /// CloudStorage URL, so the URL alone must not be read as "mounted".
+    func testRepairMountStateReconcilesADisconnectedDomain() async throws {
+        let config = ConnectionConfig(
+            name: "ExternallyDisconnected",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-repair-state-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        let mountedState = await waitForMountState(config.id)
+        XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
+
+        await mountProvider.setDomainStates([
+            RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: true)
+        ])
+        await manager.repairMountState(for: config.id)
+
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+    }
+
+    /// Cancelling a connect must stop it, not let the retry delay swallow the cancellation
+    /// and establish a connection nobody is waiting for.
+    func testCancelledConnectDoesNotRetryAfterTheDelay() async throws {
+        let config = ConnectionConfig(
+            name: "CancelledRetry",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let fileSystem = MockFileSystem()
+        await fileSystem.setConnectFailures([.connectionFailed("Connection timed out")])
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in fileSystem }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        let attempt = Task { @MainActor in await manager.connect(config.id) }
+        var callCountDuringRetryDelay = 0
+        for _ in 0..<200 {
+            callCountDuringRetryDelay = await fileSystem.connectCallCount
+            if callCountDuringRetryDelay > 0 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(callCountDuringRetryDelay, 1)
+
+        attempt.cancel()
+        await attempt.value
+
+        let finalCallCount = await fileSystem.connectCallCount
+        XCTAssertEqual(finalCallCount, 1)
+        XCTAssertNotEqual(manager.state(for: config.id), .connected)
+        XCTAssertNil(manager.fileSystem(for: config.id))
     }
 
     func testRemoveConnectionSucceedsWhenDomainAlreadyMissing() async throws {
