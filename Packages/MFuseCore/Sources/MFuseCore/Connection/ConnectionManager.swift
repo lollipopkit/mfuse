@@ -37,7 +37,9 @@ public final class ConnectionManager: ObservableObject {
     private var connectionGenerations: [UUID: Int] = [:]
     private var inFlightConnectionIDs: Set<UUID> = []
     private var interruptedConnectionIDs: Set<UUID> = []
-    private var removingConnectionIDs: Set<UUID> = []
+    /// Counted, not a set: two removals of the same connection can overlap, and the first
+    /// one to return would otherwise unmark an ID the other is still working on.
+    private var removalDepths: [UUID: Int] = [:]
     private var disconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
@@ -114,8 +116,15 @@ public final class ConnectionManager: ObservableObject {
         // Removal suspends repeatedly while the row is still on screen. A Mount landing in
         // one of those windows passes its own membership check and re-registers the domain
         // this method already unregistered, orphaning it once the config is gone.
-        removingConnectionIDs.insert(config.id)
-        defer { removingConnectionIDs.remove(config.id) }
+        removalDepths[config.id, default: 0] += 1
+        defer {
+            let remaining = (removalDepths[config.id] ?? 1) - 1
+            if remaining <= 0 {
+                removalDepths.removeValue(forKey: config.id)
+            } else {
+                removalDepths[config.id] = remaining
+            }
+        }
         advanceConnectionGeneration(for: config.id)
         let shouldCleanupMount = states[config.id]?.isConnected == true
             || {
@@ -249,7 +258,7 @@ public final class ConnectionManager: ObservableObject {
 
     public func connect(_ id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }) else { return }
-        guard !removingConnectionIDs.contains(id) else { return }
+        guard !isRemovalInFlight(for: id) else { return }
         if case .connecting = states[id] {
             return
         }
@@ -730,6 +739,9 @@ public final class ConnectionManager: ObservableObject {
               let mountProvider else {
             return
         }
+        // Waiting for the repairs already running is not enough: a repair that starts
+        // after that wait still races the `removeSymlink` further down the teardown.
+        guard !isTeardownInFlight(for: id) else { return }
 
         let generation = connectionGenerations[id, default: 0]
 
@@ -958,6 +970,9 @@ public final class ConnectionManager: ObservableObject {
         for config: ConnectionConfig,
         using mountProvider: any MountProvider
     ) {
+        // Same window as `performMountRepair`: a resolution started mid-teardown would
+        // recreate the symlink the teardown is about to remove.
+        guard !isTeardownInFlight(for: config.id) else { return }
         mountResolutionTasks[config.id]?.cancel()
         let generation = connectionGenerations[config.id, default: 0]
         mountResolutionTasks[config.id] = Task { @MainActor [weak self] in
@@ -1052,6 +1067,18 @@ public final class ConnectionManager: ObservableObject {
             fileSystem: restoredFileSystem
         )
         try storage.saveConnections(restoredConnections)
+    }
+
+    /// Whether any `remove(_:)` call for this connection is still running.
+    func isRemovalInFlight(for id: UUID) -> Bool {
+        removalDepths[id] != nil
+    }
+
+    /// Whether a teardown for this connection is running, from the moment `disconnect`
+    /// starts one until `performDisconnect` returns. Symlink work must not begin inside
+    /// that window: `removeSymlink` runs in the middle of it.
+    func isTeardownInFlight(for id: UUID) -> Bool {
+        disconnectTasks[id] != nil
     }
 
     private func isCleanupComplete(for id: UUID) -> Bool {

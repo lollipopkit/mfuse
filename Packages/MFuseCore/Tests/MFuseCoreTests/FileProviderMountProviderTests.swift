@@ -89,6 +89,12 @@ final class FileProviderMountProviderTests: XCTestCase {
         XCTAssertFalse(FileProviderMountProvider.matchesManagedSymlinkFilename(uuid))
         XCTAssertFalse(FileProviderMountProvider.matchesManagedSymlinkFilename("-\(uuid)"))
         XCTAssertFalse(FileProviderMountProvider.matchesManagedSymlinkFilename("Backup-not-a-uuid"))
+        // Long enough to reach the UUID parse rather than stopping at the length check.
+        XCTAssertFalse(
+            FileProviderMountProvider.matchesManagedSymlinkFilename(
+                "Backup-" + String(repeating: "x", count: uuid.count)
+            )
+        )
     }
 
     func testLegacySymlinkBaseURLUsesSharedContainerLayout() throws {

@@ -146,6 +146,7 @@ struct ConnectionDetailView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
+                .buttonStyle(.bordered)
                 .help(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
                 .accessibilityLabel(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
                 .transition(.opacity)

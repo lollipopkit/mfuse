@@ -154,8 +154,15 @@ import SotoCore
 }
 
 private actor ProbeCoordinator {
+    private struct Waiter {
+        let id: Int
+        let threshold: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private var started = 0
-    private var waiters: [(threshold: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var nextWaiterID = 0
+    private var waiters: [Waiter] = []
 
     func probeStarted() {
         started += 1
@@ -166,11 +173,27 @@ private actor ProbeCoordinator {
         }
     }
 
-    func waitForProbes(count: Int) async {
+    /// Bounded: a probe that never starts must fail the test rather than hang the suite.
+    func waitForProbes(count: Int, timeoutNanoseconds: UInt64 = 10_000_000_000) async {
         guard started < count else { return }
-        await withCheckedContinuation { continuation in
-            waiters.append((count, continuation))
+
+        let id = nextWaiterID
+        nextWaiterID += 1
+        let timeout = Task { [weak self] in
+            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            await self?.timeOutWaiter(id, expected: count)
         }
+        await withCheckedContinuation { continuation in
+            waiters.append(Waiter(id: id, threshold: count, continuation: continuation))
+        }
+        timeout.cancel()
+    }
+
+    private func timeOutWaiter(_ id: Int, expected: Int) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        Issue.record("timed out waiting for \(expected) probe(s); \(started) started")
+        waiter.continuation.resume()
     }
 }
 

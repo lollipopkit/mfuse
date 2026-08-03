@@ -10,9 +10,13 @@ final class MockCredentialProvider: @unchecked Sendable, CredentialProvider {
     var deleteError: Error?
     var storeError: Error?
     var deleteRemovesCredentialBeforeThrow = false
+    var credentialLookupGate: TestGate?
 
     func credential(for connectionID: UUID) async throws -> Credential? {
-        credentials[connectionID]
+        if let credentialLookupGate {
+            await credentialLookupGate.wait()
+        }
+        return credentials[connectionID]
     }
 
     func store(_ credential: Credential, for connectionID: UUID) async throws {
@@ -620,9 +624,10 @@ final class ConnectionManagerTests: XCTestCase {
         await gate.waitUntilEntered()
 
         let removal = Task { @MainActor in try await manager.remove(config) }
-        for _ in 0..<5 {
-            await Task.yield()
-        }
+        // `remove` marks the id before it reaches the join with the in-flight teardown and
+        // does not suspend in between, so this is the signal that it is waiting — rather
+        // than yielding a fixed number of times and hoping.
+        await waitUntilRemovalStarts(for: config.id)
         await gate.open()
 
         await firstDisconnect.value
@@ -748,6 +753,92 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(manager.connections.isEmpty)
         let registrationsAfter = await mountProvider.ensureRegisteredInvocations.count
         XCTAssertEqual(registrationsAfter, registrationsBefore)
+    }
+
+    /// Two removals of the same connection can overlap. The one that finishes first must
+    /// not unmark the id, or a Mount slips in while the other is still tearing down.
+    func testRemovalStaysMarkedUntilTheLastOverlappingRemovalFinishes() async throws {
+        let config = ConnectionConfig(
+            name: "OverlappingRemoval",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-overlapping-removal-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+
+        // Holds the first removal past its cleanup, in the middle of the credential work.
+        let gate = TestGate()
+        credentialProvider.credentialLookupGate = gate
+        let firstRemoval = Task { @MainActor in try await manager.remove(config) }
+        await gate.waitUntilEntered()
+
+        // The second removal finds nothing left to clean up and fails at unregister, so it
+        // returns while the first is still running.
+        await mountProvider.setUnregisterShouldFail(true)
+        do {
+            try await manager.remove(config)
+            XCTFail("Expected the second removal to fail at unregister")
+        } catch {}
+
+        XCTAssertTrue(manager.isRemovalInFlight(for: config.id))
+
+        await gate.open()
+        try await firstRemoval.value
+        XCTAssertFalse(manager.isRemovalInFlight(for: config.id))
+    }
+
+    /// Waiting for the repairs already running only covers the start of the teardown; one
+    /// that begins later still races the `removeSymlink` in the middle of it.
+    func testMountRepairIsRefusedWhileATeardownIsRunning() async throws {
+        let config = ConnectionConfig(
+            name: "RepairAfterTeardownStarted",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-late-repair-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        let symlinkURL = testSymlinkBaseURL
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
+
+        // The gate sits after removeSymlink, so a repair starting now would recreate a
+        // link the teardown has already removed.
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+        let disconnect = Task { @MainActor in await manager.disconnect(config.id) }
+        await gate.waitUntilEntered()
+        let symlinkCreationsBefore = await mountProvider.createSymlinkInvocations.count
+
+        await manager.repairMountState(for: config.id)
+
+        let symlinkCreationsDuringTeardown = await mountProvider.createSymlinkInvocations.count
+        XCTAssertEqual(symlinkCreationsDuringTeardown, symlinkCreationsBefore)
+
+        await gate.open()
+        await disconnect.value
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: symlinkURL.path))
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
     }
 
     /// A registered domain that was disconnected behind the app's back still resolves to a
@@ -1438,6 +1529,18 @@ final class ConnectionManagerTests: XCTestCase {
             domainStates,
             [RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: true)]
         )
+    }
+
+    private func waitUntilRemovalStarts(
+        for id: UUID,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<1000 {
+            if manager.isRemovalInFlight(for: id) { return }
+            await Task.yield()
+        }
+        XCTFail("Removal never started", file: file, line: line)
     }
 
     private func waitForMountState(_ id: UUID) async -> MountState {
