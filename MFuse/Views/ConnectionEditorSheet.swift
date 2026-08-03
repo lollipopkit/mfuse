@@ -36,7 +36,9 @@ struct ConnectionEditorSheet: View {
     @State private var autoMountOnLaunch: Bool
     @State private var password: String = ""
     @State private var oauthCredential: Credential?
-    @State private var oauthToken: String = ""
+    /// The credential this mount was saved with, kept so a save cannot destroy the parts
+    /// of it the editor has no field for — Google Drive's refresh token above all.
+    @State private var storedCredential: Credential?
     @State private var oauthAccountName: String = ""
     @State private var oauthAccountEmail: String = ""
     @State private var privateKeyPath: String = ""
@@ -63,6 +65,7 @@ struct ConnectionEditorSheet: View {
     @State private var testResult: String?
     @State private var testSuccess = false
     @State private var didLoadStoredCredential = false
+    @State private var isLoadingStoredCredential = false
     @State private var currentTestTask: Task<Void, Never>?
     @State private var oauthAuthorizationTask: Task<Void, Never>?
     @State private var isAuthorizingOAuth = false
@@ -143,12 +146,15 @@ struct ConnectionEditorSheet: View {
                         }
                     }
                     .onChange(of: backendType) { oldType, newType in
-                        if !newType.usesHostBasedAddressing && oldType.usesHostBasedAddressing {
-                            // The port field is hidden from here on, so a value carried
-                            // over from the previous backend would be invisible yet still
-                            // reach the endpoint compatibility shim in S3FileSystem.
-                            port = "\(newType.defaultPort)"
-                        } else if port.isEmpty || UInt16(port) == nil {
+                        // Only a port the user actually chose survives the switch. A value
+                        // left at the previous backend's default is not a choice — carrying
+                        // it over silently mounted SFTP on 443 after a switch from S3 — and
+                        // one belonging to a backend whose port field is hidden is invisible
+                        // yet still reaches the endpoint shim in S3FileSystem.
+                        let currentPort = UInt16(port)
+                        if !newType.usesHostBasedAddressing
+                            || currentPort == nil
+                            || currentPort == oldType.defaultPort {
                             port = "\(newType.defaultPort)"
                         }
                         // Reset auth method if not supported
@@ -180,7 +186,11 @@ struct ConnectionEditorSheet: View {
                         TextField(AppL10n.string("editor.field.bucket", fallback: "Bucket"), text: $s3Bucket, prompt: Text(AppL10n.string("editor.prompt.bucket", fallback: "my-bucket")))
                         TextField(AppL10n.string("editor.field.region", fallback: "Region"), text: $s3Region, prompt: Text("us-east-1"))
                         TextField(AppL10n.string("editor.field.customEndpoint", fallback: "Custom Endpoint (optional)"), text: $s3Endpoint, prompt: Text("http://localhost:9000"))
-                        Toggle(AppL10n.string("editor.field.pathStyleAccess", fallback: "Path-Style Access"), isOn: $s3PathStyle)
+                        // Only offered with an endpoint: AWS requests always go out in
+                        // virtual-host form, so the toggle would do nothing there.
+                        if hasCustomS3Endpoint {
+                            Toggle(AppL10n.string("editor.field.pathStyleAccess", fallback: "Path-Style Access"), isOn: $s3PathStyle)
+                        }
                     } header: {
                         Text(AppL10n.string("editor.section.s3", fallback: "S3 Settings"))
                     } footer: {
@@ -337,8 +347,8 @@ struct ConnectionEditorSheet: View {
             // Buttons
             HStack {
                 Button(AppL10n.string("editor.action.testAccess", fallback: "Test Access")) { testConnection() }
-                    .disabled(isTesting || isAuthorizingOAuth || !isValid)
-                if isTesting || isAuthorizingOAuth {
+                    .disabled(isTesting || isAuthorizingOAuth || isLoadingStoredCredential || !isValid)
+                if isTesting || isAuthorizingOAuth || isLoadingStoredCredential {
                     ProgressView()
                         .controlSize(.small)
                 }
@@ -348,7 +358,10 @@ struct ConnectionEditorSheet: View {
                 Button(AppL10n.string("common.action.save", fallback: "Save")) { save() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!isValid)
+                    // Saving replaces the stored credential outright, and the fields start
+                    // empty: saving before the stored one has been read writes that
+                    // emptiness over a working password.
+                    .disabled(!isValid || isLoadingStoredCredential)
             }
             .padding()
         }
@@ -397,21 +410,32 @@ struct ConnectionEditorSheet: View {
 
     // MARK: - Actions
 
+    /// Build the config to save or test.
+    ///
+    /// Host and username are dropped for backends that address by endpoint or account:
+    /// the editor hides those fields, so whatever they still hold belongs to a backend
+    /// that was selected earlier and would otherwise be written into `connections.json`
+    /// and every File Provider bootstrap snapshot.
+    private func makeConfig(id: UUID) throws -> ConnectionConfig {
+        let usesHostBasedAddressing = backendType.usesHostBasedAddressing
+        return ConnectionConfig(
+            id: id,
+            name: name,
+            backendType: backendType,
+            host: usesHostBasedAddressing ? host : "",
+            port: UInt16(port) ?? backendType.defaultPort,
+            username: usesHostBasedAddressing ? username : "",
+            authMethod: authMethod,
+            remotePath: remotePath.isEmpty ? "/" : remotePath,
+            parameters: try buildParameters(),
+            autoMountOnLaunch: autoMountOnLaunch
+        )
+    }
+
     private func save() {
         do {
             let credential = try buildCredential()
-            let config = ConnectionConfig(
-                id: draftID,
-                name: name,
-                backendType: backendType,
-                host: host,
-                port: UInt16(port) ?? backendType.defaultPort,
-                username: username,
-                authMethod: authMethod,
-                remotePath: remotePath.isEmpty ? "/" : remotePath,
-                parameters: try buildParameters(),
-                autoMountOnLaunch: autoMountOnLaunch
-            )
+            let config = try makeConfig(id: draftID)
             onSave(config, credential)
         } catch {
             testResult = error.localizedDescription
@@ -426,18 +450,7 @@ struct ConnectionEditorSheet: View {
         currentTestTask = nil
         let credential: Credential
         do {
-            let parameters = try buildParameters()
-            let config = ConnectionConfig(
-                name: name,
-                backendType: backendType,
-                host: host,
-                port: UInt16(port) ?? backendType.defaultPort,
-                username: username,
-                authMethod: authMethod,
-                remotePath: remotePath.isEmpty ? "/" : remotePath,
-                parameters: parameters,
-                autoMountOnLaunch: autoMountOnLaunch
-            )
+            let config = try makeConfig(id: UUID())
             credential = try buildCredential()
 
             currentTestTask = Task {
@@ -510,7 +523,11 @@ struct ConnectionEditorSheet: View {
                 }
                 return oauthCredential
             }
-            return Credential(token: oauthToken.isEmpty ? nil : oauthToken)
+            // Google Drive has no token field in this sheet — sign-in happens after
+            // saving, and the refresh token lives in `password`. Reconstructing the
+            // credential from what the editor shows would drop it, leaving a mount that
+            // can never refresh; the stored one is passed through untouched instead.
+            return storedCredential ?? Credential()
         }
     }
 
@@ -518,8 +535,25 @@ struct ConnectionEditorSheet: View {
     private func loadStoredCredentialIfNeeded() async {
         guard !didLoadStoredCredential, let existingID else { return }
         didLoadStoredCredential = true
+        isLoadingStoredCredential = true
+        defer { isLoadingStoredCredential = false }
 
-        guard let credential = try? await credentialProvider.credential(for: existingID) else { return }
+        let credential: Credential?
+        do {
+            credential = try await credentialProvider.credential(for: existingID)
+        } catch {
+            // Saving replaces the stored credential outright, so a load this sheet
+            // silently swallowed would let an empty field wipe a working secret. Say so
+            // instead — Save stays available, but the user knows what it will write.
+            testResult = AppL10n.string(
+                "editor.error.loadStoredCredential",
+                fallback: "Could not read the saved credential: %@. Saving will replace it with what is entered here.",
+                error.localizedDescription
+            )
+            testSuccess = false
+            return
+        }
+        guard let credential else { return }
 
         switch authMethod {
         case .password:
@@ -540,8 +574,8 @@ struct ConnectionEditorSheet: View {
         case .oauth:
             if usesBundledOAuthFlow {
                 oauthCredential = credential
-            } else if oauthToken.isEmpty {
-                oauthToken = credential.token ?? ""
+            } else if storedCredential == nil {
+                storedCredential = credential
             }
         case .agent, .anonymous:
             break
@@ -551,7 +585,7 @@ struct ConnectionEditorSheet: View {
     private func clearCredentialState(except method: AuthMethod) {
         switch method {
         case .password:
-            oauthToken = ""
+            storedCredential = nil
             oauthCredential = nil
             oauthAccountName = ""
             oauthAccountEmail = ""
@@ -560,7 +594,7 @@ struct ConnectionEditorSheet: View {
             s3AccessKeyID = ""
             s3SecretAccessKey = ""
         case .publicKey:
-            oauthToken = ""
+            storedCredential = nil
             oauthCredential = nil
             oauthAccountName = ""
             oauthAccountEmail = ""
@@ -568,7 +602,7 @@ struct ConnectionEditorSheet: View {
             s3SecretAccessKey = ""
         case .agent, .anonymous:
             password = ""
-            oauthToken = ""
+            storedCredential = nil
             oauthCredential = nil
             oauthAccountName = ""
             oauthAccountEmail = ""
@@ -578,7 +612,7 @@ struct ConnectionEditorSheet: View {
             s3SecretAccessKey = ""
         case .accessKey:
             password = ""
-            oauthToken = ""
+            storedCredential = nil
             oauthCredential = nil
             oauthAccountName = ""
             oauthAccountEmail = ""
@@ -600,7 +634,9 @@ struct ConnectionEditorSheet: View {
             if !s3Bucket.isEmpty { params["bucket"] = s3Bucket }
             if s3Region != "us-east-1" { params["region"] = s3Region }
             if !s3Endpoint.isEmpty { params["endpoint"] = s3Endpoint }
-            if s3PathStyle { params["pathStyle"] = "true" }
+            // Persisted only where it has an effect, so a saved config never claims an
+            // addressing style the backend cannot apply.
+            if s3PathStyle && hasCustomS3Endpoint { params["pathStyle"] = "true" }
         case .webdav:
             if !webdavTLS { params["tls"] = "false" }
         case .smb:
@@ -711,6 +747,10 @@ struct ConnectionEditorSheet: View {
         return bookmarkData.base64EncodedString()
     }
 
+    private var hasCustomS3Endpoint: Bool {
+        !s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var usesBundledOAuthFlow: Bool {
         backendType == .dropbox || backendType == .oneDrive
     }
@@ -719,7 +759,7 @@ struct ConnectionEditorSheet: View {
         if usesBundledOAuthFlow {
             return oauthCredential?.token?.isEmpty == false
         }
-        return !oauthToken.isEmpty
+        return storedCredential?.token?.isEmpty == false
     }
 
     private var oauthAccountSummary: String {
@@ -739,9 +779,10 @@ struct ConnectionEditorSheet: View {
         oauthCredential = nil
         oauthAccountName = ""
         oauthAccountEmail = ""
-        if usesBundledOAuthFlow {
-            oauthToken = ""
-        }
+        // `storedCredential` deliberately survives: it is only ever emitted for a Google
+        // Drive mount, and the sheet cannot load it a second time, so clearing it here
+        // would let a round trip through the backend picker destroy a refresh token.
+        // Switching *auth method* does clear it — see `clearCredentialState(except:)`.
     }
 
     private func connectOAuthAccount() {

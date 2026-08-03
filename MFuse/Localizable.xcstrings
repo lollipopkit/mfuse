@@ -2248,6 +2248,65 @@
         }
       }
     },
+    "editor.error.loadStoredCredential" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not read the saved credential: %@. Saving will replace it with what is entered here."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer la credencial guardada: %@. Al guardar se reemplazará por lo introducido aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire l’identifiant enregistré : %@. L’enregistrement le remplacera par ce qui est saisi ici."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tidak dapat membaca kredensial tersimpan: %@. Menyimpan akan menggantinya dengan yang dimasukkan di sini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile leggere la credenziale salvata: %@. Il salvataggio la sostituirà con quanto inserito qui."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存された認証情報を読み込めませんでした: %@。保存すると、ここに入力した内容で置き換えられます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 자격 증명을 읽을 수 없습니다: %@. 저장하면 여기에 입력한 내용으로 대체됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取已保存的凭证：%@。保存将用此处输入的内容替换它。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取已儲存的憑證：%@。儲存將以此處輸入的內容取代它。"
+          }
+        }
+      }
+    },
     "editor.error.readPrivateKey" : {
       "extractionState" : "stale",
       "localizations" : {
