@@ -163,6 +163,9 @@ struct ConnectionEditorSheet: View {
                         }
                         clearOAuthAuthorizationState()
                     }
+                    // Locked while the stored credential is on its way: what it belongs
+                    // to must not move under it.
+                    .disabled(isLoadingStoredCredential)
                     Toggle(AppL10n.string("editor.field.autoMountOnAppLaunch", fallback: "Auto-Mount on App Launch"), isOn: $autoMountOnLaunch)
                 }
 
@@ -242,6 +245,7 @@ struct ConnectionEditorSheet: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                        .disabled(isLoadingStoredCredential)
                     }
 
                     switch authMethod {
@@ -538,6 +542,14 @@ struct ConnectionEditorSheet: View {
         isLoadingStoredCredential = true
         defer { isLoadingStoredCredential = false }
 
+        // The sheet stays on screen across this await, so what the credential belongs to
+        // has to be pinned before it. Applying it to a backend or method the user has
+        // since switched to is not merely wrong: a Google Drive refresh token lives in
+        // `password`, so a switch to SFTP would drop it into the password field — and the
+        // next save would store it as one.
+        let requestedBackendType = backendType
+        let requestedAuthMethod = authMethod
+
         let credential: Credential?
         do {
             credential = try await credentialProvider.credential(for: existingID)
@@ -554,6 +566,9 @@ struct ConnectionEditorSheet: View {
             return
         }
         guard let credential else { return }
+        guard backendType == requestedBackendType, authMethod == requestedAuthMethod else {
+            return
+        }
 
         switch authMethod {
         case .password:

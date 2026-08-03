@@ -176,8 +176,11 @@ public final class FileProviderMountProvider: MountProvider {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            // Domain and error identity are enough to diagnose this; the provider's
+            // message can carry paths and response detail, so it stays private.
+            let nsError = error as NSError
             Self.logger.warning(
-                "Removing the convenience symlink for \(config.domainIdentifier, privacy: .public) without a resolved mount URL: \(error.localizedDescription, privacy: .public)"
+                "Removing the convenience symlink for \(config.domainIdentifier, privacy: .public) without a resolved mount URL: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public) \(error.localizedDescription, privacy: .private)"
             )
             expectedDestinationURL = nil
         }

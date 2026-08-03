@@ -71,19 +71,12 @@ struct ContentView: View {
             showNewEditor()
         }
         .onReceive(NotificationCenter.default.publisher(for: .refreshConnections)) { _ in
-            if let config = selectedConnection {
-                let mountState = connectionManager.effectiveMountState(for: config.id)
-                if connectionManager.mountProvider != nil && mountState.isMounted {
-                    Task { @MainActor in
-                        do {
-                            try await connectionManager.mountProvider?.signalEnumerator(for: config)
-                        } catch {
-                            // A refresh that cannot reach the domain is exactly when the
-                            // row is showing a mount that is no longer there; swallowing
-                            // the failure left it looking mounted.
-                            await connectionManager.repairMountState(for: config.id)
-                        }
-                    }
+            // Only the id is carried across: the manager reads the connection, checks it
+            // is still the current attempt, and tracks the work so an edit, a removal or
+            // a teardown can cancel and wait for it.
+            if let id = selectedConnection?.id {
+                Task { @MainActor in
+                    await connectionManager.refreshMountedConnection(for: id)
                 }
             }
         }

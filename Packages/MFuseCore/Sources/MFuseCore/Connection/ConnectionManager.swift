@@ -48,6 +48,7 @@ public final class ConnectionManager: ObservableObject {
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var mountResolutionTasks: [UUID: Task<Void, Never>] = [:]
     private var mountRepairTasks: [UUID: Task<Void, Never>] = [:]
+    private var refreshTasks: [UUID: Task<Void, Never>] = [:]
     var staleDomainRemover: ((String) async throws -> Void)?
 
     /// Optional mount provider – when set, connect() activates a registered domain and disconnect() keeps it registered but disconnected.
@@ -153,6 +154,7 @@ public final class ConnectionManager: ObservableObject {
             // skipping the teardown lets a repair suspended inside `createSymlink` relink
             // the domain this method is about to unregister.
             || mountRepairTasks[config.id] != nil
+            || refreshTasks[config.id] != nil
             || fileSystems[config.id] != nil
         if shouldCleanupMount {
             await disconnect(config.id)
@@ -564,6 +566,9 @@ public final class ConnectionManager: ObservableObject {
         }
         reconnectTasks[id]?.cancel()
         reconnectTasks.removeValue(forKey: id)
+        // Before the symlink work below, because a refresh can start a repair on its way
+        // out — waiting for it here means that repair is already accounted for.
+        await cancelAndAwaitRefresh(for: id)
         await cancelAndAwaitSymlinkWork(for: id)
 
         let config = configOverride ?? connections.first(where: { $0.id == id })
@@ -649,6 +654,17 @@ public final class ConnectionManager: ObservableObject {
             logger.warning(
                 "Failed to restore the convenience symlink for \(config.domainIdentifier, privacy: .public) after removing a stale one: \(String(describing: error), privacy: .public)"
             )
+        }
+    }
+
+    /// Stop a refresh that would otherwise rewrite the bootstrap snapshot of a connection
+    /// being torn down, edited, or removed.
+    private func cancelAndAwaitRefresh(for id: UUID) async {
+        guard let task = refreshTasks[id] else { return }
+        task.cancel()
+        await task.value
+        if refreshTasks[id] == task {
+            refreshTasks.removeValue(forKey: id)
         }
     }
 
@@ -870,6 +886,7 @@ public final class ConnectionManager: ObservableObject {
             interruptedConnectionIDs.remove(removedConfig.id)
             reconnectTasks[removedConfig.id]?.cancel()
             reconnectTasks.removeValue(forKey: removedConfig.id)
+            await cancelAndAwaitRefresh(for: removedConfig.id)
             await cancelAndAwaitSymlinkWork(for: removedConfig.id)
         }
 
@@ -921,6 +938,55 @@ public final class ConnectionManager: ObservableObject {
             return .error(message)
         case .disconnected:
             return .unmounted
+        }
+    }
+
+    /// Re-enumerate a mounted connection, repairing its state when the domain cannot be
+    /// reached.
+    ///
+    /// Owned by the manager rather than the caller because `signalEnumerator` rewrites
+    /// the extension's bootstrap snapshot: a refresh holding a config captured before an
+    /// edit would put the old host back, and one still running after a removal would
+    /// write a snapshot for a domain that is gone. The config is therefore read at
+    /// execution time, checked against the generation, and tracked so teardown can cancel
+    /// and wait for it.
+    public func refreshMountedConnection(for id: UUID) async {
+        if let inFlight = refreshTasks[id] {
+            await inFlight.value
+            return
+        }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRefresh(for: id)
+            self.refreshTasks.removeValue(forKey: id)
+        }
+        refreshTasks[id] = task
+        await task.value
+    }
+
+    private func performRefresh(for id: UUID) async {
+        guard let config = connections.first(where: { $0.id == id }),
+              let mountProvider else {
+            return
+        }
+        guard !isTeardownInFlight(for: id), !isRemovalInFlight(for: id) else { return }
+        guard effectiveMountState(for: id).isMounted else { return }
+
+        let generation = connectionGenerations[id, default: 0]
+        do {
+            try await mountProvider.signalEnumerator(for: config)
+        } catch {
+            // A teardown that cancelled this refresh is already publishing its own state;
+            // repairing on the way out would fight it.
+            if error is CancellationError || Task.isCancelled { return }
+            guard isCurrentConnectionAttempt(for: id, generation: generation) else { return }
+            logger.warning(
+                "Failed to refresh \(config.domainIdentifier, privacy: .public): \(self.describe(error), privacy: .private)"
+            )
+            // Not reaching the domain is exactly when the row is still showing a mount
+            // that is no longer there.
+            await repairMountState(for: id)
         }
     }
 
@@ -1133,6 +1199,9 @@ public final class ConnectionManager: ObservableObject {
         guard let mountProvider else { return }
 
         let wasMounted = previousConfig.map { effectiveMountState(for: $0.id).isMounted } ?? false
+        // A refresh in flight is holding the config from before this edit, and its
+        // `signalEnumerator` would write that one back over the snapshot registered here.
+        await cancelAndAwaitRefresh(for: config.id)
         try await mountProvider.ensureRegistered(config: config)
 
         if wasMounted {
@@ -1379,6 +1448,7 @@ public final class ConnectionManager: ObservableObject {
             && mountIsStopped
             && mountResolutionTasks[id] == nil
             && mountRepairTasks[id] == nil
+            && refreshTasks[id] == nil
             && fileSystems[id] == nil
     }
 

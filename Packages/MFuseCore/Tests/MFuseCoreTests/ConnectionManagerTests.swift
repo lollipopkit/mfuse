@@ -165,6 +165,7 @@ actor MockMountProvider: MountProvider {
     var staleDomainsRemoved: [String] = []
     var unmountShouldFail = false
     var unregisterShouldFail = false
+    var signalShouldFail = false
     var removeSymlinkShouldFail = false
     var disconnectGate: TestGate?
     var createSymlinkGate: TestGate?
@@ -269,8 +270,15 @@ actor MockMountProvider: MountProvider {
         }
     }
 
+    func setSignalShouldFail(_ shouldFail: Bool) {
+        signalShouldFail = shouldFail
+    }
+
     func signalEnumerator(for config: ConnectionConfig) async throws {
         signalInvocations.append(config.domainIdentifier)
+        if signalShouldFail {
+            throw MountError.domainNotFound(config.domainIdentifier)
+        }
     }
 
     func mountURL(for config: ConnectionConfig) async throws -> URL? {
@@ -928,6 +936,76 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(connectCallCount, 1)
         let reconnectInvocations = await mountProvider.reconnectInvocations
         XCTAssertEqual(reconnectInvocations, [config.domainIdentifier])
+    }
+
+    /// Refresh is the manager's own operation, so it decides on the state at the moment it
+    /// runs — `signalEnumerator` rewrites the extension's bootstrap snapshot, and a view
+    /// firing it from a captured config would do that for a connection that is no longer
+    /// mounted, or no longer looks like the captured one.
+    func testRefreshIsSkippedOnceTheConnectionIsUnmounted() async throws {
+        let config = ConnectionConfig(
+            name: "RefreshAfterUnmount",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("refresh-skip-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        await manager.refreshMountedConnection(for: config.id)
+        var signalInvocations = await mountProvider.signalInvocations
+        XCTAssertEqual(signalInvocations, [config.domainIdentifier])
+
+        await manager.disconnect(config.id)
+        await mountProvider.clearInvocations()
+
+        await manager.refreshMountedConnection(for: config.id)
+        signalInvocations = await mountProvider.signalInvocations
+        XCTAssertTrue(signalInvocations.isEmpty, "an unmounted connection has nothing to refresh")
+    }
+
+    /// A refresh that cannot reach the domain is exactly when the row is still showing a
+    /// mount that is no longer there.
+    func testRefreshFailureReconcilesTheMountState() async throws {
+        let config = ConnectionConfig(
+            name: "RefreshFailure",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("refresh-failure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        let symlinkURL = testSymlinkBaseURL
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
+
+        // The domain went away behind the app's back.
+        await mountProvider.setSignalShouldFail(true)
+        await mountProvider.setDomainStates([])
+
+        await manager.refreshMountedConnection(for: config.id)
+
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: symlinkURL.path))
     }
 
     /// A connect that has not published its filesystem yet still owns one, so a teardown
