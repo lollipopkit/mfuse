@@ -165,7 +165,22 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func removeSymlink(for config: ConnectionConfig) async throws {
-        let expectedDestinationURL = try await resolveMountURL(for: config)
+        // A failed lookup must not abort the cleanup. The states that need it most — a
+        // provider failure mid-teardown, a domain damaged behind the app's back — are
+        // exactly the ones where the URL cannot be resolved, and giving up there leaves a
+        // link pointing into CloudStorage forever. Without a destination to match,
+        // removal falls back to the filename plus ownership test below.
+        let expectedDestinationURL: URL?
+        do {
+            expectedDestinationURL = try await resolveMountURL(for: config)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Self.logger.warning(
+                "Removing the convenience symlink for \(config.domainIdentifier, privacy: .public) without a resolved mount URL: \(error.localizedDescription, privacy: .public)"
+            )
+            expectedDestinationURL = nil
+        }
         let symlinkURL = Self.symlinkURL(for: config, baseDir: symlinkBaseURL)
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
         try cleanupLegacyShortcutIfNeeded(for: config)

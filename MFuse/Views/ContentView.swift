@@ -74,8 +74,15 @@ struct ContentView: View {
             if let config = selectedConnection {
                 let mountState = connectionManager.effectiveMountState(for: config.id)
                 if connectionManager.mountProvider != nil && mountState.isMounted {
-                    Task {
-                        try? await connectionManager.mountProvider?.signalEnumerator(for: config)
+                    Task { @MainActor in
+                        do {
+                            try await connectionManager.mountProvider?.signalEnumerator(for: config)
+                        } catch {
+                            // A refresh that cannot reach the domain is exactly when the
+                            // row is showing a mount that is no longer there; swallowing
+                            // the failure left it looking mounted.
+                            await connectionManager.repairMountState(for: config.id)
+                        }
                     }
                 }
             }

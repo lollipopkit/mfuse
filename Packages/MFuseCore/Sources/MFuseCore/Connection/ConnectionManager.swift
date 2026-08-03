@@ -354,7 +354,11 @@ public final class ConnectionManager: ObservableObject {
 
     private func performConnect(_ id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }) else { return }
-        let localGeneration = connectionGenerations[id, default: 0]
+        // A new attempt is a new generation. Teardowns advanced it so their state could
+        // not be overwritten by work they interrupted; a connect needs the same, or a
+        // `syncMounts` holding a snapshot from before this attempt still passes its own
+        // fence and unmounts the domain this attempt just brought up.
+        let localGeneration = advanceConnectionGeneration(for: id)
         interruptedConnectionIDs.remove(id)
         states[id] = .connecting
         // effectiveMountState gives a mount error precedence over the handshake, so a
@@ -430,7 +434,7 @@ public final class ConnectionManager: ObservableObject {
             if !isCurrentConnectionAttempt(for: id, generation: localGeneration)
                 || interruptedConnectionIDs.contains(id)
                 || Task.isCancelled {
-                try? await fs.disconnect()
+                await discardFileSystem(fs, for: id, context: "abandoned connect attempt")
                 return
             }
             fileSystems[id] = fs
@@ -446,7 +450,7 @@ public final class ConnectionManager: ObservableObject {
                     guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
                           !interruptedConnectionIDs.contains(id) else {
                         try? await mp.disconnect(config: config)
-                        try? await fs.disconnect()
+                        await discardFileSystem(fs, for: id, context: "abandoned mount attempt")
                         return
                     }
                     if let disconnectFailure = await disconnectMountedFileSystem(
@@ -549,8 +553,14 @@ public final class ConnectionManager: ObservableObject {
 
     private func performDisconnect(_ id: UUID, using configOverride: ConnectionConfig?) async {
         advanceConnectionGeneration(for: id)
-        if connectTasks[id] != nil {
+        // Awaited, not just flagged: an attempt still running owns a filesystem this
+        // teardown cannot see — it is not in `fileSystems` until the attempt publishes it
+        // — so returning now would report a cleanup that has not happened, and `remove`
+        // would clear the row while a session was still being opened.
+        if let connectTask = connectTasks[id] {
             interruptedConnectionIDs.insert(id)
+            connectTask.cancel()
+            await connectTask.value
         }
         reconnectTasks[id]?.cancel()
         reconnectTasks.removeValue(forKey: id)
@@ -617,6 +627,28 @@ public final class ConnectionManager: ObservableObject {
         if let config {
             setMountState(.unmounted, for: config)
             onStateChange?(config, .disconnected)
+        }
+    }
+
+    /// Remove the convenience symlink for a connection that is no longer mounted, and put
+    /// it back if a mount landed while the removal was suspended.
+    ///
+    /// `removeSymlink` resolves the mount URL first, so it suspends — and a `connect()`
+    /// that completes inside that window creates exactly the link this call then deletes,
+    /// leaving a mounted domain with no shortcut. The published mount state is the
+    /// arbiter: only a mount that is current after the removal is restored.
+    private func removeSymlinkPreservingCurrentMount(
+        for config: ConnectionConfig,
+        using mountProvider: any MountProvider
+    ) async {
+        try? await mountProvider.removeSymlink(for: config)
+        guard mountState(for: config.id).isMounted else { return }
+        do {
+            _ = try await mountProvider.createSymlink(for: config)
+        } catch {
+            logger.warning(
+                "Failed to restore the convenience symlink for \(config.domainIdentifier, privacy: .public) after removing a stale one: \(String(describing: error), privacy: .public)"
+            )
         }
     }
 
@@ -938,12 +970,11 @@ public final class ConnectionManager: ObservableObject {
                 if mountState(for: id).isMounted {
                     // The convenience link outlives the domain otherwise, still pointing
                     // at a CloudStorage location nothing serves — startup sync and normal
-                    // disconnect both remove it for exactly this transition.
-                    try? await mountProvider.removeSymlink(for: config)
-                    guard isCurrentConnectionAttempt(for: id, generation: generation) else {
-                        return
-                    }
+                    // disconnect both remove it for exactly this transition. State first,
+                    // link second: the removal suspends, and the helper reads the state to
+                    // decide whether a mount landed in the meantime.
                     setMountState(.unmounted, for: config)
+                    await removeSymlinkPreservingCurrentMount(for: config, using: mountProvider)
                 }
                 return
             }
@@ -1006,7 +1037,8 @@ public final class ConnectionManager: ObservableObject {
             for config in connections {
                 let generation = generations[config.id] ?? connectionGenerations[config.id, default: 0]
                 guard isCurrentConnectionAttempt(for: config.id, generation: generation),
-                      !isTeardownInFlight(for: config.id) else {
+                      !isTeardownInFlight(for: config.id),
+                      connectTasks[config.id] == nil else {
                     continue
                 }
                 if let domainState = domainStatesByID[config.domainIdentifier] {
@@ -1019,7 +1051,7 @@ public final class ConnectionManager: ObservableObject {
                             continue
                         }
                         setMountState(.unmounted, for: config)
-                        try? await mp.removeSymlink(for: config)
+                        await removeSymlinkPreservingCurrentMount(for: config, using: mp)
                         continue
                     }
 
@@ -1056,7 +1088,7 @@ public final class ConnectionManager: ObservableObject {
                         states[config.id] = errorState
                         onStateChange?(config, errorState)
                         setMountState(.error(desc), for: config)
-                        try? await mp.removeSymlink(for: config)
+                        await removeSymlinkPreservingCurrentMount(for: config, using: mp)
                     }
                 } else {
                     await cancelAndAwaitSymlinkWork(for: config.id)
@@ -1064,7 +1096,7 @@ public final class ConnectionManager: ObservableObject {
                         continue
                     }
                     setMountState(.unmounted, for: config)
-                    try? await mp.removeSymlink(for: config)
+                    await removeSymlinkPreservingCurrentMount(for: config, using: mp)
                 }
             }
         } catch {
@@ -1362,6 +1394,27 @@ public final class ConnectionManager: ObservableObject {
             return false
         }
         return connections.contains(where: { $0.id == id })
+    }
+
+    /// Drop a filesystem built for an attempt nobody is waiting for.
+    ///
+    /// A failure here used to be swallowed together with the last reference to it, which
+    /// leaked a session that is still open on the remote. Publishing it instead makes the
+    /// next connect or teardown retry the disconnect, and makes `isCleanupComplete`
+    /// report the connection as not yet clean rather than silently losing it.
+    private func discardFileSystem(
+        _ fileSystem: any RemoteFileSystem,
+        for id: UUID,
+        context: String
+    ) async {
+        do {
+            try await fileSystem.disconnect()
+        } catch {
+            logger.error(
+                "Failed to disconnect the filesystem of an \(context, privacy: .public) for \(id.uuidString, privacy: .private): \(self.describe(error), privacy: .public)"
+            )
+            fileSystems[id] = fileSystem
+        }
     }
 
     private func disconnectMountedFileSystem(

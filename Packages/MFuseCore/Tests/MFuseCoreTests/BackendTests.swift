@@ -152,6 +152,58 @@ final class BackendTypeTests: XCTestCase {
         }
     }
 
+    /// Every key of every catalog, not the handful the other tests name.
+    ///
+    /// The spot checks above cover what their assertions spell out; a key nobody listed —
+    /// `mount.error.mountFailed`, say — could be deleted from one locale, or have its
+    /// `%@` turned into `%d`, and the suite would stay green. The base locale is the
+    /// contract: every other bundle must carry the same keys with the same argument
+    /// signature, since `String(format:)` reads them positionally at runtime.
+    func testEveryLocalizedKeyMatchesTheBaseLocaleSignature() throws {
+        let baseLocale = "en"
+        let otherLocales = ["es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"]
+        let baseStrings = try localizedStrings(for: baseLocale)
+        XCTAssertFalse(baseStrings.isEmpty, "the \(baseLocale) catalog is empty")
+
+        for locale in otherLocales {
+            let strings = try localizedStrings(for: locale)
+            let missing = Set(baseStrings.keys).subtracting(strings.keys).sorted()
+            XCTAssertTrue(missing.isEmpty, "\(locale).lproj is missing: \(missing.joined(separator: ", "))")
+            let extra = Set(strings.keys).subtracting(baseStrings.keys).sorted()
+            XCTAssertTrue(extra.isEmpty, "\(locale).lproj has keys the base locale does not: \(extra.joined(separator: ", "))")
+
+            for (key, template) in strings {
+                guard let baseTemplate = baseStrings[key] else { continue }
+                XCTAssertFalse(
+                    template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    "\(key) is empty for \(locale)"
+                )
+                assertFormatSpecifiers(
+                    in: template,
+                    expectedCount: formatSpecifiers(in: baseTemplate).count,
+                    key: key,
+                    locale: locale
+                )
+            }
+        }
+    }
+
+    private func localizedStrings(for locale: String) throws -> [String: String] {
+        let url = try XCTUnwrap(
+            Bundle.module.url(
+                forResource: "Localizable",
+                withExtension: "strings",
+                subdirectory: nil,
+                localization: locale
+            ),
+            "no Localizable.strings for \(locale)"
+        )
+        return try XCTUnwrap(
+            NSDictionary(contentsOf: url) as? [String: String],
+            "\(locale).lproj/Localizable.strings is not a string catalog"
+        )
+    }
+
     func testDefaultPort() {
         XCTAssertEqual(BackendType.sftp.defaultPort, 22)
         XCTAssertEqual(BackendType.s3.defaultPort, 443)
@@ -271,6 +323,21 @@ final class BackendTypeTests: XCTestCase {
     /// Counting `%` says nothing about which argument ends up where: a translation that
     /// writes `%1$@` twice, renumbers the arguments, or swaps `%@` for `%d` still passes
     /// a count check and then drops — or misreads — an argument at runtime.
+    /// The format specifiers of a template, in order: `(position, conversion)`, where
+    /// `position` is nil for an unnumbered `%@`.
+    private func formatSpecifiers(in template: String) -> [(position: Int?, conversion: String)] {
+        // `%%` is an escaped percent, not a placeholder, so it is consumed first.
+        let pattern = try! NSRegularExpression(pattern: "%%|%(?:(\\d+)\\$)?([@a-zA-Z])")
+        let range = NSRange(template.startIndex..<template.endIndex, in: template)
+        return pattern.matches(in: template, range: range).compactMap { match in
+            guard let conversionRange = Range(match.range(at: 2), in: template) else {
+                return nil
+            }
+            let position = Range(match.range(at: 1), in: template).flatMap { Int(template[$0]) }
+            return (position: position, conversion: String(template[conversionRange]))
+        }
+    }
+
     private func assertFormatSpecifiers(
         in template: String,
         expectedCount: Int,
@@ -279,12 +346,10 @@ final class BackendTypeTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let pattern = try! NSRegularExpression(pattern: "%(?:(\\d+)\\$)?([@a-zA-Z])")
-        let range = NSRange(template.startIndex..<template.endIndex, in: template)
-        let matches = pattern.matches(in: template, range: range)
+        let specifiers = formatSpecifiers(in: template)
 
         XCTAssertEqual(
-            matches.count,
+            specifiers.count,
             expectedCount,
             "\(key) has the wrong number of placeholders for \(locale)",
             file: file,
@@ -292,17 +357,16 @@ final class BackendTypeTests: XCTestCase {
         )
 
         var positions: [Int] = []
-        for (offset, match) in matches.enumerated() {
-            let conversion = String(template[Range(match.range(at: 2), in: template)!])
+        for (offset, specifier) in specifiers.enumerated() {
             XCTAssertEqual(
-                conversion,
+                specifier.conversion,
                 "@",
-                "\(key) uses %\(conversion) instead of a string placeholder for \(locale)",
+                "\(key) uses %\(specifier.conversion) instead of a string placeholder for \(locale)",
                 file: file,
                 line: line
             )
-            if let positionRange = Range(match.range(at: 1), in: template) {
-                positions.append(Int(template[positionRange])!)
+            if let position = specifier.position {
+                positions.append(position)
             } else {
                 // An unnumbered placeholder consumes arguments in order, which is only
                 // unambiguous when it is the sole one.
@@ -319,7 +383,7 @@ final class BackendTypeTests: XCTestCase {
 
         XCTAssertEqual(
             positions.sorted(),
-            Array(1...max(expectedCount, 1)),
+            expectedCount == 0 ? [] : Array(1...expectedCount),
             "\(key) does not map each argument exactly once for \(locale)",
             file: file,
             line: line

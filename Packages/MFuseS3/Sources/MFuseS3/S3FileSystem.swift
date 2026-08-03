@@ -24,8 +24,12 @@ public actor S3FileSystem: RemoteFileSystem {
     /// build a second client that overwrites — and leaks — the first.
     private var connectTask: Task<Void, Error>?
     /// Callers waiting on someone else's `connectTask`, keyed so each can be resumed —
-    /// or cancelled — on its own. See `waitForConnectAttempt(_:)`.
-    private var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+    /// or cancelled — on its own, and tagged with the attempt they joined.
+    ///
+    /// `disconnect()` clears `connectTask` while its attempt is still unwinding, so a
+    /// replacement attempt can be registered before the old one finishes: without the
+    /// tag, the old attempt's failure would be handed to callers waiting on the new one.
+    private var connectWaiters: [UUID: (task: Task<Void, Error>, continuation: CheckedContinuation<Void, Error>)] = [:]
 
     /// Test seam: replaces the connectivity probe so a connection attempt can be held at
     /// the exact suspension point where `disconnect()` interleaves. Never set in production.
@@ -103,10 +107,10 @@ public actor S3FileSystem: RemoteFileSystem {
             } catch {
                 // Runs before the `defer` above clears `connectTask`, so a caller that
                 // joins cannot observe a live attempt whose result was already handed out.
-                resumeConnectWaiters(with: .failure(error))
+                resumeConnectWaiters(of: task, with: .failure(error))
                 throw error
             }
-            resumeConnectWaiters(with: .success(()))
+            resumeConnectWaiters(of: task, with: .success(()))
             return
         }
     }
@@ -131,7 +135,7 @@ public actor S3FileSystem: RemoteFileSystem {
                     // registered, so a cancellation that lands first is answered here.
                     continuation.resume(throwing: CancellationError())
                 } else if connectTask == task {
-                    connectWaiters[waiterID] = continuation
+                    connectWaiters[waiterID] = (task: task, continuation: continuation)
                 } else {
                     joined = false
                     continuation.resume()
@@ -144,14 +148,16 @@ public actor S3FileSystem: RemoteFileSystem {
     }
 
     private func cancelConnectWaiter(_ waiterID: UUID) {
-        connectWaiters.removeValue(forKey: waiterID)?.resume(throwing: CancellationError())
+        connectWaiters.removeValue(forKey: waiterID)?.continuation.resume(throwing: CancellationError())
     }
 
-    private func resumeConnectWaiters(with result: Result<Void, Error>) {
-        let waiters = connectWaiters
-        connectWaiters.removeAll()
-        for continuation in waiters.values {
-            continuation.resume(with: result)
+    private func resumeConnectWaiters(of task: Task<Void, Error>, with result: Result<Void, Error>) {
+        let waiters = connectWaiters.filter { $0.value.task == task }
+        for waiterID in waiters.keys {
+            connectWaiters.removeValue(forKey: waiterID)
+        }
+        for waiter in waiters.values {
+            waiter.continuation.resume(with: result)
         }
     }
 
@@ -175,7 +181,11 @@ public actor S3FileSystem: RemoteFileSystem {
 
         let client = AWSClient(credentialProvider: .static(accessKeyId: keyID, secretAccessKey: secret))
 
-        var serviceConfig: S3?
+        // Path style only reaches the wire for a custom endpoint: Soto's S3 middleware
+        // rewrites every request to an `amazonaws.com` host into virtual-host form
+        // whatever the options say, so there is nothing to pass on the AWS path. The
+        // editor offers the toggle only alongside an endpoint for the same reason.
+        let serviceConfig: S3
         if let endpoint = customEndpoint, !endpoint.isEmpty {
             serviceConfig = S3(
                 client: client,
@@ -196,7 +206,7 @@ public actor S3FileSystem: RemoteFileSystem {
             } else {
                 // Test connectivity by listing with max 1 key
                 let request = S3.ListObjectsV2Request(bucket: bucket, maxKeys: 1)
-                _ = try await serviceConfig!.listObjectsV2(request)
+                _ = try await serviceConfig.listObjectsV2(request)
             }
         } catch {
             await Self.shutdown(client)

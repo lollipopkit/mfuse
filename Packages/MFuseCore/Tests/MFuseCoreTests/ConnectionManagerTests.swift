@@ -930,6 +930,47 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(reconnectInvocations, [config.domainIdentifier])
     }
 
+    /// A connect that has not published its filesystem yet still owns one, so a teardown
+    /// that returns before the attempt unwinds reports a cleanup that has not happened —
+    /// and `remove` would clear the row while a session was still being opened.
+    func testDisconnectWaitsForAnInFlightConnectToUnwind() async throws {
+        let config = ConnectionConfig(
+            name: "TeardownDuringConnect",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let fileSystem = MockFileSystem()
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in fileSystem }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        // Holds the attempt inside the credential lookup, before it can build — let alone
+        // publish — a filesystem. The gate ignores cancellation, so only the teardown
+        // actually waiting for the attempt lets this test finish in order.
+        let gate = TestGate()
+        credentialProvider.credentialLookupGate = gate
+        let attempt = Task { @MainActor in await manager.connect(config.id) }
+        await gate.waitUntilEntered()
+
+        let teardown = Task { @MainActor in await manager.disconnect(config.id) }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        XCTAssertFalse(teardown.isCancelled)
+        XCTAssertEqual(manager.state(for: config.id), .connecting)
+
+        await gate.open()
+        await teardown.value
+        await attempt.value
+
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        XCTAssertNil(manager.fileSystem(for: config.id))
+        let connectCallCount = await fileSystem.connectCallCount
+        XCTAssertEqual(connectCallCount, 0, "the interrupted attempt must not open a session")
+    }
+
     /// A cancelled attempt publishes no final state of its own, and `.connecting` is also
     /// what makes every later connect return at the deduplication guard — so leaving it
     /// behind pins the row until the app restarts.

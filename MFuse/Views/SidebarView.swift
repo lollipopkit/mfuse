@@ -146,11 +146,13 @@ struct SidebarView: View {
                         }
                     }
                 } catch {
+                    // Localized, not `String(describing:)`: the manager's errors are
+                    // `LocalizedError`, and the raw enum spelling is what the user saw.
                     let message = AppL10n.string(
                         "sidebar.error.removeMount",
                         fallback: "Failed to remove mount %@: %@",
-                        config.id.uuidString,
-                        String(describing: error)
+                        config.name,
+                        error.localizedDescription
                     )
                     logger.error(
                         "Failed to remove mount for connection \(config.id.uuidString, privacy: .private): \(String(describing: error), privacy: .private)"

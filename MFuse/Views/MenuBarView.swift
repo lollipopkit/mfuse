@@ -130,13 +130,12 @@ struct MenuBarView: View {
 
             Button {
                 Task {
-                    // Mounting rows are included: disconnect interrupts an in-flight
-                    // connect, and skipping them left the batch finishing with mounts
-                    // that came up moments later.
-                    let configsToUnmount = connectionManager.connections.filter {
-                        let state = connectionManager.effectiveMountState(for: $0.id)
-                        return state.isMounted || state.isMounting
-                    }
+                    // Every connection, not just the ones that look mounted right now: a
+                    // Mount All started moments earlier may not have reached `.connecting`
+                    // for a given row yet, and filtering on the state observed here let
+                    // that row come up after the later Unmount All had finished.
+                    // `disconnect` is a no-op for anything already torn down.
+                    let configsToUnmount = connectionManager.connections
                     await withTaskGroup(of: Void.self) { group in
                         for config in configsToUnmount {
                             group.addTask {
