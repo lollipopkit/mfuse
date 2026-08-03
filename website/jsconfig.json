@@ -17,10 +17,14 @@
      */
     "sourceMap": true,
     "esModuleInterop": true,
-    "baseUrl": ".",
+    /**
+     * Relative, and without `baseUrl`: TypeScript 7 removed the option and rejects
+     * non-relative path targets, so the old form made every `tsc` run fail on the
+     * config before it read a single source file.
+     */
     "paths": {
-      "$lib": ["src/lib"],
-      "$lib/*": ["src/lib/*"]
+      "$lib": ["./src/lib"],
+      "$lib/*": ["./src/lib/*"]
     },
     "types": ["vite/client"],
     "skipLibCheck": true,

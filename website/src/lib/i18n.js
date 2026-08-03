@@ -2,16 +2,33 @@ import { baseLocale, locales as generatedLocales } from '../i18n/i18n-util'
 
 export const defaultLocale = baseLocale
 
-export const locales = [
+/** @type {{ code: import('../i18n/i18n-types').Locales, label: string }[]} */
+const declaredLocales = [
   { code: 'en', label: 'English' },
   { code: 'zh-CN', label: '简体中文' },
-].filter((locale) => generatedLocales.includes(locale.code))
+]
+
+export const locales = declaredLocales.filter((locale) => generatedLocales.includes(locale.code))
 
 export const localeStorageKey = 'mfuse.website.locale'
 
+/**
+ * Narrows an arbitrary string to a locale the generated bundle actually has.
+ *
+ * @param {string} locale
+ * @returns {locale is import('../i18n/i18n-types').Locales}
+ */
+function isGeneratedLocale(locale) {
+  return /** @type {readonly string[]} */ (generatedLocales).includes(locale)
+}
+
+/**
+ * @param {string | null | undefined} locale
+ * @returns {import('../i18n/i18n-types').Locales}
+ */
 export function normalizeLocale(locale) {
   if (!locale) return defaultLocale
-  if (generatedLocales.includes(locale)) return locale
+  if (isGeneratedLocale(locale)) return locale
 
   const lowerLocale = locale.toLowerCase()
   if (lowerLocale.startsWith('zh')) return 'zh-CN'
@@ -31,6 +48,7 @@ export function getInitialLocale() {
   return normalizeLocale(navigator.languages?.[0] || navigator.language)
 }
 
+/** @param {string | null | undefined} locale */
 export function syncLocaleToUrl(locale) {
   const url = new URL(window.location.href)
   url.searchParams.set('lang', normalizeLocale(locale))

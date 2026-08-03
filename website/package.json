@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "typesafe-i18n": "typesafe-i18n --no-watch",
-    "build": "bun install --frozen-lockfile && vite build",
+    "check": "tsc --noEmit -p jsconfig.json",
+    "build": "bun install --frozen-lockfile && bun run check && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
