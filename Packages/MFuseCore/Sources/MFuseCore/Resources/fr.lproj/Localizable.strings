@@ -43,6 +43,8 @@
 "connectionManager.error.cleanupFailed" = "Impossible de nettoyer la connexion %@ avant sa suppression";
 "connectionManager.error.restoreRemovedConnection" = "Impossible de restaurer la connexion supprimée : %@";
 "connectionManager.error.restoreCredential" = "Impossible de restaurer l’identifiant : %@";
+"connectionManager.error.restoreRegistration" = "Impossible de restaurer le domaine File Provider : %@";
+"connectionManager.error.removeWithRestoreFailures" = "Impossible de supprimer la connexion %1$@ : %2$@. %3$@";
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "Impossible de supprimer l’identifiant pour la connexion %1$@ : %2$@. %3$@";
 "connectionManager.error.deleteCredentialRecovered" = "Impossible de supprimer l’identifiant pour la connexion %1$@ ; la connexion et l’identifiant ont été restaurés pour réessayer : %2$@";
 "connectionManager.error.unsupportedBackend" = "Backend non pris en charge : %@";

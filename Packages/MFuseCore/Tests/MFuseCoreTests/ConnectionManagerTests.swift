@@ -212,6 +212,17 @@ actor MockMountProvider: MountProvider {
         createSymlinkGate = gate
     }
 
+    /// Lets a test assert on what happened after a setup phase it does not care about.
+    func clearInvocations() {
+        ensureRegisteredInvocations = []
+        unregisterInvocations = []
+        reconnectInvocations = []
+        disconnectInvocations = []
+        signalInvocations = []
+        createSymlinkInvocations = []
+        removeSymlinkInvocations = []
+    }
+
     func ensureRegistered(config: ConnectionConfig) async throws {
         ensureRegisteredInvocations.append(config.domainIdentifier)
         registeredDomainIDs.insert(config.domainIdentifier)
@@ -782,19 +793,26 @@ final class ConnectionManagerTests: XCTestCase {
         let firstRemoval = Task { @MainActor in try await manager.remove(config) }
         await gate.waitUntilEntered()
 
-        // The second removal finds nothing left to clean up and fails at unregister, so it
-        // returns while the first is still running.
-        await mountProvider.setUnregisterShouldFail(true)
-        do {
-            try await manager.remove(config)
-            XCTFail("Expected the second removal to fail at unregister")
-        } catch {}
+        // The second removal joins the first instead of running its own pass: each pass
+        // rolls back to the state it captured on entry, so one that started while the
+        // other was suspended could restore the connection the other just removed.
+        let secondRemoval = Task { @MainActor in try await manager.remove(config) }
+        // Let it reach the join before the first removal is released: it parks on the
+        // first as soon as its body starts, which takes one hop onto the main actor.
+        for _ in 0..<10 {
+            await Task.yield()
+        }
 
         XCTAssertTrue(manager.isRemovalInFlight(for: config.id))
 
         await gate.open()
         try await firstRemoval.value
+        try await secondRemoval.value
         XCTAssertFalse(manager.isRemovalInFlight(for: config.id))
+        XCTAssertTrue(manager.connections.isEmpty)
+        // One pass, not two: the join reports the first removal's outcome.
+        let unregisterInvocations = await mountProvider.unregisterInvocations
+        XCTAssertEqual(unregisterInvocations, [config.domainIdentifier])
     }
 
     /// Waiting for the repairs already running only covers the start of the teardown; one
@@ -863,12 +881,129 @@ final class ConnectionManagerTests: XCTestCase {
         let mountedState = await waitForMountState(config.id)
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
 
+        let symlinkURL = testSymlinkBaseURL
+            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
+
         await mountProvider.setDomainStates([
             RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: true)
         ])
         await manager.repairMountState(for: config.id)
 
         XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+        // The shortcut has to go with the state it reflected, or ~/MFuse keeps a link
+        // into a CloudStorage location nothing serves.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: symlinkURL.path))
+    }
+
+    /// A successful mount deliberately leaves `ConnectionState` at `.disconnected` — the
+    /// extension owns the session — so a retry loop that reads the connection state sees
+    /// every mounted domain as a failure and remounts it on every attempt.
+    func testReconnectStopsOnceTheDomainIsMounted() async throws {
+        let config = ConnectionConfig(
+            name: "ReconnectMounted",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let fileSystem = MockFileSystem()
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in fileSystem }
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reconnect-mounted-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        manager.reconnect(config.id)
+
+        // Long enough to cover the first retry (1s) and the second (2s after it).
+        try await Task.sleep(nanoseconds: 3_500_000_000)
+
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .mounted(path: mountURL.path))
+        let connectCallCount = await fileSystem.connectCallCount
+        XCTAssertEqual(connectCallCount, 1)
+        let reconnectInvocations = await mountProvider.reconnectInvocations
+        XCTAssertEqual(reconnectInvocations, [config.domainIdentifier])
+    }
+
+    /// A cancelled attempt publishes no final state of its own, and `.connecting` is also
+    /// what makes every later connect return at the deduplication guard — so leaving it
+    /// behind pins the row until the app restarts.
+    func testCancelledConnectClearsTheConnectingState() async throws {
+        let config = ConnectionConfig(
+            name: "CancelledConnecting",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let fileSystem = MockFileSystem()
+        await fileSystem.setConnectDelay(nanoseconds: 5_000_000_000)
+        lastCreatedFileSystem = fileSystem
+        registry.register(.sftp) { _, _ in fileSystem }
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        let attempt = Task { @MainActor in await manager.connect(config.id) }
+        for _ in 0..<200 {
+            if await fileSystem.connectCallCount > 0 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(manager.state(for: config.id), .connecting)
+
+        attempt.cancel()
+        await attempt.value
+
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+
+        // The row is actionable again: the guard no longer sees a live attempt.
+        await fileSystem.setConnectDelay(nanoseconds: 0)
+        await manager.connect(config.id)
+        XCTAssertEqual(manager.state(for: config.id), .connected)
+    }
+
+    /// A connection edited on another device keeps its UUID, so the added/removed loops
+    /// never reach it: without this the domain goes on serving the old host from its
+    /// bootstrap snapshot while the UI already shows the new one.
+    func testReloadReRegistersAConnectionChangedUnderTheSameID() async throws {
+        var config = ConnectionConfig(
+            name: "ReloadChanged",
+            backendType: .sftp,
+            host: "old.example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reload-changed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        config.host = "new.example.com"
+        try storage.saveConnections([config])
+
+        await manager.reloadConnectionsFromStorage()
+
+        XCTAssertEqual(manager.connections, [config])
+        // Registered again with the new config — once for the reconciliation, once for
+        // the remount that follows it.
+        let ensureRegisteredInvocations = await mountProvider.ensureRegisteredInvocations
+        XCTAssertEqual(ensureRegisteredInvocations, Array(repeating: config.domainIdentifier, count: 2))
+        // Mounted connections are remounted, so the extension picks the new host up now
+        // rather than at the next relaunch.
+        let reconnectInvocations = await mountProvider.reconnectInvocations
+        XCTAssertEqual(reconnectInvocations, [config.domainIdentifier])
+        let remountedState = await waitForMountState(config.id)
+        XCTAssertEqual(remountedState, .mounted(path: mountURL.path))
     }
 
     /// Cancelling a connect must stop it, not let the retry delay swallow the cancellation
@@ -1022,7 +1157,13 @@ final class ConnectionManagerTests: XCTestCase {
         await manager.reloadConnectionsFromStorage()
 
         XCTAssertEqual(manager.connections, [config])
-        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        // The domain is still registered, so the retained connection must not read as a
+        // clean disconnect — only the user retrying the removal can clear it.
+        guard case .error(let message) = manager.state(for: config.id) else {
+            return XCTFail("Expected an error state after a failed unregister during reload")
+        }
+        XCTAssertTrue(message.contains("mock unmount failure"))
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .error(message))
         let unregisterInvocations = await mountProvider.unregisterInvocations
         XCTAssertEqual(unregisterInvocations, [config.domainIdentifier])
     }

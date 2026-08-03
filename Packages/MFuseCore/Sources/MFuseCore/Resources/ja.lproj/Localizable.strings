@@ -43,6 +43,8 @@
 "connectionManager.error.cleanupFailed" = "削除前の接続 %@ のクリーンアップに失敗しました";
 "connectionManager.error.restoreRemovedConnection" = "削除した接続の復元に失敗しました: %@";
 "connectionManager.error.restoreCredential" = "認証情報の復元に失敗しました: %@";
+"connectionManager.error.restoreRegistration" = "File Provider ドメインの復元に失敗しました: %@";
+"connectionManager.error.removeWithRestoreFailures" = "接続 %1$@ の削除に失敗しました: %2$@。%3$@";
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "接続 %1$@ の認証情報の削除に失敗しました: %2$@。%3$@";
 "connectionManager.error.deleteCredentialRecovered" = "接続 %1$@ の認証情報の削除に失敗しました。再試行できるよう接続と認証情報を復元しました: %2$@";
 "connectionManager.error.unsupportedBackend" = "未対応のバックエンド: %@";

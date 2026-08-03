@@ -244,6 +244,8 @@ final class BackendTypeTests: XCTestCase {
             "connectionManager.error.cleanupFailed": 1,
             "connectionManager.error.restoreRemovedConnection": 1,
             "connectionManager.error.restoreCredential": 1,
+            "connectionManager.error.restoreRegistration": 1,
+            "connectionManager.error.removeWithRestoreFailures": 3,
             "connectionManager.error.deleteCredentialWithRestoreFailures": 3,
             "connectionManager.error.deleteCredentialRecovered": 2,
             "connectionManager.error.unsupportedBackend": 1
@@ -256,13 +258,113 @@ final class BackendTypeTests: XCTestCase {
                 let template = MFuseCoreL10n.string(key, localeIdentifier: locale, fallback: sentinel)
                 XCTAssertNotEqual(template, sentinel, "\(key) is missing for \(locale)")
                 XCTAssertFalse(template.isEmpty, "\(key) is empty for \(locale)")
-                XCTAssertEqual(
-                    template.components(separatedBy: "%").count - 1,
-                    expectedPlaceholders,
-                    "\(key) has the wrong number of placeholders for \(locale)"
+                assertFormatSpecifiers(
+                    in: template,
+                    expectedCount: expectedPlaceholders,
+                    key: key,
+                    locale: locale
                 )
             }
         }
+    }
+
+    /// Counting `%` says nothing about which argument ends up where: a translation that
+    /// writes `%1$@` twice, renumbers the arguments, or swaps `%@` for `%d` still passes
+    /// a count check and then drops — or misreads — an argument at runtime.
+    private func assertFormatSpecifiers(
+        in template: String,
+        expectedCount: Int,
+        key: String,
+        locale: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let pattern = try! NSRegularExpression(pattern: "%(?:(\\d+)\\$)?([@a-zA-Z])")
+        let range = NSRange(template.startIndex..<template.endIndex, in: template)
+        let matches = pattern.matches(in: template, range: range)
+
+        XCTAssertEqual(
+            matches.count,
+            expectedCount,
+            "\(key) has the wrong number of placeholders for \(locale)",
+            file: file,
+            line: line
+        )
+
+        var positions: [Int] = []
+        for (offset, match) in matches.enumerated() {
+            let conversion = String(template[Range(match.range(at: 2), in: template)!])
+            XCTAssertEqual(
+                conversion,
+                "@",
+                "\(key) uses %\(conversion) instead of a string placeholder for \(locale)",
+                file: file,
+                line: line
+            )
+            if let positionRange = Range(match.range(at: 1), in: template) {
+                positions.append(Int(template[positionRange])!)
+            } else {
+                // An unnumbered placeholder consumes arguments in order, which is only
+                // unambiguous when it is the sole one.
+                positions.append(offset + 1)
+                XCTAssertEqual(
+                    expectedCount,
+                    1,
+                    "\(key) mixes unnumbered placeholders into a multi-argument template for \(locale)",
+                    file: file,
+                    line: line
+                )
+            }
+        }
+
+        XCTAssertEqual(
+            positions.sorted(),
+            Array(1...max(expectedCount, 1)),
+            "\(key) does not map each argument exactly once for \(locale)",
+            file: file,
+            line: line
+        )
+    }
+
+    /// `zh-TW` is what a Traditional Chinese Mac actually reports, and it has no bundle of
+    /// its own: it has to resolve through the `zh-Hant` candidate fallback rather than
+    /// silently landing on Simplified Chinese.
+    func testTraditionalChineseLocaleIdentifierResolvesToTheHantResources() {
+        let simplified = MFuseCoreL10n.string(
+            "auth.publicKey",
+            localeIdentifier: "zh-Hans",
+            fallback: "Public Key"
+        )
+        let traditional = MFuseCoreL10n.string(
+            "auth.publicKey",
+            localeIdentifier: "zh-Hant",
+            fallback: "Public Key"
+        )
+        XCTAssertNotEqual(traditional, simplified)
+
+        XCTAssertEqual(
+            MFuseCoreL10n.string(
+                "auth.publicKey",
+                localeIdentifier: "zh-TW",
+                fallback: "Public Key"
+            ),
+            traditional,
+            "zh-TW did not resolve to the Traditional Chinese resources"
+        )
+        XCTAssertEqual(
+            MFuseCoreL10n.string(
+                "mount.error.status",
+                localeIdentifier: "zh-TW",
+                fallback: "Mount error: %@",
+                "失敗"
+            ),
+            MFuseCoreL10n.string(
+                "mount.error.status",
+                localeIdentifier: "zh-Hant",
+                fallback: "Mount error: %@",
+                "失敗"
+            )
+        )
     }
 
     func testLocalizedErrorsAreNonEmpty() {
@@ -324,9 +426,19 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
 
     /// Regression: S3 has no host, so the sidebar used to show a bare ":9,000".
     func testS3FallsBackToEndpointThenBucket() {
+        // Two buckets on one endpoint are two different mounts, so the bucket belongs in
+        // the address that identifies the row.
         XCTAssertEqual(
             config(.s3, parameters: ["endpoint": "http://localhost:9000", "bucket": "b"]).displayAddress,
-            "http://localhost:9000"
+            "http://localhost:9000/b"
+        )
+        XCTAssertEqual(
+            config(.s3, parameters: ["endpoint": "http://localhost:9000/", "bucket": "b"]).displayAddress,
+            "http://localhost:9000/b"
+        )
+        XCTAssertNotEqual(
+            config(.s3, parameters: ["endpoint": "http://localhost:9000", "bucket": "b"]).displaySubtitle,
+            config(.s3, parameters: ["endpoint": "http://localhost:9000", "bucket": "other"]).displaySubtitle
         )
         XCTAssertEqual(config(.s3, parameters: ["bucket": "my-bucket"]).displayAddress, "my-bucket")
         XCTAssertEqual(config(.s3).displayAddress, BackendType.s3.displayName)
@@ -338,6 +450,14 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         XCTAssertEqual(
             config(.s3, port: 9000, parameters: ["endpoint": "http://localhost"]).displayAddress,
             "http://localhost:9000"
+        )
+        XCTAssertEqual(
+            config(
+                .s3,
+                port: 9000,
+                parameters: ["endpoint": "http://localhost", "bucket": "b"]
+            ).displayAddress,
+            "http://localhost:9000/b"
         )
     }
 

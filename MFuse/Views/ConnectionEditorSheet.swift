@@ -78,7 +78,16 @@ struct ConnectionEditorSheet: View {
         _name = State(initialValue: config?.name ?? "")
         _backendType = State(initialValue: config?.backendType ?? .sftp)
         _host = State(initialValue: config?.host ?? "")
-        _port = State(initialValue: config.map { "\($0.port)" } ?? "")
+        // A backend the port field is hidden for has its stored port folded into the
+        // address it belongs to (see `_s3Endpoint` below) and reset here. Carrying the
+        // old value forward would silently stamp it onto whatever address is saved next:
+        // a legacy "http://localhost" + 9000 config re-pointed at "https://s3.example.com"
+        // would go on connecting to port 9000.
+        _port = State(initialValue: config.map { existing in
+            existing.backendType.usesHostBasedAddressing
+                ? "\(existing.port)"
+                : "\(existing.backendType.defaultPort)"
+        } ?? "")
         _username = State(initialValue: config?.username ?? "")
         _authMethod = State(initialValue: config?.authMethod ?? .password)
         _remotePath = State(initialValue: config?.remotePath ?? "/")
@@ -89,7 +98,9 @@ struct ConnectionEditorSheet: View {
         _privateKeyBookmark = State(initialValue: params["privateKeyBookmark"] ?? "")
         _s3Bucket = State(initialValue: params["bucket"] ?? "")
         _s3Region = State(initialValue: params["region"] ?? "us-east-1")
-        _s3Endpoint = State(initialValue: params["endpoint"] ?? "")
+        // Resolved, not raw: this is where a legacy config's hidden port is folded into
+        // the endpoint, so editing one keeps reaching the server it reached before.
+        _s3Endpoint = State(initialValue: config?.s3Endpoint ?? params["endpoint"] ?? "")
         _s3PathStyle = State(initialValue: params["pathStyle"] == "true")
         _webdavTLS = State(initialValue: params["tls"] != "false")
         _smbShare = State(initialValue: params["share"] ?? "")

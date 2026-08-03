@@ -46,7 +46,10 @@ extension ConnectionManager {
             return mountURL
         }
 
-        if hasReachableLink(at: symlinkURL) {
+        // Guarded like the branch above: a link left behind by a teardown whose
+        // removeSymlink failed still resolves, so opening it would take the user into a
+        // domain that local state has already marked unmounted.
+        if effectiveMountState(for: config.id).isMounted, hasReachableLink(at: symlinkURL) {
             return symlinkURL
         }
 

@@ -23,6 +23,9 @@ public actor S3FileSystem: RemoteFileSystem {
     /// suspends on the connectivity probe, so a second caller could otherwise enter and
     /// build a second client that overwrites — and leaks — the first.
     private var connectTask: Task<Void, Error>?
+    /// Callers waiting on someone else's `connectTask`, keyed so each can be resumed —
+    /// or cancelled — on its own. See `waitForConnectAttempt(_:)`.
+    private var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
     /// Test seam: replaces the connectivity probe so a connection attempt can be held at
     /// the exact suspension point where `disconnect()` interleaves. Never set in production.
@@ -44,7 +47,10 @@ public actor S3FileSystem: RemoteFileSystem {
 
     // MARK: - Config Helpers
 
-    private var bucket: String { config.parameters["bucket"] ?? "" }
+    // Resolved in MFuseCore like the endpoint, so the bucket shown in the UI is the one
+    // requests are signed for — and a whitespace-only value still trips the guard in
+    // `performConnect()` instead of reaching S3 as a blank bucket.
+    private var bucket: String { config.s3Bucket ?? "" }
     private var region: String { config.parameters["region"] ?? "us-east-1" }
     // Resolved in MFuseCore so the address shown in the UI is the one connected to.
     private var customEndpoint: String? { config.s3Endpoint }
@@ -64,30 +70,88 @@ public actor S3FileSystem: RemoteFileSystem {
     // MARK: - Lifecycle
 
     public func connect() async throws {
-        if awsClient != nil, s3 != nil {
+        while true {
+            if awsClient != nil, s3 != nil {
+                return
+            }
+            if let inFlight = connectTask {
+                // Retries when the attempt ended before this caller could join it: there
+                // is then nothing left to wait for, and the loop re-decides what to do.
+                guard try await waitForConnectAttempt(inFlight) else { continue }
+                return
+            }
+
+            let task = Task { try await performConnect() }
+            connectTask = task
+            // `disconnect()` can clear this while we are suspended below, after which
+            // another caller registers its own task. Clearing unconditionally would drop
+            // that newer task and let the next caller start a second, overlapping attempt.
+            defer {
+                if connectTask == task {
+                    connectTask = nil
+                }
+            }
+            do {
+                // Cancellation does not reach into an unstructured task, so without this a
+                // cancelled caller would keep waiting for a probe that then publishes a
+                // client nobody is left to disconnect.
+                try await withTaskCancellationHandler {
+                    try await task.value
+                } onCancel: {
+                    task.cancel()
+                }
+            } catch {
+                // Runs before the `defer` above clears `connectTask`, so a caller that
+                // joins cannot observe a live attempt whose result was already handed out.
+                resumeConnectWaiters(with: .failure(error))
+                throw error
+            }
+            resumeConnectWaiters(with: .success(()))
             return
         }
-        if let connectTask {
-            return try await connectTask.value
-        }
+    }
 
-        let task = Task { try await performConnect() }
-        connectTask = task
-        // `disconnect()` can clear this while we are suspended below, after which another
-        // caller registers its own task. Clearing unconditionally would drop that newer
-        // task and let the next caller start a second, overlapping connection attempt.
-        defer {
-            if connectTask == task {
-                connectTask = nil
-            }
-        }
-        // Cancellation does not reach into an unstructured task, so without this a
-        // cancelled caller would keep waiting for a probe that then publishes a client
-        // nobody is left to disconnect.
+    /// Wait for the attempt another caller started, without waiting past *this* caller's
+    /// own cancellation.
+    ///
+    /// `Task.value` resumes only when the awaited task finishes: a cancelled joiner would
+    /// otherwise stay suspended for the rest of the probe and then report that probe's
+    /// result as its own. Cancelling the shared task instead is not an option — the
+    /// caller that started it is still waiting on it — so joiners are parked on their own
+    /// continuation and resumed individually.
+    ///
+    /// Returns `false` when the attempt ended before this caller could join it.
+    private func waitForConnectAttempt(_ task: Task<Void, Error>) async throws -> Bool {
+        let waiterID = UUID()
+        var joined = true
         try await withTaskCancellationHandler {
-            try await task.value
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                if Task.isCancelled {
+                    // The handler below has nothing to resume until the continuation is
+                    // registered, so a cancellation that lands first is answered here.
+                    continuation.resume(throwing: CancellationError())
+                } else if connectTask == task {
+                    connectWaiters[waiterID] = continuation
+                } else {
+                    joined = false
+                    continuation.resume()
+                }
+            }
         } onCancel: {
-            task.cancel()
+            Task { await self.cancelConnectWaiter(waiterID) }
+        }
+        return joined
+    }
+
+    private func cancelConnectWaiter(_ waiterID: UUID) {
+        connectWaiters.removeValue(forKey: waiterID)?.resume(throwing: CancellationError())
+    }
+
+    private func resumeConnectWaiters(with result: Result<Void, Error>) {
+        let waiters = connectWaiters
+        connectWaiters.removeAll()
+        for continuation in waiters.values {
+            continuation.resume(with: result)
         }
     }
 
@@ -202,7 +266,13 @@ public actor S3FileSystem: RemoteFileSystem {
                 return .authenticationFailed
             }
             if code == "nosuchbucket" {
-                return .connectionFailed("S3 bucket \(bucket) does not exist")
+                return missingBucketError(bucket: bucket)
+            }
+            if !code.isEmpty {
+                // Any other structured code is the SDK's own diagnosis, and it outranks
+                // whatever the description happens to spell: falling through would let
+                // `RequestTimeout` against `unauthorized.example.com` read as bad keys.
+                return unreachableEndpointError(bucket: bucket, error: error)
             }
         }
 
@@ -213,12 +283,29 @@ public actor S3FileSystem: RemoteFileSystem {
             return .authenticationFailed
         }
         if normalized.contains("nosuchbucket") {
-            return .connectionFailed("S3 bucket \(bucket) does not exist")
+            return missingBucketError(bucket: bucket)
         }
+        return unreachableEndpointError(bucket: bucket, error: error)
+    }
+
+    /// The bucket identifier stays out of the message: connection errors are surfaced
+    /// through `LocalizedError` and logged with public privacy by both the app and the
+    /// File Provider bootstrap, which is why the log below marks it private.
+    private static func missingBucketError(bucket: String) -> RemoteFileSystemError {
+        Self.logger.error(
+            "S3 bucket \(bucket, privacy: .private) does not exist"
+        )
+        return .connectionFailed("The configured S3 bucket does not exist")
+    }
+
+    private static func unreachableEndpointError(
+        bucket: String,
+        error: Error
+    ) -> RemoteFileSystemError {
         // The raw description can carry response diagnostics from a custom endpoint, and
         // error descriptions are logged with public privacy — keep it out of the message.
         Self.logger.error(
-            "S3 connection to bucket \(bucket, privacy: .private) failed: \(description, privacy: .private)"
+            "S3 connection to bucket \(bucket, privacy: .private) failed: \(String(describing: error), privacy: .private)"
         )
         return .connectionFailed("Could not reach the S3 endpoint")
     }

@@ -53,13 +53,18 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     public var displayAddress: String {
         switch backendType {
         case .s3:
-            if let endpoint = s3Endpoint {
+            // Two buckets on one endpoint are two different mounts, so the endpoint on
+            // its own does not identify the row — it would give both the same subtitle.
+            switch (s3Endpoint, s3Bucket) {
+            case let (endpoint?, bucket?):
+                return endpoint.hasSuffix("/") ? "\(endpoint)\(bucket)" : "\(endpoint)/\(bucket)"
+            case let (endpoint?, nil):
                 return endpoint
-            }
-            if let bucket = s3Bucket {
+            case let (nil, bucket?):
                 return bucket
+            case (nil, nil):
+                return backendType.displayName
             }
-            return backendType.displayName
         case .googleDrive, .dropbox, .oneDrive:
             // Coalesce on emptiness, not just nil: a stored-but-blank email would
             // otherwise mask a perfectly good account name.

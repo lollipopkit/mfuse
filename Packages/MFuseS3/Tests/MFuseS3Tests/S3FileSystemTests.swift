@@ -26,13 +26,18 @@ import SotoCore
     }
 }
 
-@Test func missingBucketIsNamedInTheError() {
+/// The bucket is identified as missing rather than unreachable, but the identifier itself
+/// stays out of the message: connection errors are surfaced through `LocalizedError` and
+/// logged with public privacy by both the app and the File Provider bootstrap.
+@Test func missingBucketIsReportedWithoutNamingIt() {
     let mapped = S3FileSystem.mapConnectionError(StubError(text: "NoSuchBucket"), bucket: "photos")
     guard case .connectionFailed(let message) = mapped else {
         Issue.record("expected .connectionFailed, got \(mapped)")
         return
     }
-    #expect(message.contains("photos"))
+    #expect(!message.contains("photos"))
+    #expect(message.contains("bucket"))
+    #expect(message != S3FileSystem.mapConnectionError(StubError(text: "boom"), bucket: "photos").errorDescription)
 }
 
 /// SDK descriptions can carry response diagnostics from a custom endpoint, and error
@@ -130,6 +135,46 @@ import SotoCore
     #expect(await fileSystem.hasPendingConnectTask == false)
 }
 
+/// A caller that joins someone else's probe must still honour its own cancellation, and
+/// must not take the probe down with it: awaiting an unstructured task resumes only when
+/// that task finishes, so the joiner would otherwise sit out the whole probe and then
+/// report its result as its own.
+@Test func cancellingAJoinedConnectLeavesTheSharedProbeRunning() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+    }
+
+    let first = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    let joined = Task { try await fileSystem.connect() }
+    joined.cancel()
+    switch await joined.result {
+    case .success:
+        Issue.record("expected the cancelled joiner to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+
+    // The caller that started the probe is still waiting on it.
+    #expect(await fileSystem.hasPendingConnectTask)
+    #expect(await fileSystem.isConnected == false)
+
+    try await fileSystem.disconnect()
+    _ = await first.result
+}
+
 /// Endpoint diagnostics carry the configured hostname, so classifying by scanning the
 /// whole description can blame the credentials for an unrelated transport failure.
 @Test func structuredErrorCodesOutrankTheDescriptionScan() {
@@ -141,7 +186,19 @@ import SotoCore
         Issue.record("expected .connectionFailed, got \(mapped)")
         return
     }
-    #expect(message.contains("photos"))
+    #expect(message.contains("bucket"))
+
+    // An unrecognized structured code is still the SDK's own diagnosis: falling through
+    // to the description scan would blame the keys for a transport failure that merely
+    // names an endpoint reading like one.
+    let transport = S3FileSystem.mapConnectionError(
+        StubAWSError(errorCode: "RequestTimeout"),
+        bucket: "photos"
+    )
+    guard case .connectionFailed = transport else {
+        Issue.record("expected .connectionFailed, got \(transport)")
+        return
+    }
 }
 
 /// The description scan still classifies SDK errors that carry no structured code.

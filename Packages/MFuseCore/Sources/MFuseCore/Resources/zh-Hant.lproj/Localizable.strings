@@ -43,6 +43,8 @@
 "connectionManager.error.cleanupFailed" = "移除前清理連線 %@ 失敗";
 "connectionManager.error.restoreRemovedConnection" = "還原已移除的連線失敗：%@";
 "connectionManager.error.restoreCredential" = "還原憑證失敗：%@";
+"connectionManager.error.restoreRegistration" = "還原檔案提供者網域失敗：%@";
+"connectionManager.error.removeWithRestoreFailures" = "移除連線 %1$@ 失敗：%2$@。%3$@";
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "刪除連線 %1$@ 的憑證失敗：%2$@。%3$@";
 "connectionManager.error.deleteCredentialRecovered" = "刪除連線 %1$@ 的憑證失敗；已還原連線與憑證，可稍後再試：%2$@";
 "connectionManager.error.unsupportedBackend" = "不支援的後端：%@";
