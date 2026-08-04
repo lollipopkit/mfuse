@@ -188,10 +188,11 @@ struct ConnectionEditorSheet: View {
                         if backendType.usesHostBasedAddressing {
                             TextField(AppL10n.string("detail.field.host", fallback: "Host"), text: $host, prompt: Text(AppL10n.string("editor.prompt.host", fallback: "example.com")))
                             TextField(AppL10n.string("detail.field.port", fallback: "Port"), text: $port, prompt: Text("\(backendType.defaultPort)"))
-                            // NFS addresses by host but authorizes by UID, so it has no
-                            // username to offer — and one left over from the previously
-                            // selected backend must not be saved with it either.
-                            if backendType.usesUsername {
+                            // NFS addresses by host but authorizes by UID, and an anonymous
+                            // login carries no name either, so neither has a username to
+                            // offer — and one left over from the backend or method selected
+                            // before must not be saved with it.
+                            if usesUsernameField {
                                 TextField(AppL10n.string("detail.field.username", fallback: "Username"), text: $username, prompt: Text(AppL10n.string("editor.prompt.username", fallback: "user")))
                             }
                         }
@@ -451,7 +452,7 @@ struct ConnectionEditorSheet: View {
                 ? host.trimmingCharacters(in: .whitespacesAndNewlines)
                 : "",
             port: UInt16(port) ?? backendType.defaultPort,
-            username: backendType.usesUsername ? username : "",
+            username: usesUsernameField ? username : "",
             authMethod: authMethod,
             remotePath: remotePath.isEmpty ? "/" : remotePath,
             parameters: try buildParameters(),
@@ -712,7 +713,11 @@ struct ConnectionEditorSheet: View {
         case .s3:
             if !s3Bucket.isEmpty { params["bucket"] = s3Bucket }
             if s3Region != "us-east-1" { params["region"] = s3Region }
-            if !s3Endpoint.isEmpty { params["endpoint"] = s3Endpoint }
+            // Trimmed, and dropped when nothing is left: `hasCustomS3Endpoint` reads a
+            // whitespace-only field as "no endpoint" and so does `ConnectionConfig`, so
+            // storing one raw left a config claiming a custom endpoint it does not have.
+            let trimmedS3Endpoint = s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedS3Endpoint.isEmpty { params["endpoint"] = trimmedS3Endpoint }
             // Persisted only where it has an effect, so a saved config never claims an
             // addressing style the backend cannot apply.
             if s3PathStyle && hasCustomS3Endpoint { params["pathStyle"] = "true" }
@@ -824,6 +829,14 @@ struct ConnectionEditorSheet: View {
             return nil
         }
         return bookmarkData.base64EncodedString()
+    }
+
+    /// Whether the selected backend *and* method carry a username.
+    ///
+    /// An anonymous FTP login sends a fixed `anonymous`, and anonymous WebDAV sends no
+    /// credentials at all, so neither backend reads `config.username` on that path.
+    private var usesUsernameField: Bool {
+        backendType.usesUsername && authMethod != .anonymous
     }
 
     private var hasCustomS3Endpoint: Bool {

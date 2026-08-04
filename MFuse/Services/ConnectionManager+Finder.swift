@@ -34,6 +34,13 @@ extension ConnectionManager {
                     // link just recreated has to go with it rather than being left
                     // pointing at a domain that is gone.
                     try? await mountProvider.removeSymlink(for: config)
+                    // The removal suspends, and a remount landing inside that window owns
+                    // this link: stripping a live mount of its shortcut is the other half
+                    // of the race, so it is put back the way the manager's own teardown
+                    // does it.
+                    if canRevealMount(for: config.id) {
+                        _ = try? await mountProvider.createSymlink(for: config)
+                    }
                     return nil
                 }
                 if hasReachableLink(at: recreatedSymlinkURL) {
@@ -53,7 +60,11 @@ extension ConnectionManager {
             return symlinkURL
         }
 
-        if let path = effectiveMountState(for: config.id).mountPath {
+        // Gated like every branch above: the cached path outlives the mount it was
+        // recorded for, so a teardown that has not published `.unmounted` yet would still
+        // hand Finder a location it is in the middle of taking away.
+        if canRevealMount(for: config.id),
+           let path = effectiveMountState(for: config.id).mountPath {
             return URL(fileURLWithPath: path)
         }
 

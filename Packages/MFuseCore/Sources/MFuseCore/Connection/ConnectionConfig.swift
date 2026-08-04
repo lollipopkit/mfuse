@@ -56,10 +56,8 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             // Two buckets on one endpoint are two different mounts, so the endpoint on
             // its own does not identify the row — it would give both the same subtitle.
             switch (s3Endpoint, s3Bucket) {
-            case let (endpoint?, bucket?):
+            case let (endpoint?, bucket):
                 return Self.endpointDisplayAddress(endpoint, bucket: bucket)
-            case let (endpoint?, nil):
-                return endpoint
             case let (nil, bucket?):
                 return bucket
             case (nil, nil):
@@ -115,21 +113,29 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         Self.trimmedParameter(parameters["bucket"])
     }
 
-    /// The endpoint with the bucket appended to its *path*.
+    /// The endpoint with the bucket appended to its *path*, stripped of anything secret.
     ///
     /// Joining the raw strings puts the bucket after whatever the endpoint ends with, so
     /// `https://host/api?token=x` would be shown as `https://host/api?token=x/b` — a
-    /// location that is not where the bucket lives. Endpoints too malformed to parse fall
-    /// back to the plain join, which is still better than showing nothing.
-    static func endpointDisplayAddress(_ endpoint: String, bucket: String) -> String {
+    /// location that is not where the bucket lives. The credentials and query an endpoint
+    /// can carry (`https://key:secret@host`, a pre-signed `?X-Amz-Signature=…`) are
+    /// dropped rather than rendered into the sidebar, the detail view and the menu bar.
+    /// Endpoints too malformed to parse show host and path only, for the same reason.
+    static func endpointDisplayAddress(_ endpoint: String, bucket: String?) -> String {
         guard var components = URLComponents(string: endpoint),
               components.scheme != nil,
               components.host != nil else {
-            return endpoint.hasSuffix("/") ? "\(endpoint)\(bucket)" : "\(endpoint)/\(bucket)"
+            return bucket ?? BackendType.s3.displayName
         }
-        let path = components.path
-        components.path = path.hasSuffix("/") ? "\(path)\(bucket)" : "\(path)/\(bucket)"
-        return components.string ?? "\(endpoint)/\(bucket)"
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        if let bucket {
+            let path = components.path
+            components.path = path.hasSuffix("/") ? "\(path)\(bucket)" : "\(path)/\(bucket)"
+        }
+        return components.string ?? bucket ?? BackendType.s3.displayName
     }
 
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.

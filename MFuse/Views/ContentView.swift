@@ -9,8 +9,8 @@ struct ContentView: View {
     @State private var editorPresentation: EditorPresentation?
     @State private var showingExtensionGuide = false
     @State private var saveAlert: SaveAlertState?
-    /// Editor presentations whose save is still running, so one cannot be started twice.
-    @State private var savingPresentationIDs: Set<UUID> = []
+    /// Connections whose save is still running, so no two can overlap on one of them.
+    @State private var savingConnectionIDs: Set<UUID> = []
 
     var body: some View {
         NavigationSplitView {
@@ -131,12 +131,15 @@ struct ContentView: View {
         credential: Credential,
         presentationID: UUID
     ) {
-        // Save suspends repeatedly while its sheet is still on screen and its button still
-        // enabled. A second click would run the whole thing again, and for a new mount both
-        // passes see no previous config and append the same UUID twice.
-        guard savingPresentationIDs.insert(presentationID).inserted else { return }
+        // Keyed on the connection, not on the sheet that asked for it: a save suspends
+        // repeatedly while its editor is still on screen and its button still enabled, and
+        // the user can also cancel it and reopen the same mount meanwhile. Two passes over
+        // one connection interleave their credential writes — and an older one's rollback
+        // restores the secret the newer one just stored — while for a new mount both see no
+        // previous config and append the same UUID twice.
+        guard savingConnectionIDs.insert(config.id).inserted else { return }
         Task {
-            defer { savingPresentationIDs.remove(presentationID) }
+            defer { savingConnectionIDs.remove(config.id) }
             do {
                 let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
                 let previousCredential = try await credentialProvider.credential(for: config.id)
