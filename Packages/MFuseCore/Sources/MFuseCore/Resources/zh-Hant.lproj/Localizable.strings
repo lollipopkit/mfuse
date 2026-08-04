@@ -48,3 +48,4 @@
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "刪除連線 %1$@ 的憑證失敗：%2$@。%3$@";
 "connectionManager.error.deleteCredentialRecovered" = "刪除連線 %1$@ 的憑證失敗；已還原連線與憑證，可稍後再試：%2$@";
 "connectionManager.error.unsupportedBackend" = "不支援的後端：%@";
+"connectionManager.error.reregisterChangedConnection" = "無法套用 %1$@ 的最新設定：%2$@。請重新連線或重新啟動 MFuse 後再試。";

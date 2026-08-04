@@ -175,6 +175,39 @@ import SotoCore
     _ = await first.result
 }
 
+/// The interrupted attempt shuts down the client it built as it unwinds. `disconnect()`
+/// returning before that lets a replacement attempt allocate a second client while the
+/// first one is still open — and Soto asserts on a client released without a shutdown.
+@Test func disconnectWaitsForTheInterruptedAttemptToUnwind() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        do {
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        } catch {
+            await coordinator.probeUnwound()
+            throw error
+        }
+    }
+
+    let attempt = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    try await fileSystem.disconnect()
+    #expect(await coordinator.didUnwind)
+
+    _ = await attempt.result
+}
+
 /// Endpoint diagnostics carry the configured hostname, so classifying by scanning the
 /// whole description can blame the credentials for an unrelated transport failure.
 @Test func structuredErrorCodesOutrankTheDescriptionScan() {
@@ -220,6 +253,14 @@ private actor ProbeCoordinator {
     private var started = 0
     private var nextWaiterID = 0
     private var waiters: [Waiter] = []
+    private var unwound = false
+
+    /// Whether a probe has finished unwinding after being cancelled.
+    var didUnwind: Bool { unwound }
+
+    func probeUnwound() {
+        unwound = true
+    }
 
     func probeStarted() {
         started += 1

@@ -19,6 +19,15 @@ public enum ConnectionManagerError: Error, LocalizedError, Equatable {
     }
 }
 
+/// Carries the outcome of a tracked `signalEnumerator` pass out of the task that ran it.
+///
+/// The task itself has to be `Task<Void, Never>` to sit in `refreshTasks` alongside the
+/// refreshes teardown already cancels and awaits, so the error travels beside it.
+@MainActor
+private final class SignalOutcome {
+    var error: Error?
+}
+
 /// Manages the lifecycle of remote filesystem connections.
 /// Used by the main app to create, connect, disconnect, and track connections.
 @MainActor
@@ -39,6 +48,10 @@ public final class ConnectionManager: ObservableObject {
     /// Callers waiting on someone else's connect attempt, keyed so each can be resumed —
     /// or give up — on its own. See `waitForConnectAttempt(_:task:)`.
     private var connectWaiters: [UUID: [UUID: CheckedContinuation<Void, Never>]] = [:]
+    /// Everyone still interested in a connect attempt, the caller that started it
+    /// included. The attempt is shared, so no single caller's cancellation may take it
+    /// down: it is cancelled once the last participant has given up on it.
+    private var connectParticipants: [UUID: Set<UUID>] = [:]
     private var interruptedConnectionIDs: Set<UUID> = []
     /// Serialized rather than counted: two removals of the same connection can overlap,
     /// and each captures the state it would roll back to, so an earlier pass resuming
@@ -160,6 +173,9 @@ public final class ConnectionManager: ObservableObject {
             // can register the very domain `unregister` is about to remove. Routing it
             // through `disconnect` is what cancels and waits for it first.
             || connectTasks[config.id] != nil
+            // A retry loop still backing off outlives the row otherwise: nothing else here
+            // cancels it, and it goes on calling `connect` against an id that is gone.
+            || reconnectTasks[config.id] != nil
             || fileSystems[config.id] != nil
         if shouldCleanupMount {
             await disconnect(config.id)
@@ -308,12 +324,37 @@ public final class ConnectionManager: ObservableObject {
         connectTasks[id] = task
         // The attempt runs unstructured so other callers can join it, which also puts it
         // out of reach of this caller's cancellation — the caller that started it still
-        // owns it, so the cancellation has to be forwarded by hand.
+        // owns it, so the cancellation has to be forwarded by hand. Forwarding it
+        // *directly* would take the attempt down for everyone who joined meanwhile, so it
+        // goes through the participant set instead.
+        let participantID = UUID()
+        connectParticipants[id, default: []].insert(participantID)
         await withTaskCancellationHandler {
             await task.value
         } onCancel: {
-            task.cancel()
+            Task { @MainActor [weak self] in
+                self?.relinquishConnectAttempt(id, participantID: participantID, task: task)
+            }
         }
+    }
+
+    /// Give up one caller's interest in a shared attempt, cancelling it only once nobody
+    /// is left waiting for it.
+    private func relinquishConnectAttempt(
+        _ id: UUID,
+        participantID: UUID,
+        task: Task<Void, Never>
+    ) {
+        guard connectTasks[id] == task, var participants = connectParticipants[id] else {
+            return
+        }
+        participants.remove(participantID)
+        guard participants.isEmpty else {
+            connectParticipants[id] = participants
+            return
+        }
+        connectParticipants.removeValue(forKey: id)
+        task.cancel()
     }
 
     /// Wait for the attempt another caller started, without waiting past *this* caller's
@@ -334,11 +375,13 @@ public final class ConnectionManager: ObservableObject {
                     continuation.resume()
                 } else {
                     connectWaiters[id, default: [:]][waiterID] = continuation
+                    connectParticipants[id, default: []].insert(waiterID)
                 }
             }
         } onCancel: {
             Task { @MainActor [weak self] in
                 self?.resumeConnectWaiter(id, waiterID: waiterID)
+                self?.relinquishConnectAttempt(id, participantID: waiterID, task: task)
             }
         }
     }
@@ -353,6 +396,9 @@ public final class ConnectionManager: ObservableObject {
 
     private func finishConnectAttempt(_ id: UUID) {
         connectTasks.removeValue(forKey: id)
+        // Safe to drop wholesale: a replacement attempt can only be registered once
+        // `connectTasks` is clear, which happens in this same main-actor step.
+        connectParticipants.removeValue(forKey: id)
         let waiters = connectWaiters.removeValue(forKey: id) ?? [:]
         for continuation in waiters.values {
             continuation.resume()
@@ -454,8 +500,13 @@ public final class ConnectionManager: ObservableObject {
                 do {
                     try await mp.ensureRegistered(config: config)
                     try await mp.reconnect(config: config)
+                    // Cancellation is checked alongside the generation here too: nothing
+                    // guarantees a MountProvider throws on it, so a cancelled attempt whose
+                    // `ensureRegistered`/`reconnect` returned normally would otherwise go on
+                    // to publish a mount nobody is waiting for.
                     guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
-                          !interruptedConnectionIDs.contains(id) else {
+                          !interruptedConnectionIDs.contains(id),
+                          !Task.isCancelled else {
                         try? await mp.disconnect(config: config)
                         await discardFileSystem(fs, for: id, context: "abandoned mount attempt")
                         return
@@ -760,7 +811,7 @@ public final class ConnectionManager: ObservableObject {
     /// Attempt to reconnect with exponential backoff.
     public func reconnect(_ id: UUID) {
         reconnectTasks[id]?.cancel()
-        reconnectTasks[id] = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
             for attempt in 0..<Self.maxRetries {
                 let delay = Self.baseDelay * UInt64(1 << min(attempt, 4)) // 1s, 2s, 4s, 8s, 16s
@@ -777,6 +828,15 @@ public final class ConnectionManager: ObservableObject {
                 await self.connect(id)
                 if self.isReconnectSatisfied(for: id) { return }
             }
+        }
+        reconnectTasks[id] = task
+        // Cleared when the retry loop ends on its own, identity-checked so a newer attempt
+        // survives. Without this a finished retry stays in the dictionary forever, where
+        // `remove` and `shutdown` keep reading it as lifecycle work still to be waited on.
+        Task { @MainActor [weak self] in
+            await task.value
+            guard let self, self.reconnectTasks[id] == task else { return }
+            self.reconnectTasks.removeValue(forKey: id)
         }
     }
 
@@ -930,6 +990,20 @@ public final class ConnectionManager: ObservableObject {
                 logger.error(
                     "Failed to re-register changed connection \(config.domainIdentifier, privacy: .public) during reload: \(self.describe(error), privacy: .private)"
                 )
+                // The row is already showing the edited config while the domain still
+                // serves the previous one, and nothing retries this before the next
+                // launch. Publishing the failure is what makes that desync visible
+                // instead of leaving a green mount answering with the old host.
+                let message = MFuseCoreL10n.string(
+                    "connectionManager.error.reregisterChangedConnection",
+                    fallback: "Failed to apply the updated settings for %1$@: %2$@. Reconnect or restart MFuse to retry.",
+                    config.name,
+                    describe(error)
+                )
+                let errorState = ConnectionState.error(message)
+                states[config.id] = errorState
+                setMountState(.error(message), for: config)
+                onStateChange?(config, errorState)
             }
         }
     }
@@ -948,6 +1022,14 @@ public final class ConnectionManager: ObservableObject {
             return mountState
         case .unmounted:
             break
+        }
+
+        // An attempt whose task exists but has not run yet holds no connection state at
+        // all. Reporting it as unmounted let a batch Unmount skip the rows a batch Mount
+        // had just started, and the mount they were bringing up landed after the unmount
+        // had already finished.
+        if connectTasks[id] != nil {
+            return mountProvider == nil ? .unmounted : .mounting
         }
 
         switch state(for: id) {
@@ -1119,7 +1201,12 @@ public final class ConnectionManager: ObservableObject {
             try? await cleanupOrphanedSymlinks(for: connections)
 
             // Rebuild mount states and symlinks for existing mounted configs
-            for config in connections {
+            for id in connections.map(\.id) {
+                // Re-read instead of iterating the snapshot this loop started with: a save
+                // landing mid-sync leaves that snapshot holding the config from before the
+                // edit, and every provider call below persists what it is handed as the
+                // domain's bootstrap snapshot.
+                guard let config = connections.first(where: { $0.id == id }) else { continue }
                 let generation = generations[config.id] ?? connectionGenerations[config.id, default: 0]
                 guard isCurrentConnectionAttempt(for: config.id, generation: generation),
                       !isTeardownInFlight(for: config.id),
@@ -1143,7 +1230,7 @@ public final class ConnectionManager: ObservableObject {
 
                     setMountState(.mounting, for: config)
                     do {
-                        try await mp.signalEnumerator(for: config)
+                        try await signalEnumeratorAsTrackedRefresh(for: config, using: mp)
                         guard isCurrentConnectionAttempt(for: config.id, generation: generation),
                               !isTeardownInFlight(for: config.id) else {
                             continue
@@ -1162,6 +1249,10 @@ public final class ConnectionManager: ObservableObject {
                         states[config.id] = .disconnected
                         scheduleMountResolution(for: config, using: mp)
                     } catch {
+                        // An edit, a teardown or a removal cancelled this pass and is
+                        // publishing its own state; reporting a refresh failure on the way
+                        // out would fight it.
+                        if error is CancellationError { continue }
                         let desc = "Failed to refresh mounted domain \(config.domainIdentifier): \(describe(error))"
                         if isMissingFileProviderExtensionError(error) {
                             needsExtensionSetup = true
@@ -1186,7 +1277,47 @@ public final class ConnectionManager: ObservableObject {
                 }
             }
         } catch {
-            // Sync is best-effort
+            // Best-effort, but not silent: every mount state below stays at its default
+            // when the domain list cannot be read, and nothing else reports why.
+            logger.error(
+                "Failed to synchronize mounts on startup: \(self.describe(error), privacy: .public)"
+            )
+        }
+    }
+
+    /// Re-enumerate a domain during startup sync as *tracked* refresh work.
+    ///
+    /// `signalEnumerator` rewrites the extension's bootstrap snapshot, so a pass still in
+    /// flight while a connection is edited would put the old config back after the new one
+    /// was registered. Registering it as this connection's refresh is what lets
+    /// `cancelAndAwaitRefresh(for:)` — which every edit, teardown and removal runs — cancel
+    /// it *and wait for it* before writing a snapshot of its own.
+    private func signalEnumeratorAsTrackedRefresh(
+        for config: ConnectionConfig,
+        using mountProvider: any MountProvider
+    ) async throws {
+        await cancelAndAwaitRefresh(for: config.id)
+        let outcome = SignalOutcome()
+        let task = Task { @MainActor in
+            do {
+                try await mountProvider.signalEnumerator(for: config)
+            } catch {
+                outcome.error = error
+            }
+        }
+        refreshTasks[config.id] = task
+        await task.value
+        if refreshTasks[config.id] == task {
+            refreshTasks.removeValue(forKey: config.id)
+        }
+        // Checked before the outcome: a provider that ignores cancellation reports success,
+        // and treating that as one would let this pass go on to publish a mount state for
+        // the very work a teardown or an edit just cancelled.
+        if task.isCancelled {
+            throw CancellationError()
+        }
+        if let error = outcome.error {
+            throw error
         }
     }
 
@@ -1218,13 +1349,15 @@ public final class ConnectionManager: ObservableObject {
     ) async throws {
         guard let mountProvider else { return }
 
-        let wasMounted = previousConfig.map { effectiveMountState(for: $0.id).isMounted } ?? false
         // A refresh in flight is holding the config from before this edit, and its
         // `signalEnumerator` would write that one back over the snapshot registered here.
         await cancelAndAwaitRefresh(for: config.id)
         try await mountProvider.ensureRegistered(config: config)
 
-        if wasMounted {
+        // Read *after* the suspensions above rather than on entry: the user can unmount
+        // while `ensureRegistered` is in flight, and a remount decided from the earlier
+        // state would bring back the mount they just took down.
+        if effectiveMountState(for: config.id).isMounted {
             await disconnect(config.id, using: previousConfig)
             await connect(config.id)
             return
@@ -1458,6 +1591,16 @@ public final class ConnectionManager: ObservableObject {
     /// that window: `removeSymlink` runs in the middle of it.
     func isTeardownInFlight(for id: UUID) -> Bool {
         disconnectTasks[id] != nil
+    }
+
+    /// Whether a teardown or a removal is running for this connection.
+    ///
+    /// The published mount state lags both: `performDisconnect` removes the convenience
+    /// symlink well before it publishes `.unmounted`, so anything that acts on a mount —
+    /// revealing it in Finder, above all — has to consult this too or it will act on one
+    /// whose links are already gone.
+    public func isLifecycleTeardownInFlight(for id: UUID) -> Bool {
+        isTeardownInFlight(for: id) || isRemovalInFlight(for: id)
     }
 
     private func isCleanupComplete(for id: UUID) -> Bool {

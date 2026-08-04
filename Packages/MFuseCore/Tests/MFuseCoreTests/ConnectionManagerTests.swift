@@ -117,8 +117,10 @@ actor MockFileSystem: RemoteFileSystem {
 actor TestGate {
     private var isOpen = false
     private var entered = false
+    private var cancelledWaiterCount = 0
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
 
     func wait() async {
         entered = true
@@ -128,12 +130,37 @@ actor TestGate {
             continuation.resume()
         }
         guard !isOpen else { return }
-        await withCheckedContinuation { waiters.append($0) }
+        // The call held here keeps running once the gate opens, exactly as it would
+        // without cancellation — the handler only records that it arrived, which is what
+        // lets a test see that the code under test has reached its cancel-and-await point.
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { waiters.append($0) }
+        } onCancel: {
+            Task { await self.recordWaiterCancellation() }
+        }
     }
 
     func waitUntilEntered() async {
         guard !entered else { return }
         await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    /// Wait until the call held here has been cancelled.
+    ///
+    /// A handshake, where yielding a fixed number of times only hopes: it resumes at the
+    /// point where the code under test has cancelled this work and is awaiting it.
+    func waitUntilWaiterCancelled() async {
+        guard cancelledWaiterCount == 0 else { return }
+        await withCheckedContinuation { cancellationWaiters.append($0) }
+    }
+
+    private func recordWaiterCancellation() {
+        cancelledWaiterCount += 1
+        let pendingCancellationWaiters = cancellationWaiters
+        cancellationWaiters = []
+        for continuation in pendingCancellationWaiters {
+            continuation.resume()
+        }
     }
 
     func open() {
@@ -169,6 +196,7 @@ actor MockMountProvider: MountProvider {
     var removeSymlinkShouldFail = false
     var disconnectGate: TestGate?
     var createSymlinkGate: TestGate?
+    var ensureRegisteredGate: TestGate?
 
     init(symlinkBaseURL: URL) {
         self.symlinkBaseURL = symlinkBaseURL
@@ -213,6 +241,10 @@ actor MockMountProvider: MountProvider {
         createSymlinkGate = gate
     }
 
+    func setEnsureRegisteredGate(_ gate: TestGate?) {
+        ensureRegisteredGate = gate
+    }
+
     /// Lets a test assert on what happened after a setup phase it does not care about.
     func clearInvocations() {
         ensureRegisteredInvocations = []
@@ -226,6 +258,9 @@ actor MockMountProvider: MountProvider {
 
     func ensureRegistered(config: ConnectionConfig) async throws {
         ensureRegisteredInvocations.append(config.domainIdentifier)
+        if let ensureRegisteredGate {
+            await ensureRegisteredGate.wait()
+        }
         registeredDomainIDs.insert(config.domainIdentifier)
     }
 
@@ -692,17 +727,103 @@ final class ConnectionManagerTests: XCTestCase {
         await gate.waitUntilEntered()
 
         let disconnect = Task { @MainActor in await manager.disconnect(config.id) }
-        for _ in 0..<5 {
-            await Task.yield()
-        }
+        // The teardown cancels the repair before it awaits it, so this resumes exactly
+        // when the teardown is blocked on the gated `createSymlink` — the interleaving the
+        // test is about. Yielding a fixed number of times instead let the whole test pass
+        // on a schedule where the disconnect had not even started.
+        await gate.waitUntilWaiterCancelled()
+        let symlinkRemovalsBeforeTheRepairFinished = await mountProvider.removeSymlinkInvocations
+        XCTAssertTrue(
+            symlinkRemovalsBeforeTheRepairFinished.isEmpty,
+            "the teardown removed the symlink while the repair was still inside createSymlink"
+        )
         await gate.open()
 
         await repair.value
         await disconnect.value
 
+        let symlinkRemovals = await mountProvider.removeSymlinkInvocations
+        XCTAssertEqual(symlinkRemovals, [config.domainIdentifier])
         XCTAssertFalse(FileManager.default.fileExists(atPath: symlinkURL.path))
         XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
         XCTAssertEqual(manager.state(for: config.id), .disconnected)
+    }
+
+    /// An edit remounts a connection so its domain serves the new config, but the user can
+    /// unmount while the registration is still in flight. Deciding the remount from the
+    /// state captured before it would bring back the mount they just took down.
+    func testEditingAMountedConnectionDoesNotRemountAfterAConcurrentUnmount() async throws {
+        let config = ConnectionConfig(
+            name: "EditDuringUnmount",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-edit-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        var edited = config
+        edited.name = "EditDuringUnmountRenamed"
+        let gate = TestGate()
+        await mountProvider.setEnsureRegisteredGate(gate)
+        let registration = Task { @MainActor in
+            try await manager.syncSavedConnectionRegistration(edited, previousConfig: config)
+        }
+        await gate.waitUntilEntered()
+
+        // Nothing the teardown needs is gated, so it runs to completion while the
+        // registration is still suspended inside `ensureRegistered`.
+        await manager.disconnect(config.id)
+        await gate.open()
+        try await registration.value
+
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .unmounted)
+        let reconnects = await mountProvider.reconnectInvocations
+        XCTAssertTrue(reconnects.isEmpty, "the edit remounted a connection the user had unmounted")
+    }
+
+    /// A retry loop still backing off outlives the row unless removal tears it down: it
+    /// goes on calling `connect` against an id that is gone, and its dictionary entry
+    /// stays behind as lifecycle work that never completes.
+    func testRemovingAConnectionTearsDownAPendingReconnect() async throws {
+        let config = ConnectionConfig(
+            name: "PendingReconnect",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-reconnect-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await manager.disconnect(config.id)
+        await mountProvider.clearInvocations()
+
+        // Nothing else about this row reads as work in progress, so the pending retry is
+        // the only thing that can route the removal through a teardown.
+        manager.reconnect(config.id)
+        try await manager.remove(config)
+
+        let disconnects = await mountProvider.disconnectInvocations
+        XCTAssertEqual(disconnects, [config.domainIdentifier])
+        XCTAssertTrue(manager.connections.isEmpty)
     }
 
     /// A teardown that could not disconnect the filesystem keeps it around while the row

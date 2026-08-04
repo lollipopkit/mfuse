@@ -110,6 +110,15 @@ public actor S3FileSystem: RemoteFileSystem {
                 resumeConnectWaiters(of: task, with: .failure(error))
                 throw error
             }
+            // A `disconnect()` can land between the attempt publishing its client and this
+            // caller resuming here. Reporting success then hands every caller a session
+            // that has already been shut down, and each of them goes on to fail on its
+            // first request instead of retrying the connection.
+            guard awsClient != nil, s3 != nil else {
+                let interrupted = CancellationError()
+                resumeConnectWaiters(of: task, with: .failure(interrupted))
+                throw interrupted
+            }
             resumeConnectWaiters(of: task, with: .success(()))
             return
         }
@@ -322,15 +331,22 @@ public actor S3FileSystem: RemoteFileSystem {
 
     public func disconnect() async throws {
         // Stop any probe still in flight so it cannot publish a client afterwards.
-        connectTask?.cancel()
+        let inFlight = connectTask
+        inFlight?.cancel()
         connectTask = nil
         let client = awsClient
         // Clear the references first so a failing shutdown cannot leave a client that
-        // callers still consider connected.
+        // callers still consider connected — and before the wait below, so an attempt
+        // starting during it keeps the client it publishes.
         awsClient = nil
         s3 = nil
-        guard let client else { return }
-        await Self.shutdown(client)
+        if let client {
+            await Self.shutdown(client)
+        }
+        // Awaited, not just cancelled: the cancelled attempt shuts down the client it
+        // built on its way out, and returning before that lets a replacement attempt
+        // allocate a second client while the first one is still open.
+        _ = await inFlight?.result
     }
 
     // MARK: - Enumeration

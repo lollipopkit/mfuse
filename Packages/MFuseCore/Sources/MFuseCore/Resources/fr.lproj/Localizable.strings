@@ -48,3 +48,4 @@
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "Impossible de supprimer l’identifiant pour la connexion %1$@ : %2$@. %3$@";
 "connectionManager.error.deleteCredentialRecovered" = "Impossible de supprimer l’identifiant pour la connexion %1$@ ; la connexion et l’identifiant ont été restaurés pour réessayer : %2$@";
 "connectionManager.error.unsupportedBackend" = "Backend non pris en charge : %@";
+"connectionManager.error.reregisterChangedConnection" = "Impossible d’appliquer les réglages mis à jour de %1$@ : %2$@. Reconnectez-vous ou redémarrez MFuse pour réessayer.";

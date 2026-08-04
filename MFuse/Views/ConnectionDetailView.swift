@@ -133,15 +133,13 @@ struct ConnectionDetailView: View {
         Group {
             if mount.isMounted {
                 Button {
+                    // Only the id is carried across, and the manager owns the rest: the
+                    // refresh rewrites the domain's bootstrap snapshot, so it has to be
+                    // tracked and generation-fenced or one racing an edit puts the old
+                    // config back — and one racing a removal writes a snapshot for a domain
+                    // that is going away. Repair-on-failure lives there too.
                     Task {
-                        do {
-                            try await connectionManager.mountProvider?.signalEnumerator(for: config)
-                        } catch {
-                            // A refresh that cannot reach the domain means the mount is
-                            // gone; repairing reconciles the row instead of leaving it
-                            // green with actions that cannot work.
-                            await connectionManager.repairMountState(for: config.id)
-                        }
+                        await connectionManager.refreshMountedConnection(for: config.id)
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")

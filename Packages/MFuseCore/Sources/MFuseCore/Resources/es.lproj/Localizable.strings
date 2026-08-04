@@ -48,3 +48,4 @@
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "No se pudo eliminar la credencial de la conexión %1$@: %2$@. %3$@";
 "connectionManager.error.deleteCredentialRecovered" = "No se pudo eliminar la credencial de la conexión %1$@; se restauraron la conexión y la credencial para reintentarlo: %2$@";
 "connectionManager.error.unsupportedBackend" = "Backend no compatible: %@";
+"connectionManager.error.reregisterChangedConnection" = "No se pudieron aplicar los ajustes actualizados de %1$@: %2$@. Vuelve a conectar o reinicia MFuse para reintentar.";

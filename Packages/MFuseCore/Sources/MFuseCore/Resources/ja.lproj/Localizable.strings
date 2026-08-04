@@ -48,3 +48,4 @@
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "接続 %1$@ の認証情報の削除に失敗しました: %2$@。%3$@";
 "connectionManager.error.deleteCredentialRecovered" = "接続 %1$@ の認証情報の削除に失敗しました。再試行できるよう接続と認証情報を復元しました: %2$@";
 "connectionManager.error.unsupportedBackend" = "未対応のバックエンド: %@";
+"connectionManager.error.reregisterChangedConnection" = "%1$@ の更新された設定を適用できませんでした: %2$@。再接続するか MFuse を再起動して再試行してください。";

@@ -48,3 +48,4 @@
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "연결 %1$@의 자격 증명 삭제에 실패했습니다: %2$@. %3$@";
 "connectionManager.error.deleteCredentialRecovered" = "연결 %1$@의 자격 증명 삭제에 실패했지만 다시 시도할 수 있도록 연결과 자격 증명을 복원했습니다: %2$@";
 "connectionManager.error.unsupportedBackend" = "지원되지 않는 백엔드: %@";
+"connectionManager.error.reregisterChangedConnection" = "%1$@의 업데이트된 설정을 적용하지 못했습니다: %2$@. 다시 연결하거나 MFuse를 재시작해 다시 시도하세요.";

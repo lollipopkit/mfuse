@@ -22,14 +22,14 @@ extension ConnectionManager {
             // this task, so re-check before acting on anything observed before them —
             // otherwise a reveal racing an unmount recreates a link to, and opens, a
             // domain that is already gone.
-            guard effectiveMountState(for: config.id).isMounted else {
+            guard canRevealMount(for: config.id) else {
                 return nil
             }
             // Deliberately not gated on `fileExists`: this app is sandboxed and cannot
             // necessarily stat paths under ~/Library/CloudStorage, but Finder opens them
             // fine. Requiring the check here made "Open in Finder" silently do nothing.
             if let recreatedSymlinkURL = try? await mountProvider.createSymlink(for: config) {
-                guard effectiveMountState(for: config.id).isMounted else {
+                guard canRevealMount(for: config.id) else {
                     // An unmount that raced this call already ran removeSymlink, so the
                     // link just recreated has to go with it rather than being left
                     // pointing at a domain that is gone.
@@ -40,7 +40,7 @@ extension ConnectionManager {
                     return recreatedSymlinkURL
                 }
             }
-            guard effectiveMountState(for: config.id).isMounted else {
+            guard canRevealMount(for: config.id) else {
                 return nil
             }
             return mountURL
@@ -49,7 +49,7 @@ extension ConnectionManager {
         // Guarded like the branch above: a link left behind by a teardown whose
         // removeSymlink failed still resolves, so opening it would take the user into a
         // domain that local state has already marked unmounted.
-        if effectiveMountState(for: config.id).isMounted, hasReachableLink(at: symlinkURL) {
+        if canRevealMount(for: config.id), hasReachableLink(at: symlinkURL) {
             return symlinkURL
         }
 
@@ -62,6 +62,16 @@ extension ConnectionManager {
             "No Finder location for connection \(config.id.uuidString, privacy: .public): no mount URL, no reachable symlink at \(symlinkURL.path, privacy: .private), no mount path"
         )
         return nil
+    }
+
+    /// Whether there is still a mount here to reveal.
+    ///
+    /// The published state is not enough on its own: a teardown removes the convenience
+    /// link long before it publishes `.unmounted`, so a reveal landing in that window
+    /// recreates exactly the link the teardown just deleted — and opens a domain that is
+    /// on its way out.
+    func canRevealMount(for id: UUID) -> Bool {
+        effectiveMountState(for: id).isMounted && !isLifecycleTeardownInFlight(for: id)
     }
 
     func hasReachableLink(at url: URL) -> Bool {
