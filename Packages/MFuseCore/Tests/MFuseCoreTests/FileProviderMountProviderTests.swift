@@ -20,6 +20,47 @@ private final class InvocationRecorder: @unchecked Sendable {
     }
 }
 
+/// Holds the first mount-URL resolution so a second one can overtake it.
+private actor ResolutionGate {
+    private var resolutions = 0
+    private var isOpen = false
+    private var entered = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    var resolutionCount: Int { resolutions }
+
+    func isFirstResolution() -> Bool {
+        resolutions += 1
+        return resolutions == 1
+    }
+
+    func wait() async {
+        entered = true
+        let pendingEntryWaiters = entryWaiters
+        entryWaiters = []
+        for continuation in pendingEntryWaiters {
+            continuation.resume()
+        }
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pendingWaiters = waiters
+        waiters = []
+        for continuation in pendingWaiters {
+            continuation.resume()
+        }
+    }
+}
+
 final class FileProviderMountProviderTests: XCTestCase {
 
     private var temporaryDirectoryURL: URL!
@@ -165,13 +206,77 @@ final class FileProviderMountProviderTests: XCTestCase {
         provider.removeRegisteredDomainOverride = { config in
             domainRemovals.record(config.domainIdentifier)
         }
-        provider.removeBootstrapConfigOverride = { _ in
+        let bootstrapRemovals = InvocationRecorder()
+        provider.removeBootstrapConfigOverride = { config in
+            bootstrapRemovals.record(config.domainIdentifier)
             throw MountError.unmountFailed("bootstrap removal failed")
         }
 
         try await provider.unregister(config: config)
 
         XCTAssertEqual(domainRemovals.invocations, [config.domainIdentifier])
+        // Attempted, not skipped: the point is that its failure is tolerated, not that the
+        // step was never reached.
+        XCTAssertEqual(bootstrapRemovals.invocations, [config.domainIdentifier])
+    }
+
+    /// A rename moves the domain's CloudStorage path. Resolving that path and writing the
+    /// link have to be one operation, or a pass holding the older destination finishes
+    /// after a later pass wrote the newer one and puts the stale link back.
+    func testOverlappingCreateSymlinkKeepsTheNewestDestination() async throws {
+        let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
+        let config = ConnectionConfig(
+            name: "Renamed",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        let olderDestinationURL = temporaryDirectoryURL.appendingPathComponent("older-mount")
+        let newerDestinationURL = temporaryDirectoryURL.appendingPathComponent("newer-mount")
+        for destination in [olderDestinationURL, newerDestinationURL] {
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        }
+
+        // The first resolution answers with the pre-rename path and is held there; every
+        // one after it answers with the path the rename moved the domain to.
+        let gate = ResolutionGate()
+        provider.resolveMountURLOverride = { _ in
+            if await gate.isFirstResolution() {
+                await gate.wait()
+                return olderDestinationURL
+            }
+            return newerDestinationURL
+        }
+
+        let stale = Task { try await provider.createSymlink(for: config) }
+        await gate.waitUntilEntered()
+        let current = Task { try await provider.createSymlink(for: config) }
+
+        // Handshake, not a fixed number of yields: this resumes once the second call is
+        // actually parked behind the first, which is the only state in which the assertion
+        // below means anything.
+        while await provider.queuedOperationCount(for: config) == 0 {
+            await Task.yield()
+        }
+        let resolutionsDuringTheHeldOperation = await gate.resolutionCount
+        XCTAssertEqual(
+            resolutionsDuringTheHeldOperation,
+            1,
+            "a second createSymlink resolved a destination while the first was mid-operation"
+        )
+
+        await gate.open()
+        _ = try await stale.value
+        _ = try await current.value
+
+        // The queued pass ran once the first released, with its own resolution — the
+        // destination it writes is therefore never older than the pass before it.
+        let totalResolutions = await gate.resolutionCount
+        XCTAssertEqual(totalResolutions, 2)
+        let symlinkURL = FileProviderMountProvider.symlinkURL(
+            for: config,
+            baseDir: temporaryDirectoryURL
+        )
+        XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path))
     }
 
     func testLegacySymlinkBaseURLUsesSharedContainerLayout() throws {
