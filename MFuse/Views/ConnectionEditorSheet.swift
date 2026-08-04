@@ -77,6 +77,9 @@ struct ConnectionEditorSheet: View {
     @State private var testSuccess = false
     @State private var didLoadStoredCredential = false
     @State private var isLoadingStoredCredential = false
+    /// The method a backend switch installed, pending its change handler. See
+    /// `onChange(of: authMethod)`.
+    @State private var backendNormalizedAuthMethod: AuthMethod?
     @State private var currentTestTask: Task<Void, Never>?
     @State private var oauthAuthorizationTask: Task<Void, Never>?
     @State private var isAuthorizingOAuth = false
@@ -184,9 +187,13 @@ struct ConnectionEditorSheet: View {
                             || currentPort == oldType.defaultPort {
                             port = "\(newType.defaultPort)"
                         }
-                        // Reset auth method if not supported
+                        // Reset auth method if not supported. Recorded, because the change
+                        // handler below cannot otherwise tell this from the user picking a
+                        // different method — and it answers the two very differently.
                         if !newType.supportedAuthMethods.contains(authMethod) {
-                            authMethod = newType.supportedAuthMethods.first ?? .password
+                            let normalizedMethod = newType.supportedAuthMethods.first ?? .password
+                            backendNormalizedAuthMethod = normalizedMethod
+                            authMethod = normalizedMethod
                         }
                         // A secret belongs to the server it was entered for, and this
                         // switch points the mount at a different one. The auth method can
@@ -414,6 +421,16 @@ struct ConnectionEditorSheet: View {
             await loadStoredCredentialIfNeeded()
         }
         .onChange(of: authMethod) { _, newMethod in
+            // A method the backend switch installed is not a choice about credentials: the
+            // switch already cleared everything on screen, and destroying the saved
+            // credential here as well would make a round trip through the picker — Google
+            // Drive to SFTP and back — lose a refresh token this sheet cannot load again,
+            // and then write the emptiness over it on save. `savedCredentialForCurrentBackend`
+            // is what keeps it from reaching the wrong backend meanwhile.
+            if backendNormalizedAuthMethod == newMethod {
+                backendNormalizedAuthMethod = nil
+                return
+            }
             clearCredentialState(except: newMethod)
         }
         .onChange(of: privateKeyPath) { _, newPath in
