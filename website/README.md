@@ -4,12 +4,21 @@ Svelte 5 + Vite + Tailwind, built with bun.
 
 ```bash
 bun install && bun run dev
-bun run check           # tsc --noEmit against jsconfig.json (checkJs)
+bun run check           # tsc --noEmit against both jsconfig files (checkJs)
 bun run build           # install --frozen-lockfile, then check, then vite build
 ```
 
-`bun run check` covers `.js` and `.ts`, including the generated `src/i18n/` modules.
-`.svelte` files are not type-checked — see below.
+`bun run check` covers every `.js` and `.ts` file here, including the generated
+`src/i18n/` modules. `.svelte` files are not type-checked — see below.
+
+Two projects, because TypeScript applies global declarations program-wide:
+`jsconfig.json` is the browser app, `jsconfig.node.json` is `vite.config.js` plus
+`svelte.config.js` and is the only one given `@types/node`. Merging them would make
+`process` and `Buffer` type-check in browser code that cannot use them.
+
+`packageManager` pins the bun release the committed `bun.lock` was produced with — bun
+does not enforce the field itself, so it is there for version managers and CI rather than
+as a local guard.
 
 ## Editing translations
 
