@@ -812,7 +812,13 @@ struct ConnectionEditorSheet: View {
             host: usesHostBasedAddressing
                 ? values.host.trimmingCharacters(in: .whitespacesAndNewlines)
                 : "",
-            port: usesHostBasedAddressing ? values.port : "",
+            // Read the way `makeConfig` reads it, not as typed: "22", "022" and a value
+            // too malformed to parse all reach the same server, and treating them as
+            // different ones clears the loaded credential for an address that never moved
+            // — then leaves Save to write the emptiness over it.
+            port: usesHostBasedAddressing
+                ? String(UInt16(values.port) ?? backendType.defaultPort)
+                : "",
             username: usesUsername ? values.username : "",
             s3Endpoint: backendType == .s3
                 ? values.s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
