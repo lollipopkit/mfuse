@@ -86,6 +86,11 @@ rm -rf /tmp/mfuse-sveltecheck
 It reports `0 ERRORS` on a clean tree. Keeping `.svelte` script blocks thin — logic in
 `src/lib/*.js`, which `bun run check` does cover — is what keeps this pass cheap.
 
-**TODO:** fold it back into `bun run check` once `svelte-check` supports a single
-TypeScript 7 install; today it wants TypeScript 6 alongside plus `--tsgo`, which is why it
-cannot live in this project's manifest.
+Why it lives outside the project: `svelte-check@4.4.4` is happy with any TypeScript from
+5.0 up *as an API*, and 5.9.3 is what the pins above use. It cannot drive this project's
+TypeScript 7, which no longer exposes that API — pointed at it, svelte-check dies on
+`ts.sys` being undefined, the same wall `typesafe-i18n` hits. Its `--tsgo` mode targets the
+native compiler instead, but needs `@typescript/native-preview` installed.
+
+**TODO:** fold this back into `bun run check` once `svelte-check` can run against a
+TypeScript 7 install on its own.

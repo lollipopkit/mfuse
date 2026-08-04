@@ -18,5 +18,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["vite.config.js", "svelte.config.js"]
+  "include": ["vite.config.js", "svelte.config.js", "scripts/**/*.js"]
 }
