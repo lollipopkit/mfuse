@@ -1280,6 +1280,53 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(connectCallCount, 0, "the interrupted attempt must not open a session")
     }
 
+    /// The caller that starts an attempt does not own it. Cancelling it has to return that
+    /// caller at once — it used to sit on the shared task until the whole handshake
+    /// finished — without taking the attempt down for the callers that joined it.
+    func testCancellingTheStarterReturnsItAndLeavesAJoinedConnectRunning() async throws {
+        let config = ConnectionConfig(
+            name: "CancelledStarter",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        // Held inside the credential lookup, so the attempt is suspended well before it
+        // could finish on its own.
+        let gate = TestGate()
+        credentialProvider.credentialLookupGate = gate
+
+        let starterReturned = expectation(description: "the cancelled starter returned")
+        let starter = Task { @MainActor in
+            await manager.connect(config.id)
+            starterReturned.fulfill()
+        }
+        await gate.waitUntilEntered()
+
+        let joiner = Task { @MainActor in await manager.connect(config.id) }
+        var waiterCount = 0
+        for _ in 0..<1000 {
+            waiterCount = manager.connectWaiterCount(for: config.id)
+            if waiterCount == 2 { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(waiterCount, 2, "the starter and the joiner should both be waiting")
+
+        starter.cancel()
+        // Bounded: on a regression this returns only once the gate opens, which it has not.
+        await fulfillment(of: [starterReturned], timeout: 5)
+
+        XCTAssertEqual(manager.state(for: config.id), .connecting)
+
+        await gate.open()
+        await joiner.value
+
+        XCTAssertEqual(manager.state(for: config.id), .connected)
+        XCTAssertNotNil(manager.fileSystem(for: config.id))
+    }
+
     /// A cancelled attempt publishes no final state of its own, and `.connecting` is also
     /// what makes every later connect return at the deduplication guard — so leaving it
     /// behind pins the row until the app restarts.
@@ -1307,7 +1354,16 @@ final class ConnectionManagerTests: XCTestCase {
         attempt.cancel()
         await attempt.value
 
-        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        // The cancelled caller returns without waiting for the attempt it gave up on — it
+        // is shared, so it unwinds on its own — and clearing the row is the last thing that
+        // attempt does.
+        var stateAfterCancellation = manager.state(for: config.id)
+        for _ in 0..<1000 {
+            if stateAfterCancellation == .disconnected { break }
+            await Task.yield()
+            stateAfterCancellation = manager.state(for: config.id)
+        }
+        XCTAssertEqual(stateAfterCancellation, .disconnected)
 
         // The row is actionable again: the guard no longer sees a live attempt.
         await fileSystem.setConnectDelay(nanoseconds: 0)

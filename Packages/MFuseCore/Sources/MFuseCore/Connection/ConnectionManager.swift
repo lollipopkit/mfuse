@@ -376,20 +376,12 @@ public final class ConnectionManager: ObservableObject {
             self.finishConnectAttempt(id)
         }
         connectTasks[id] = task
-        // The attempt runs unstructured so other callers can join it, which also puts it
-        // out of reach of this caller's cancellation — the caller that started it still
-        // owns it, so the cancellation has to be forwarded by hand. Forwarding it
-        // *directly* would take the attempt down for everyone who joined meanwhile, so it
-        // goes through the participant set instead.
-        let participantID = UUID()
-        connectParticipants[id, default: []].insert(participantID)
-        await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            Task { @MainActor [weak self] in
-                self?.relinquishConnectAttempt(id, participantID: participantID, task: task)
-            }
-        }
+        // The caller that starts the attempt waits on it exactly the way callers that join
+        // it do: on its own continuation. Awaiting `task.value` here instead pinned a
+        // cancelled starter to a handshake the callers behind it were still waiting for,
+        // while a cancelled joiner returned at once — the attempt is shared, so no caller
+        // waits on it past its own cancellation.
+        await waitForConnectAttempt(id, task: task)
     }
 
     /// Give up one caller's interest in a shared attempt, cancelling it only once nobody
@@ -420,6 +412,10 @@ public final class ConnectionManager: ObservableObject {
     /// own continuation, which `finishConnectAttempt(_:)` resumes.
     private func waitForConnectAttempt(_ id: UUID, task: Task<Void, Never>) async {
         let waiterID = UUID()
+        // Registered before the checks below, and withdrawn on every way out: the attempt
+        // is cancelled by whichever caller is the last to give up on it, and a caller that
+        // never counted as interested could not be that one.
+        connectParticipants[id, default: []].insert(waiterID)
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 // Both checks share this step with the registration: a cancellation that
@@ -429,7 +425,6 @@ public final class ConnectionManager: ObservableObject {
                     continuation.resume()
                 } else {
                     connectWaiters[id, default: [:]][waiterID] = continuation
-                    connectParticipants[id, default: []].insert(waiterID)
                 }
             }
         } onCancel: {
@@ -438,6 +433,15 @@ public final class ConnectionManager: ObservableObject {
                 self?.relinquishConnectAttempt(id, participantID: waiterID, task: task)
             }
         }
+        // Covers the paths the handler above does not: a caller that was already cancelled
+        // when it got here, and one that resumed normally. Both are no-ops once
+        // `finishConnectAttempt` has cleared the attempt.
+        relinquishConnectAttempt(id, participantID: waiterID, task: task)
+    }
+
+    /// Test seam: how many callers are parked on the attempt for this connection.
+    func connectWaiterCount(for id: UUID) -> Int {
+        connectWaiters[id]?.count ?? 0
     }
 
     private func resumeConnectWaiter(_ id: UUID, waiterID: UUID) {
