@@ -700,7 +700,14 @@ struct ConnectionEditorSheet: View {
             }
         case .oauth:
             if usesBundledOAuthFlow {
-                oauthCredential = credential
+                // Only when nothing newer is there. `Connect Account` stays enabled while
+                // this load is in flight — it is gated on the authorization, not on the
+                // read — so an authorization that finished first would have its token
+                // replaced here by the one it was meant to supersede, and the save would
+                // write that older one back.
+                if oauthCredential == nil {
+                    oauthCredential = credential
+                }
             } else if storedCredential == nil {
                 storedCredential = credential
             }
