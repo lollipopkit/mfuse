@@ -881,7 +881,7 @@ public final class ConnectionManager: ObservableObject {
             task.cancel()
         }
 
-        for config in connections where
+        let idsNeedingTeardown = connections.filter { config in
             states[config.id]?.isConnected == true ||
             {
                 if case .error = states[config.id] {
@@ -893,16 +893,39 @@ public final class ConnectionManager: ObservableObject {
             mountState(for: config.id) == .mounting ||
             pendingMountStateWorkIDs.contains(config.id) ||
             pendingConnectIDs.contains(config.id) ||
-            fileSystems[config.id] != nil {
-            let id = config.id
-            await withShutdownDeadline { [weak self] in
-                await self?.disconnect(id)
-            }
+            fileSystems[config.id] != nil
+        }.map(\.id)
+
+        // Together, not one after another: connections tear down independently, and each
+        // wait carries its own deadline — so a backend that hangs used to cost every
+        // connection behind it another five seconds of quit. Now it costs only its own.
+        await runConcurrentlyForShutdown(over: idsNeedingTeardown) { manager, id in
+            await manager.disconnect(id)
         }
 
-        for id in Set(mountResolutionTasks.keys).union(mountRepairTasks.keys).union(refreshTasks.keys) {
-            await withShutdownDeadline { [weak self] in
-                await self?.cancelAndAwaitMountStateWork(for: id)
+        let idsWithLingeringMountStateWork = Set(mountResolutionTasks.keys)
+            .union(mountRepairTasks.keys)
+            .union(refreshTasks.keys)
+        await runConcurrentlyForShutdown(over: Array(idsWithLingeringMountStateWork)) { manager, id in
+            await manager.cancelAndAwaitMountStateWork(for: id)
+        }
+    }
+
+    /// Run one deadline-bounded piece of quit-time cleanup per connection, all at once.
+    private func runConcurrentlyForShutdown(
+        over ids: [UUID],
+        _ work: @escaping @MainActor (ConnectionManager, UUID) async -> Void
+    ) async {
+        guard !ids.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for id in ids {
+                group.addTask { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.withShutdownDeadline { [weak self] in
+                        guard let self else { return }
+                        await work(self, id)
+                    }
+                }
             }
         }
     }

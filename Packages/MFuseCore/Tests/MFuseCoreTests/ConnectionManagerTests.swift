@@ -868,6 +868,58 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNil(credentialProvider.credentials[config.id])
     }
 
+    /// Quit-time cleanup carries a deadline per connection, so tearing them down one after
+    /// another charged every connection behind a hanging backend another five seconds of
+    /// quit. They are independent, so they run together and a hang costs only its own.
+    func testShutdownTearsDownConnectionsConcurrently() async throws {
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        var configs: [ConnectionConfig] = []
+        for index in 0..<2 {
+            let config = ConnectionConfig(
+                name: "ShutdownTarget\(index)",
+                backendType: .sftp,
+                host: "example.com",
+                username: "user"
+            )
+            let mountURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mounted-shutdown-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+            await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+            credentialProvider.credentials[config.id] = Credential(password: "pass")
+            try manager.add(config)
+            await manager.connect(config.id)
+            _ = await waitForMountState(config.id)
+            configs.append(config)
+        }
+
+        // Both teardowns hold here, which is what a backend that will not let go looks
+        // like from the manager's side.
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+        let shutdown = Task { @MainActor in await manager.shutdown() }
+
+        var disconnects: [String] = []
+        for _ in 0..<1000 {
+            disconnects = await mountProvider.disconnectInvocations
+            if disconnects.count == configs.count { break }
+            await Task.yield()
+        }
+        // Torn down one at a time, the second would not start until the first had used up
+        // its whole deadline — long after this bounded poll gives up.
+        XCTAssertEqual(
+            Set(disconnects),
+            Set(configs.map(\.domainIdentifier)),
+            "shutdown tore the connections down one after another"
+        )
+
+        await gate.open()
+        await shutdown.value
+        for config in configs {
+            XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+        }
+    }
+
     /// A teardown owns the domain, the convenience link and the filesystem until it
     /// publishes `.unmounted`. A Mount arriving inside that window used to start a second
     /// attempt alongside it, and the teardown's final write landed after the mount it never
