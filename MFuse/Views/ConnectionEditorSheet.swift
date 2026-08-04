@@ -80,6 +80,9 @@ struct ConnectionEditorSheet: View {
     /// The method a backend switch installed, pending its change handler. See
     /// `onChange(of: authMethod)`.
     @State private var backendNormalizedAuthMethod: AuthMethod?
+    /// Whether the user has chosen a different auth method, which is the one thing that
+    /// gives up the saved credential for good.
+    @State private var didDiscardSavedCredential = false
     @State private var currentTestTask: Task<Void, Never>?
     @State private var oauthAuthorizationTask: Task<Void, Never>?
     @State private var isAuthorizingOAuth = false
@@ -474,6 +477,8 @@ struct ConnectionEditorSheet: View {
                 backendNormalizedAuthMethod = nil
                 return
             }
+            // Recorded so a load still in flight does not put back what this discards.
+            didDiscardSavedCredential = true
             clearCredentialState(except: newMethod)
         }
         .onChange(of: privateKeyPath) { _, newPath in
@@ -717,15 +722,21 @@ struct ConnectionEditorSheet: View {
             return
         }
         guard let credential else { return }
-        guard credentialTarget == requestedCredentialTarget else { return }
 
-        // Kept whatever the method is, and not only where the sheet has no field for it:
-        // it is what a round trip through the backend picker restores the fields from, and
-        // what a save falls back to when a key file can no longer be read.
-        // `savedCredentialForCurrentTarget` is what keeps it from reaching another server.
-        if storedCredential == nil {
+        // Kept even when the form has moved on, and whatever the method is: this credential
+        // belongs to the mount as it was opened, and `savedCredentialForCurrentTarget` is
+        // what decides when it may be used again. Discarding it here made an address the
+        // user was midway through editing cost the credential outright — putting the field
+        // back could restore nothing, and Save then wrote an empty one over a working
+        // secret. The one thing that does discard it is the user choosing another auth
+        // method, which is what `clearCredentialState(except:)` is for.
+        if !didDiscardSavedCredential, storedCredential == nil {
             storedCredential = credential
         }
+
+        // The visible fields are only filled when the form still describes what was
+        // loaded; anything else would drop one server's secret into a form naming another.
+        guard credentialTarget == requestedCredentialTarget else { return }
 
         switch authMethod {
         case .password:
