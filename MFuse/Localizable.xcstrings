@@ -1187,6 +1187,65 @@
         }
       }
     },
+    "content.error.saveFailedWithCredentialRollbackFailure" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ The stored credential could not be put back either: %2$@. Save the mount again to repair it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Tampoco se pudo restaurar la credencial guardada: %2$@. Vuelve a guardar el montaje para repararlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ L’identifiant enregistré n’a pas pu être restauré non plus : %2$@. Enregistrez de nouveau le montage pour le réparer."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Kredensial tersimpan juga tidak dapat dikembalikan: %2$@. Simpan ulang pemasangan ini untuk memperbaikinya."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Non è stato possibile ripristinare nemmeno la credenziale salvata: %2$@. Salva di nuovo il montaggio per ripararlo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 保存されていた認証情報も元に戻せませんでした: %2$@。マウントを保存し直して修復してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 저장된 자격 증명도 복원하지 못했습니다: %2$@. 마운트를 다시 저장해 복구하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已保存的凭据也未能恢复：%2$@。请再次保存该挂载以修复。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已儲存的憑證也無法還原：%2$@。請重新儲存此掛載以修復。"
+          }
+        }
+      }
+    },
     "content.error.unableToSaveMount" : {
       "extractionState" : "stale",
       "localizations" : {

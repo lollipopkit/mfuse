@@ -57,7 +57,7 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             // its own does not identify the row — it would give both the same subtitle.
             switch (s3Endpoint, s3Bucket) {
             case let (endpoint?, bucket?):
-                return endpoint.hasSuffix("/") ? "\(endpoint)\(bucket)" : "\(endpoint)/\(bucket)"
+                return Self.endpointDisplayAddress(endpoint, bucket: bucket)
             case let (endpoint?, nil):
                 return endpoint
             case let (nil, bucket?):
@@ -113,6 +113,23 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// The configured S3 bucket, or nil when unset or blank.
     public var s3Bucket: String? {
         Self.trimmedParameter(parameters["bucket"])
+    }
+
+    /// The endpoint with the bucket appended to its *path*.
+    ///
+    /// Joining the raw strings puts the bucket after whatever the endpoint ends with, so
+    /// `https://host/api?token=x` would be shown as `https://host/api?token=x/b` — a
+    /// location that is not where the bucket lives. Endpoints too malformed to parse fall
+    /// back to the plain join, which is still better than showing nothing.
+    static func endpointDisplayAddress(_ endpoint: String, bucket: String) -> String {
+        guard var components = URLComponents(string: endpoint),
+              components.scheme != nil,
+              components.host != nil else {
+            return endpoint.hasSuffix("/") ? "\(endpoint)\(bucket)" : "\(endpoint)/\(bucket)"
+        }
+        let path = components.path
+        components.path = path.hasSuffix("/") ? "\(path)\(bucket)" : "\(path)/\(bucket)"
+        return components.string ?? "\(endpoint)/\(bucket)"
     }
 
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.

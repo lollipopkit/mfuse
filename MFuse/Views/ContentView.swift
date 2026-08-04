@@ -9,6 +9,8 @@ struct ContentView: View {
     @State private var editorPresentation: EditorPresentation?
     @State private var showingExtensionGuide = false
     @State private var saveAlert: SaveAlertState?
+    /// Editor presentations whose save is still running, so one cannot be started twice.
+    @State private var savingPresentationIDs: Set<UUID> = []
 
     var body: some View {
         NavigationSplitView {
@@ -32,7 +34,11 @@ struct ContentView: View {
             ConnectionEditorSheet(
                 config: presentation.config,
                 onSave: { config, credential in
-                    saveConnection(config, credential: credential)
+                    saveConnection(
+                        config,
+                        credential: credential,
+                        presentationID: presentation.id
+                    )
                 }
             )
             .frame(minWidth: 480, minHeight: 400)
@@ -120,8 +126,17 @@ struct ContentView: View {
         editorPresentation = EditorPresentation(config: config)
     }
 
-    private func saveConnection(_ config: ConnectionConfig, credential: Credential) {
+    private func saveConnection(
+        _ config: ConnectionConfig,
+        credential: Credential,
+        presentationID: UUID
+    ) {
+        // Save suspends repeatedly while its sheet is still on screen and its button still
+        // enabled. A second click would run the whole thing again, and for a new mount both
+        // passes see no previous config and append the same UUID twice.
+        guard savingPresentationIDs.insert(presentationID).inserted else { return }
         Task {
+            defer { savingPresentationIDs.remove(presentationID) }
             do {
                 let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
                 let previousCredential = try await credentialProvider.credential(for: config.id)
@@ -133,14 +148,21 @@ struct ContentView: View {
                         try connectionManager.add(config)
                     }
                 } catch {
-                    if let previousCredential {
-                        try? await credentialProvider.store(previousCredential, for: config.id)
-                    } else {
-                        try? await credentialProvider.delete(for: config.id)
-                    }
-                    throw error
+                    // The new credential is already stored, so a rollback that fails leaves
+                    // the old config paired with it — or a credential behind for a mount
+                    // that was never created. Reported alongside the primary failure rather
+                    // than swallowed: only the user can put that right.
+                    let rollbackFailure = await restoreCredential(
+                        previousCredential,
+                        for: config.id
+                    )
+                    throw SaveFailure(primary: error, rollbackFailure: rollbackFailure)
                 }
                 await MainActor.run {
+                    // Tied to the sheet that started this save: the user can cancel it and
+                    // open another one meanwhile, and dismissing *that* one — and selecting
+                    // a mount they navigated away from — is not what this save is for.
+                    guard editorPresentation?.id == presentationID else { return }
                     selectedConnection = config
                     editorPresentation = nil
                 }
@@ -176,6 +198,37 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// Put back the credential a failed save replaced, reporting what went wrong instead
+    /// of leaving the mount paired with a secret that was never meant to stick.
+    private func restoreCredential(_ credential: Credential?, for id: UUID) async -> String? {
+        do {
+            if let credential {
+                try await credentialProvider.store(credential, for: id)
+            } else {
+                try await credentialProvider.delete(for: id)
+            }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+}
+
+/// A save failure plus, when the credential could not be put back, what that left behind.
+private struct SaveFailure: LocalizedError {
+    let primary: Error
+    let rollbackFailure: String?
+
+    var errorDescription: String? {
+        guard let rollbackFailure else { return primary.localizedDescription }
+        return AppL10n.string(
+            "content.error.saveFailedWithCredentialRollbackFailure",
+            fallback: "%1$@ The stored credential could not be put back either: %2$@. Save the mount again to repair it.",
+            primary.localizedDescription,
+            rollbackFailure
+        )
     }
 }
 

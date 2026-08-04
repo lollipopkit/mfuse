@@ -72,11 +72,15 @@ struct ConnectionEditorSheet: View {
 
     private let existingID: UUID?
     private let draftID: UUID
+    /// The key path this mount was saved with, so a save that cannot re-read the file can
+    /// tell "the same key as before" from "a key the user just pointed us at".
+    private let savedPrivateKeyPath: String
     private let onSave: (ConnectionConfig, Credential) -> Void
 
     init(config: ConnectionConfig?, onSave: @escaping (ConnectionConfig, Credential) -> Void) {
         self.existingID = config?.id
         self.draftID = config?.id ?? UUID()
+        self.savedPrivateKeyPath = config?.parameters["privateKeyPath"] ?? ""
         self.onSave = onSave
         _name = State(initialValue: config?.name ?? "")
         _backendType = State(initialValue: config?.backendType ?? .sftp)
@@ -92,7 +96,15 @@ struct ConnectionEditorSheet: View {
                 : "\(existing.backendType.defaultPort)"
         } ?? "")
         _username = State(initialValue: config?.username ?? "")
-        _authMethod = State(initialValue: config?.authMethod ?? .password)
+        // Normalized on open, not just on a backend switch: a config carrying a method its
+        // backend does not support — written by an older build, or synced from one — has no
+        // row in the picker to correct it, so it would be saved and tested as-is. An S3
+        // mount stuck on `.password` saves with no access keys and then fails every time.
+        _authMethod = State(initialValue: config.map { existing in
+            existing.backendType.supportedAuthMethods.contains(existing.authMethod)
+                ? existing.authMethod
+                : existing.backendType.supportedAuthMethods.first ?? existing.authMethod
+        } ?? .password)
         _remotePath = State(initialValue: config?.remotePath ?? "/")
         _autoMountOnLaunch = State(initialValue: config?.autoMountOnLaunch ?? false)
         // Backend-specific parameters
@@ -176,7 +188,12 @@ struct ConnectionEditorSheet: View {
                         if backendType.usesHostBasedAddressing {
                             TextField(AppL10n.string("detail.field.host", fallback: "Host"), text: $host, prompt: Text(AppL10n.string("editor.prompt.host", fallback: "example.com")))
                             TextField(AppL10n.string("detail.field.port", fallback: "Port"), text: $port, prompt: Text("\(backendType.defaultPort)"))
-                            TextField(AppL10n.string("detail.field.username", fallback: "Username"), text: $username, prompt: Text(AppL10n.string("editor.prompt.username", fallback: "user")))
+                            // NFS addresses by host but authorizes by UID, so it has no
+                            // username to offer — and one left over from the previously
+                            // selected backend must not be saved with it either.
+                            if backendType.usesUsername {
+                                TextField(AppL10n.string("detail.field.username", fallback: "Username"), text: $username, prompt: Text(AppL10n.string("editor.prompt.username", fallback: "user")))
+                            }
                         }
                         TextField(AppL10n.string("detail.field.remotePath", fallback: "Remote Path"), text: $remotePath, prompt: Text("/"))
                     }
@@ -420,15 +437,21 @@ struct ConnectionEditorSheet: View {
     /// the editor hides those fields, so whatever they still hold belongs to a backend
     /// that was selected earlier and would otherwise be written into `connections.json`
     /// and every File Provider bootstrap snapshot.
+    ///
+    /// The host is trimmed for the same reason `displayAddress` trims it: without this the
+    /// row shows "example.com" while the backend is handed " example.com" and cannot
+    /// resolve it.
     private func makeConfig(id: UUID) throws -> ConnectionConfig {
         let usesHostBasedAddressing = backendType.usesHostBasedAddressing
         return ConnectionConfig(
             id: id,
             name: name,
             backendType: backendType,
-            host: usesHostBasedAddressing ? host : "",
+            host: usesHostBasedAddressing
+                ? host.trimmingCharacters(in: .whitespacesAndNewlines)
+                : "",
             port: UInt16(port) ?? backendType.defaultPort,
-            username: usesHostBasedAddressing ? username : "",
+            username: backendType.usesUsername ? username : "",
             authMethod: authMethod,
             remotePath: remotePath.isEmpty ? "/" : remotePath,
             parameters: try buildParameters(),
@@ -456,6 +479,7 @@ struct ConnectionEditorSheet: View {
         do {
             let config = try makeConfig(id: UUID())
             credential = try buildCredential()
+            let testedSubject = currentTestSubject()
 
             currentTestTask = Task {
                 let result = await Self.sharedTestConnectionManager.testConnection(
@@ -465,6 +489,15 @@ struct ConnectionEditorSheet: View {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
+                    isTesting = false
+                    currentTestTask = nil
+                    // The sheet stays editable for the whole test, and the verdict is read
+                    // as one on what is on screen now: shown against changed fields,
+                    // "Access successful" claims a configuration nobody tested works.
+                    guard currentTestSubject() == testedSubject else {
+                        testResult = nil
+                        return
+                    }
                     switch result {
                     case .success:
                         testResult = AppL10n.string("editor.message.accessSuccessful", fallback: "Access successful!")
@@ -473,8 +506,6 @@ struct ConnectionEditorSheet: View {
                         testResult = error.localizedDescription
                         testSuccess = false
                     }
-                    isTesting = false
-                    currentTestTask = nil
                 }
             }
         } catch {
@@ -483,6 +514,21 @@ struct ConnectionEditorSheet: View {
             isTesting = false
             return
         }
+    }
+
+    /// Everything a connection test is a verdict on: the config it builds plus the secrets
+    /// that never reach one. `nil` while the form cannot produce a config at all.
+    private func currentTestSubject() -> TestSubject? {
+        guard let config = try? makeConfig(id: draftID) else { return nil }
+        return TestSubject(
+            config: config,
+            password: password,
+            privateKeyPath: privateKeyPath,
+            privateKeyBookmark: privateKeyBookmark,
+            accessKeyID: s3AccessKeyID,
+            secretAccessKey: s3SecretAccessKey,
+            oauthToken: (usesBundledOAuthFlow ? oauthCredential : storedCredential)?.token
+        )
     }
 
     private func buildCredential() throws -> Credential {
@@ -501,6 +547,18 @@ struct ConnectionEditorSheet: View {
                     passphrase: password.isEmpty ? nil : password
                 )
             } catch {
+                // The file cannot be read right now — moved, or outside what this sandbox
+                // may open without a fresh bookmark — but the mount already has key
+                // material saved for this exact path. Renaming it or toggling auto-mount
+                // must not fail on that, nor replace a working key with nothing.
+                if privateKeyPath == savedPrivateKeyPath,
+                   let savedPrivateKey = storedCredential?.privateKey {
+                    return Credential(
+                        password: nil,
+                        privateKey: savedPrivateKey,
+                        passphrase: password.isEmpty ? nil : password
+                    )
+                }
                 throw RemoteFileSystemError.operationFailed(
                     AppL10n.string(
                         "editor.error.readPrivateKey",
@@ -578,6 +636,12 @@ struct ConnectionEditorSheet: View {
         case .publicKey:
             if password.isEmpty {
                 password = credential.passphrase ?? ""
+            }
+            // Kept for the same reason Google Drive's is: the sheet has no field holding
+            // the key material, so a save that cannot re-read the file would otherwise
+            // have nothing to write back. See `buildCredential()`.
+            if storedCredential == nil {
+                storedCredential = credential
             }
         case .accessKey:
             if s3AccessKeyID.isEmpty {
@@ -858,6 +922,18 @@ struct ConnectionEditorSheet: View {
             )
         }
     }
+}
+
+/// A snapshot of everything a connection test depends on, so its result can be dropped
+/// when the form no longer holds what was tested.
+private struct TestSubject: Equatable {
+    let config: ConnectionConfig
+    let password: String
+    let privateKeyPath: String
+    let privateKeyBookmark: String
+    let accessKeyID: String
+    let secretAccessKey: String
+    let oauthToken: String?
 }
 
 private struct OAuthAuthorizationResult {

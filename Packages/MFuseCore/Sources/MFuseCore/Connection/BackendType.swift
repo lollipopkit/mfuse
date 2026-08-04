@@ -91,6 +91,21 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// Whether the connection is identified by a username.
+    ///
+    /// NFS authorizes by the client's UID rather than by name — it is anonymous-only —
+    /// so the field holds nothing the backend can use. Offering it would only carry a
+    /// username from whichever backend was selected before into `connections.json` and
+    /// every File Provider bootstrap snapshot.
+    public var usesUsername: Bool {
+        switch self {
+        case .sftp, .webdav, .smb, .ftp:
+            return true
+        case .nfs, .s3, .googleDrive, .dropbox, .oneDrive:
+            return false
+        }
+    }
+
     /// Auth methods applicable to this backend type.
     public var supportedAuthMethods: [AuthMethod] {
         switch self {
