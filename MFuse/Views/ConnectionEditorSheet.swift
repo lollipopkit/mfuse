@@ -478,7 +478,9 @@ struct ConnectionEditorSheet: View {
         currentTestTask = nil
         let credential: Credential
         do {
-            let config = try makeConfig(id: UUID())
+            // A throwaway id, so a test can never touch what the saved mount stored.
+            let testConnectionID = UUID()
+            let config = try makeConfig(id: testConnectionID)
             credential = try buildCredential()
             let testedSubject = currentTestSubject()
 
@@ -487,6 +489,13 @@ struct ConnectionEditorSheet: View {
                     config,
                     credential: credential
                 )
+                // The shared backend registry hands OAuth backends a refresh callback that
+                // writes through the *production* credential store, keyed by the config it
+                // was built from — so a token refreshed during this test leaves a real
+                // secret behind under an id no connection will ever have. Clearing it is
+                // what keeps the test ephemeral; it runs before the cancellation check
+                // because a dismissed sheet must not leave one either.
+                try? await credentialProvider.delete(for: testConnectionID)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
