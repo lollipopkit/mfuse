@@ -165,6 +165,18 @@ final class BackendTypeTests: XCTestCase {
         let baseStrings = try localizedStrings(for: baseLocale)
         XCTAssertFalse(baseStrings.isEmpty, "the \(baseLocale) catalog is empty")
 
+        // The base locale is held to the same contract it defines. It is not just another
+        // bundle: an empty value here ships as the English string *and* becomes the
+        // signature every other locale is measured against, so nothing downstream would
+        // report it.
+        for (key, template) in baseStrings {
+            XCTAssertFalse(
+                template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                "\(key) is empty for \(baseLocale)"
+            )
+            assertNoMalformedFormatSpecifier(in: template, key: key, locale: baseLocale)
+        }
+
         for locale in otherLocales {
             let strings = try localizedStrings(for: locale)
             let missing = Set(baseStrings.keys).subtracting(strings.keys).sorted()
@@ -178,6 +190,7 @@ final class BackendTypeTests: XCTestCase {
                     template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                     "\(key) is empty for \(locale)"
                 )
+                assertNoMalformedFormatSpecifier(in: template, key: key, locale: locale)
                 assertFormatSpecifiers(
                     in: template,
                     expectedCount: formatSpecifiers(in: baseTemplate).count,
@@ -339,6 +352,32 @@ final class BackendTypeTests: XCTestCase {
             let position = Range(match.range(at: 1), in: template).flatMap { Int(template[$0]) }
             return (position: position, conversion: String(template[conversionRange]))
         }
+    }
+
+    /// Fail on a `%` that begins neither an escaped percent nor a placeholder.
+    ///
+    /// The scanner above skips them by construction — it only matches what is well formed
+    /// — so a translation ending in a bare `%`, or writing `%s` where the argument is an
+    /// object, passes every count and position check and then misreads memory at runtime.
+    /// The escape is consumed first, so the second half of a `%%` is not mistaken for one.
+    private func assertNoMalformedFormatSpecifier(
+        in template: String,
+        key: String,
+        locale: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let pattern = try! NSRegularExpression(pattern: "%%|%(?:\\d+\\$)?[@a-zA-Z]|(%)")
+        let range = NSRange(template.startIndex..<template.endIndex, in: template)
+        let malformed = pattern.matches(in: template, range: range).contains { match in
+            match.range(at: 1).location != NSNotFound
+        }
+        XCTAssertFalse(
+            malformed,
+            "\(key) has a stray or dangling % for \(locale)",
+            file: file,
+            line: line
+        )
     }
 
     private func assertFormatSpecifiers(
