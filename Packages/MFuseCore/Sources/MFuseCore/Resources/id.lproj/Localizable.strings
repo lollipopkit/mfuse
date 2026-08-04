@@ -42,6 +42,7 @@
 "credential.error.modeTransitionFailed" = "Transisi mode kredensial gagal: %1$@. Rollback juga gagal: %2$@";
 "connectionManager.error.cleanupFailed" = "Gagal membersihkan koneksi %@ sebelum dihapus";
 "connectionManager.error.removalInProgress" = "Koneksi %@ sedang dihapus; simpan lagi setelah proses itu selesai";
+"connectionManager.error.connectionNotFound" = "Koneksi %@ sudah tidak ada";
 "connectionManager.error.restoreRemovedConnection" = "Gagal memulihkan koneksi yang dihapus: %@";
 "connectionManager.error.restoreCredential" = "Gagal memulihkan kredensial: %@";
 "connectionManager.error.restoreRegistration" = "Gagal memulihkan domain File Provider: %@";

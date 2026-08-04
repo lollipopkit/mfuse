@@ -302,6 +302,7 @@ final class BackendTypeTests: XCTestCase {
             "connectionManager.error.deleteCredentialRecovered": 2,
             "connectionManager.error.unsupportedBackend": 1,
             "connectionManager.error.removalInProgress": 1,
+            "connectionManager.error.connectionNotFound": 1,
             "connectionManager.error.reregisterChangedConnection": 2
         ]
         let locales = ["en", "es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"]

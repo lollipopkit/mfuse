@@ -42,6 +42,7 @@
 "credential.error.modeTransitionFailed" = "La transición del modo de credenciales falló: %1$@. La reversión falló: %2$@";
 "connectionManager.error.cleanupFailed" = "No se pudo limpiar la conexión %@ antes de eliminarla";
 "connectionManager.error.removalInProgress" = "La conexión %@ se está eliminando; vuelve a guardarla cuando termine";
+"connectionManager.error.connectionNotFound" = "La conexión %@ ya no existe";
 "connectionManager.error.restoreRemovedConnection" = "No se pudo restaurar la conexión eliminada: %@";
 "connectionManager.error.restoreCredential" = "No se pudo restaurar la credencial: %@";
 "connectionManager.error.restoreRegistration" = "No se pudo restaurar el dominio de File Provider: %@";

@@ -205,9 +205,15 @@ struct ContentView: View {
 
     /// Put back the credential a failed save replaced, reporting what went wrong instead
     /// of leaving the mount paired with a secret that was never meant to stick.
+    ///
+    /// What belongs in the store is decided by whether the connection is still there: a
+    /// removal can finish while a save is in flight — that is one of the ways this save
+    /// fails — and putting the old secret back then would leave an orphan for a connection
+    /// nobody can see, keyed by an id that never appears again.
     private func restoreCredential(_ credential: Credential?, for id: UUID) async -> String? {
+        let connectionStillExists = connectionManager.connections.contains { $0.id == id }
         do {
-            if let credential {
+            if let credential, connectionStillExists {
                 try await credentialProvider.store(credential, for: id)
             } else {
                 try await credentialProvider.delete(for: id)

@@ -7,6 +7,7 @@ import os.log
 public enum ConnectionManagerError: Error, LocalizedError, Equatable {
     case cleanupFailed(UUID)
     case removalInProgress(UUID)
+    case connectionNotFound(UUID)
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +21,12 @@ public enum ConnectionManagerError: Error, LocalizedError, Equatable {
             return MFuseCoreL10n.string(
                 "connectionManager.error.removalInProgress",
                 fallback: "Connection %@ is being removed; save it again once that finishes",
+                id.uuidString
+            )
+        case .connectionNotFound(let id):
+            return MFuseCoreL10n.string(
+                "connectionManager.error.connectionNotFound",
+                fallback: "Connection %@ no longer exists",
                 id.uuidString
             )
         }
@@ -148,16 +155,20 @@ public final class ConnectionManager: ObservableObject {
 
     public func update(_ config: ConnectionConfig) throws {
         try rejectMutationDuringRemoval(of: config.id)
-        if let idx = connections.firstIndex(where: { $0.id == config.id }) {
-            let previous = connections[idx]
-            connections[idx] = config
-            do {
-                try storage.saveConnections(connections)
-                onLocalConnectionsDidChange?(connections)
-            } catch {
-                connections[idx] = previous
-                throw error
-            }
+        // A removal that finished while the caller was saving leaves nothing to update.
+        // Returning quietly told the editor the edit had been applied, and the credential
+        // it had already written stayed behind for a connection nobody can see.
+        guard let idx = connections.firstIndex(where: { $0.id == config.id }) else {
+            throw ConnectionManagerError.connectionNotFound(config.id)
+        }
+        let previous = connections[idx]
+        connections[idx] = config
+        do {
+            try storage.saveConnections(connections)
+            onLocalConnectionsDidChange?(connections)
+        } catch {
+            connections[idx] = previous
+            throw error
         }
     }
 

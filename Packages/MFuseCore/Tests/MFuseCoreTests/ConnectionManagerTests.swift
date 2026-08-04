@@ -792,6 +792,24 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(reconnects.isEmpty, "the edit remounted a connection the user had unmounted")
     }
 
+    /// A removal that finished while a save was in flight leaves nothing to update.
+    /// Returning quietly told the editor the edit had been applied, and the credential the
+    /// save had already written stayed behind for a connection nobody can see.
+    func testUpdatingAConnectionThatIsGoneFails() throws {
+        let config = ConnectionConfig(
+            name: "AlreadyRemoved",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+
+        XCTAssertThrowsError(try manager.update(config)) { error in
+            XCTAssertEqual(error as? ConnectionManagerError, .connectionNotFound(config.id))
+        }
+        XCTAssertTrue(manager.connections.isEmpty)
+        XCTAssertTrue(try storage.loadConnections().isEmpty)
+    }
+
     /// Removal suspends between deleting the row and deleting its credential. A save
     /// landing in that window put the connection back after the deletion was persisted and
     /// then had its brand-new credential destroyed, leaving a row with no secret.
