@@ -38,7 +38,8 @@ struct ContentView: View {
                     saveConnection(
                         config,
                         credential: credential,
-                        presentationID: presentation.id
+                        presentationID: presentation.id,
+                        wasExistingConnection: presentation.config != nil
                     )
                 }
             )
@@ -130,7 +131,8 @@ struct ContentView: View {
     private func saveConnection(
         _ config: ConnectionConfig,
         credential: Credential,
-        presentationID: UUID
+        presentationID: UUID,
+        wasExistingConnection: Bool
     ) {
         // Queued behind whatever is already saving this connection, not dropped. A save
         // suspends repeatedly while its editor is still on screen and its button still
@@ -143,7 +145,12 @@ struct ContentView: View {
         let precedingSave = saveTasks[config.id]
         let save = Task { @MainActor in
             await precedingSave?.value
-            await performSave(config, credential: credential, presentationID: presentationID)
+            await performSave(
+                config,
+                credential: credential,
+                presentationID: presentationID,
+                wasExistingConnection: wasExistingConnection
+            )
         }
         saveTasks[config.id] = save
         Task { @MainActor in
@@ -157,15 +164,23 @@ struct ContentView: View {
     private func performSave(
         _ config: ConnectionConfig,
         credential: Credential,
-        presentationID: UUID
+        presentationID: UUID,
+        wasExistingConnection: Bool
     ) async {
         do {
             let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
             let previousCredential = try await credentialProvider.credential(for: config.id)
             try await credentialProvider.store(credential, for: config.id)
             do {
-                if previousConfig != nil {
+                // Read now, not from `previousConfig`: a removal can finish while this save
+                // is queued or suspended, and adding the connection back then is not
+                // "saving an edit" — it resurrects a row and a credential the user deleted.
+                // A new mount is still an add, including a second save of the same draft,
+                // where the first one has since created it.
+                if connectionExists(config.id) {
                     try connectionManager.update(config)
+                } else if wasExistingConnection {
+                    throw ConnectionManagerError.connectionNotFound(config.id)
                 } else {
                     try connectionManager.add(config)
                 }
