@@ -316,28 +316,17 @@ public actor S3FileSystem: RemoteFileSystem {
             return remoteError
         }
 
-        // Classify from the structured code wherever the SDK provides one. The scan below
+        // Classify from the structured answer wherever the SDK provides one. The scan below
         // reads the whole error, endpoint hostname included, so a transport failure
         // against `unauthorized.example.com` would otherwise be blamed on the keys.
         if let awsError = error as? AWSErrorType {
-            let code = awsError.errorCode.lowercased()
-            if Self.authenticationIndicators.contains(code) {
-                return .authenticationFailed
-            }
-            // The probe is a list against the bucket, so a not-found answer is about the
-            // bucket. S3-compatible servers report it as `NoSuchBucket`, as a plain
-            // `NotFound`, or with nothing but a 404 — the same spread `isNotFoundError`
-            // already handles for objects. Blaming the endpoint for any of them sends the
-            // user to check the network for a bucket name that is simply wrong.
-            if code == "nosuchbucket" || code == "notfound"
-                || awsError.context?.responseCode.code == 404 {
-                return missingBucketError(bucket: bucket)
-            }
-            if !code.isEmpty {
-                // Any other structured code is the SDK's own diagnosis, and it outranks
-                // whatever the description happens to spell: falling through would let
-                // `RequestTimeout` against `unauthorized.example.com` read as bad keys.
-                return unreachableEndpointError(bucket: bucket, error: error)
+            if let classified = classifyAWSError(
+                code: awsError.errorCode,
+                httpStatus: awsError.context?.responseCode.code,
+                bucket: bucket,
+                error: error
+            ) {
+                return classified
             }
         }
 
@@ -351,6 +340,49 @@ public actor S3FileSystem: RemoteFileSystem {
             return missingBucketError(bucket: bucket)
         }
         return unreachableEndpointError(bucket: bucket, error: error)
+    }
+
+    /// Classify an SDK error from its structured parts, or `nil` to fall through to the
+    /// description scan.
+    ///
+    /// Taken separately so the HTTP answers can be tested: `AWSErrorContext` cannot be
+    /// constructed outside SotoCore.
+    static func classifyAWSError(
+        code rawCode: String,
+        httpStatus: UInt?,
+        bucket: String,
+        error: Error
+    ) -> RemoteFileSystemError? {
+        let code = rawCode.lowercased()
+        if Self.authenticationIndicators.contains(code) {
+            return .authenticationFailed
+        }
+
+        // The status is the part every S3-compatible server agrees on; the XML code beside
+        // it is vendor-specific, and an empty one is common. A 401 or 403 is about the keys
+        // or the access policy whatever the body calls it, and telling the user to check
+        // the network instead sends them nowhere.
+        if let httpStatus {
+            if httpStatus == 401 || httpStatus == 403 {
+                return .authenticationFailed
+            }
+            // The probe is a list against the bucket, so a not-found answer is about the
+            // bucket — the same spread `isNotFoundError` already handles for objects.
+            if httpStatus == 404 {
+                return missingBucketError(bucket: bucket)
+            }
+        }
+
+        if code == "nosuchbucket" || code == "notfound" {
+            return missingBucketError(bucket: bucket)
+        }
+        if !code.isEmpty {
+            // Any other structured code is the SDK's own diagnosis, and it outranks
+            // whatever the description happens to spell: falling through would let
+            // `RequestTimeout` against `unauthorized.example.com` read as bad keys.
+            return unreachableEndpointError(bucket: bucket, error: error)
+        }
+        return nil
     }
 
     /// The bucket identifier stays out of the message: connection errors are surfaced

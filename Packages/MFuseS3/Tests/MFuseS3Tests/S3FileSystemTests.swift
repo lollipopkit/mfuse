@@ -284,6 +284,49 @@ import SotoCore
     }
 }
 
+/// The XML code an S3-compatible server sends is vendor-specific and often empty, but the
+/// HTTP status is not: a 401 or 403 is about the keys or the access policy whatever the
+/// body calls it, and reporting an unreachable endpoint sends the user to check a network
+/// that is working.
+@Test func authenticationStatusCodesOutrankTheVendorErrorCode() {
+    for status: UInt in [401, 403] {
+        for code in ["", "AccessForbidden", "SomeVendorCode"] {
+            let mapped = S3FileSystem.classifyAWSError(
+                code: code,
+                httpStatus: status,
+                bucket: "photos",
+                error: StubError(text: "forbidden")
+            )
+            guard case .authenticationFailed = mapped else {
+                Issue.record("\(status) with code \"\(code)\" mapped to \(String(describing: mapped))")
+                continue
+            }
+        }
+    }
+
+    // A 404 on the list probe is still the bucket, whatever the code says.
+    guard case .connectionFailed(let message) = S3FileSystem.classifyAWSError(
+        code: "",
+        httpStatus: 404,
+        bucket: "photos",
+        error: StubError(text: "missing")
+    ) else {
+        Issue.record("404 did not map to a bucket error")
+        return
+    }
+    #expect(message.contains("bucket"))
+
+    // Anything else with no code at all is left to the description scan.
+    #expect(
+        S3FileSystem.classifyAWSError(
+            code: "",
+            httpStatus: 500,
+            bucket: "photos",
+            error: StubError(text: "boom")
+        ) == nil
+    )
+}
+
 /// The description scan still classifies SDK errors that carry no structured code.
 @Test func descriptionScanRemainsForErrorsWithoutACode() {
     let mapped = S3FileSystem.mapConnectionError(StubError(text: "AccessDenied"), bucket: "b")
