@@ -204,6 +204,7 @@ actor MockMountProvider: MountProvider {
     var disconnectGate: TestGate?
     var createSymlinkGate: TestGate?
     var ensureRegisteredGate: TestGate?
+    var domainStatesGate: TestGate?
 
     init(symlinkBaseURL: URL) {
         self.symlinkBaseURL = symlinkBaseURL
@@ -250,6 +251,10 @@ actor MockMountProvider: MountProvider {
 
     func setEnsureRegisteredGate(_ gate: TestGate?) {
         ensureRegisteredGate = gate
+    }
+
+    func setDomainStatesGate(_ gate: TestGate?) {
+        domainStatesGate = gate
     }
 
     /// Lets a test assert on what happened after a setup phase it does not care about.
@@ -311,7 +316,10 @@ actor MockMountProvider: MountProvider {
     }
 
     func domainStates() async throws -> [RegisteredDomainState] {
-        registeredDomainIDs.map {
+        if let domainStatesGate {
+            await domainStatesGate.wait()
+        }
+        return registeredDomainIDs.map {
             RegisteredDomainState(
                 identifier: $0,
                 isDisconnected: disconnectedDomainIDs.contains($0)
@@ -899,6 +907,47 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
         let registrations = await mountProvider.ensureRegisteredInvocations
         XCTAssertTrue(registrations.isEmpty, "a connection was brought up after shutdown")
+    }
+
+    /// Startup sync runs long and schedules more work as it goes. Resuming after quit has
+    /// taken its snapshots would have it publish mount state and start refreshes for
+    /// connections quit already reported as torn down.
+    func testStartupSyncStopsWhenShutdownBegins() async throws {
+        let config = ConnectionConfig(
+            name: "SyncDuringShutdown",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-sync-shutdown-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        await mountProvider.setDomainStates([
+            RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: false)
+        ])
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await mountProvider.clearInvocations()
+
+        // Held inside `domainStates()`, which is where startup sync begins.
+        let gate = TestGate()
+        await mountProvider.setDomainStatesGate(gate)
+        let sync = Task { @MainActor in await manager.syncMounts() }
+        await gate.waitUntilEntered()
+
+        await manager.shutdown()
+        await gate.open()
+        await sync.value
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+
+        let signals = await mountProvider.signalInvocations
+        XCTAssertTrue(signals.isEmpty, "startup sync went on refreshing domains after shutdown")
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
     }
 
     /// A connect that started before quit can be parked on a teardown when quit begins.

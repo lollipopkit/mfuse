@@ -437,16 +437,27 @@ public final class ConnectionManager: ObservableObject {
     /// own continuation, which `finishConnectAttempt(_:)` resumes.
     private func waitForConnectAttempt(_ id: UUID, task: Task<Void, Never>) async {
         let waiterID = UUID()
-        // Registered before the checks below, and withdrawn on every way out: the attempt
-        // is cancelled by whichever caller is the last to give up on it, and a caller that
-        // never counted as interested could not be that one.
-        connectParticipants[id, default: []].insert(waiterID)
+        var didRegister = false
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                // Both checks share this step with the registration: a cancellation that
-                // landed first has no continuation to resume yet, and an attempt that
-                // finished while this call hopped back onto the main actor never will.
-                if Task.isCancelled || connectTasks[id] != task {
+                // Registration shares this step with the check that earns it: an attempt
+                // that finished while this call hopped back onto the main actor has had its
+                // bookkeeping cleared, and an entry added now would sit there for the next
+                // attempt to find — one participant that never gives up, so nothing it
+                // starts can ever be cancelled.
+                guard connectTasks[id] == task else {
+                    continuation.resume()
+                    return
+                }
+                // Counted as interested from here on, and withdrawn on every way out: the
+                // attempt is cancelled by whichever caller is the last to give up on it,
+                // and a caller that never counted could not be that one.
+                connectParticipants[id, default: []].insert(waiterID)
+                didRegister = true
+                // A cancellation that landed before this point has no continuation to
+                // resume yet, so it is answered here — the withdrawal below is then what
+                // decides whether the attempt still has a reason to run.
+                if Task.isCancelled {
                     continuation.resume()
                 } else {
                     connectWaiters[id, default: [:]][waiterID] = continuation
@@ -461,7 +472,9 @@ public final class ConnectionManager: ObservableObject {
         // Covers the paths the handler above does not: a caller that was already cancelled
         // when it got here, and one that resumed normally. Both are no-ops once
         // `finishConnectAttempt` has cleared the attempt.
-        relinquishConnectAttempt(id, participantID: waiterID, task: task)
+        if didRegister {
+            relinquishConnectAttempt(id, participantID: waiterID, task: task)
+        }
     }
 
     /// Test seam: how many callers are parked on the attempt for this connection.
@@ -913,14 +926,24 @@ public final class ConnectionManager: ObservableObject {
         // Together, not one after another: connections tear down independently, and each
         // wait carries its own deadline — so a backend that hangs used to cost every
         // connection behind it another five seconds of quit. Now it costs only its own.
+        //
+        // Both halves of a connection's cleanup share that one deadline. Run as separate
+        // phases they each got their own, so a connection whose teardown *and* whose
+        // leftover mount-state work hang spent ten seconds against a bound documented as
+        // five.
         await runConcurrentlyForShutdown(over: idsNeedingTeardown) { manager, id in
             await manager.disconnect(id)
+            await manager.cancelAndAwaitMountStateWork(for: id)
         }
 
-        let idsWithLingeringMountStateWork = Set(mountResolutionTasks.keys)
+        // Whatever is left belongs to no connection above — a row that was removed while
+        // its mount-state work was still running — so this is a disjoint set, and no id
+        // can spend two deadlines.
+        let strandedMountStateWorkIDs = Set(mountResolutionTasks.keys)
             .union(mountRepairTasks.keys)
             .union(refreshTasks.keys)
-        await runConcurrentlyForShutdown(over: Array(idsWithLingeringMountStateWork)) { manager, id in
+            .subtracting(idsNeedingTeardown)
+        await runConcurrentlyForShutdown(over: Array(strandedMountStateWorkIDs)) { manager, id in
             await manager.cancelAndAwaitMountStateWork(for: id)
         }
     }
@@ -1369,6 +1392,9 @@ public final class ConnectionManager: ObservableObject {
         }
         do {
             let domainStates = try await mp.domainStates()
+            // Quit can have started and finished its teardown inside that call; everything
+            // below writes state, removes links and starts more work.
+            guard !isShuttingDown else { return }
             let domainStatesByID = Dictionary(
                 uniqueKeysWithValues: domainStates.map { ($0.identifier, $0) }
             )
@@ -1388,6 +1414,7 @@ public final class ConnectionManager: ObservableObject {
                 // landing mid-sync leaves that snapshot holding the config from before the
                 // edit, and every provider call below persists what it is handed as the
                 // domain's bootstrap snapshot.
+                guard !isShuttingDown else { return }
                 guard let config = connections.first(where: { $0.id == id }) else { continue }
                 // Only connections this pass actually observed. One added while
                 // `domainStates()` was in flight is missing from that list by construction,
@@ -1572,18 +1599,20 @@ public final class ConnectionManager: ObservableObject {
         let currentMountState = effectiveMountState(for: config.id)
         if currentMountState.isMounted || currentMountState == .mounting {
             await disconnect(config.id, using: previousConfig)
+            // Checked before anything is decided on top of it. The teardown publishes its
+            // own failure but cannot report one by returning, so what it left behind is
+            // read here: a filesystem that would not close or a domain still connected is
+            // old runtime state for the *previous* config, and handing that back as a
+            // completed switch tells the caller — a save, or a reload that has already
+            // published the edited row — that the connection is now serving what it shows.
+            // Reporting `.unmounted` over it would be the same lie with the mount state
+            // rewritten to match.
+            guard isCleanupComplete(for: config.id) else {
+                throw ConnectionManagerError.cleanupFailed(config.id)
+            }
             guard remountIfMounted else {
                 setMountState(.unmounted, for: config)
                 return
-            }
-            // The teardown publishes its own failure but cannot report one by returning, so
-            // what it left behind is checked here: a filesystem that would not close or a
-            // domain still connected is old runtime state for the *previous* config, and
-            // handing that back as a completed switch tells the caller — a save, or a
-            // reload that has already published the edited row — that the connection is now
-            // serving what it shows.
-            guard isCleanupComplete(for: config.id) else {
-                throw ConnectionManagerError.cleanupFailed(config.id)
             }
             // A remount that cannot reach the server is not a registration failure: the
             // domain carries the new config either way, and the row reports the error.
@@ -1856,7 +1885,15 @@ public final class ConnectionManager: ObservableObject {
         return nextGeneration
     }
 
+    /// Whether work holding `generation` still owns this connection's published state.
+    ///
+    /// Quit counts as losing it: every caller of this re-checks after each suspension, so
+    /// this is where a pass that resumes mid-shutdown — startup sync above all, which runs
+    /// long and schedules more work as it goes — stops publishing mount state, creating
+    /// refresh tasks and scheduling mount resolution for connections quit has already torn
+    /// down.
     private func isCurrentConnectionAttempt(for id: UUID, generation: Int) -> Bool {
+        guard !isShuttingDown else { return false }
         guard connectionGenerations[id, default: 0] == generation else {
             return false
         }
