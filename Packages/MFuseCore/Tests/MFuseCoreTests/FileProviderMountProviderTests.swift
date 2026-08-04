@@ -1,6 +1,25 @@
 import XCTest
 @testable import MFuseCore
 
+/// Records what a seam was called with, from closures the provider may run on any
+/// executor.
+private final class InvocationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    var invocations: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func record(_ value: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        recorded.append(value)
+    }
+}
+
 final class FileProviderMountProviderTests: XCTestCase {
 
     private var temporaryDirectoryURL: URL!
@@ -95,6 +114,64 @@ final class FileProviderMountProviderTests: XCTestCase {
                 "Backup-" + String(repeating: "x", count: uuid.count)
             )
         )
+    }
+
+    /// The bootstrap file is the extension's last config source: before macOS 15 there is
+    /// no `domain.userInfo`, and an external reload reaches `unregister` after the
+    /// connection is already gone from `SharedStorage`. A domain removal that fails must
+    /// therefore leave that file in place, so the still-registered domain keeps working and
+    /// the removal can be retried.
+    func testUnregisterKeepsTheBootstrapConfigWhenDomainRemovalFails() async throws {
+        let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
+        let config = ConnectionConfig(
+            name: "FailedUnregister",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        provider.removeRegisteredDomainOverride = { _ in
+            throw MountError.unmountFailed("domain removal failed")
+        }
+        let bootstrapRemovals = InvocationRecorder()
+        provider.removeBootstrapConfigOverride = { config in
+            bootstrapRemovals.record(config.domainIdentifier)
+        }
+
+        do {
+            try await provider.unregister(config: config)
+            XCTFail("Expected the failed domain removal to surface")
+        } catch {
+            guard case MountError.unmountFailed = error else {
+                return XCTFail("Expected the domain removal failure, got \(error)")
+            }
+        }
+
+        XCTAssertTrue(
+            bootstrapRemovals.invocations.isEmpty,
+            "the bootstrap config was removed even though its domain is still registered"
+        )
+    }
+
+    /// Once the domain is gone the removal has to be reported as done: a failure to clear
+    /// the bookkeeping behind it would have the caller keep a connection whose domain no
+    /// longer exists.
+    func testUnregisterSucceedsWhenOnlyTheBootstrapRemovalFails() async throws {
+        let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
+        let config = ConnectionConfig(
+            name: "BootstrapRemovalFailed",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        let domainRemovals = InvocationRecorder()
+        provider.removeRegisteredDomainOverride = { config in
+            domainRemovals.record(config.domainIdentifier)
+        }
+        provider.removeBootstrapConfigOverride = { _ in
+            throw MountError.unmountFailed("bootstrap removal failed")
+        }
+
+        try await provider.unregister(config: config)
+
+        XCTAssertEqual(domainRemovals.invocations, [config.domainIdentifier])
     }
 
     func testLegacySymlinkBaseURLUsesSharedContainerLayout() throws {

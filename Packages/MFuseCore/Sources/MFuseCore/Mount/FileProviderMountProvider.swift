@@ -17,6 +17,12 @@ public final class FileProviderMountProvider: MountProvider {
     /// Base directory for convenience symlinks.
     public let symlinkBaseURL: URL
 
+    /// Test seams for `unregister`'s two steps, which exist so its ordering — the domain
+    /// before the bootstrap config it is the last fallback for — can be exercised without
+    /// a registered File Provider domain. Never set in production.
+    var removeRegisteredDomainOverride: ((ConnectionConfig) async throws -> Void)?
+    var removeBootstrapConfigOverride: ((ConnectionConfig) throws -> Void)?
+
     public init(
         symlinkBaseURL: URL = defaultSymlinkBaseURL
     ) {
@@ -76,15 +82,28 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func unregister(config: ConnectionConfig) async throws {
-        // Bookkeeping first, domain second: removing the domain is the step that cannot be
-        // undone, and failing *after* it left the caller keeping a connection whose domain
-        // was already gone. In this order a failure leaves the config in place with its
-        // domain intact, so the removal can simply be retried — and a domain that briefly
-        // outlives its bootstrap file still resolves through `domain.userInfo` and
-        // `SharedStorage`, which is what `FileProviderDomainStateStore` falls back to.
-        try removeBootstrapConfig(for: config)
-        if let domain = try await findDomain(for: config) {
+        // Domain first, bookkeeping second. Removing the bootstrap config ahead of the
+        // domain leaves a still-registered domain with nothing to bootstrap from: before
+        // macOS 15 there is no `domain.userInfo`, and `reloadConnectionsFromStorage`
+        // reaches here *after* the connection is gone from `SharedStorage`, so the file
+        // this deletes is the last source there is. A failure at this step therefore has
+        // to leave everything intact and simply be retried.
+        if let removeRegisteredDomainOverride {
+            try await removeRegisteredDomainOverride(config)
+        } else if let domain = try await findDomain(for: config) {
             try await NSFileProviderManager.remove(domain)
+        }
+
+        do {
+            try removeBootstrapConfigStep(for: config)
+        } catch {
+            // Best effort, because the domain is already gone: reporting a failure here
+            // would have the caller keep a connection that no longer has one. What is left
+            // behind is a bootstrap file for a domain that does not exist, which nothing
+            // reads — but it is not swallowed silently either.
+            Self.logger.warning(
+                "Removed domain \(config.domainIdentifier, privacy: .public) but failed to remove its bootstrap config: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 
@@ -136,7 +155,7 @@ public final class FileProviderMountProvider: MountProvider {
 
     @discardableResult
     public func createSymlink(for config: ConnectionConfig) async throws -> URL? {
-        guard let mountURL = try await mountURL(for: config) else { return nil }
+        guard try await mountURL(for: config) != nil else { return nil }
 
         let fileManager = FileManager.default
         let baseDir = symlinkBaseURL
@@ -145,6 +164,13 @@ public final class FileProviderMountProvider: MountProvider {
         let parentDirectoryURL = symlinkURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
         try cleanupLegacyShortcutIfNeeded(for: config)
+
+        // Read again, as the last thing before the link is touched. A rename moves the
+        // domain's CloudStorage path, and the resolution above resumed on a queue a rename
+        // can have gone through since — writing that older destination would replace a link
+        // another pass had already pointed at the new one. Everything below this point is
+        // synchronous, so what is written is the destination as of this step.
+        guard let mountURL = try await mountURL(for: config) else { return nil }
 
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
         guard !fileManager.fileExists(atPath: symlinkURL.path) else {
@@ -445,5 +471,13 @@ public final class FileProviderMountProvider: MountProvider {
 
     private func removeBootstrapConfig(for config: ConnectionConfig) throws {
         try FileProviderDomainStateStore.removeBootstrapConfig(for: config.domainIdentifier)
+    }
+
+    private func removeBootstrapConfigStep(for config: ConnectionConfig) throws {
+        if let removeBootstrapConfigOverride {
+            try removeBootstrapConfigOverride(config)
+            return
+        }
+        try removeBootstrapConfig(for: config)
     }
 }
