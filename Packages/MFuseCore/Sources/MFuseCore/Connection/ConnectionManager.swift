@@ -83,6 +83,9 @@ public final class ConnectionManager: ObservableObject {
     /// down: it is cancelled once the last participant has given up on it.
     private var connectParticipants: [UUID: Set<UUID>] = [:]
     private var interruptedConnectionIDs: Set<UUID> = []
+    /// Set once `shutdown()` starts, and never cleared: it works from snapshots of what
+    /// was running, so anything admitted afterwards would escape the teardown entirely.
+    private var isShuttingDown = false
     /// Serialized rather than counted: two removals of the same connection can overlap,
     /// and each captures the state it would roll back to, so an earlier pass resuming
     /// after a later one succeeded would restore the connection that one just removed.
@@ -359,6 +362,7 @@ public final class ConnectionManager: ObservableObject {
     // MARK: - Connection lifecycle
 
     public func connect(_ id: UUID) async {
+        guard !isShuttingDown else { return }
         // Checked before the wait below, not after it: a removal owns this connection to
         // the end, and its own teardown is one of the things that would be waited for.
         guard !isRemovalInFlight(for: id) else { return }
@@ -850,6 +854,12 @@ public final class ConnectionManager: ObservableObject {
 
     /// Disconnect and unmount all known connections before terminating the app.
     public func shutdown() async {
+        // Set before anything is snapshotted, and never cleared: quit is terminal, and
+        // everything below works from one-time snapshots of what was running. Lifecycle
+        // work admitted after those snapshots would be neither cancelled nor waited for,
+        // and would publish a connection, a mount or an error once quit had already
+        // reported the connections as torn down.
+        isShuttingDown = true
         for task in reconnectTasks.values {
             task.cancel()
         }
@@ -958,6 +968,7 @@ public final class ConnectionManager: ObservableObject {
 
     /// Attempt to reconnect with exponential backoff.
     public func reconnect(_ id: UUID) {
+        guard !isShuttingDown else { return }
         reconnectTasks[id]?.cancel()
         let task = Task { [weak self] in
             guard let self else { return }
@@ -1133,7 +1144,24 @@ public final class ConnectionManager: ObservableObject {
                 continue
             }
             do {
-                try await syncSavedConnectionRegistration(config, previousConfig: previousConfig)
+                // An edit that arrived from another device carries no consent to send this
+                // device's stored secret somewhere new: credentials are keyed by connection
+                // id, not by what the connection points at, and they do not travel with the
+                // config. A synced backend, host or auth change would therefore hand the
+                // old password or key to whatever the new config addresses, automatically.
+                // The domain is re-registered either way, so the row is right; bringing it
+                // back up is left to the user.
+                let addressesSameServer = config.addressesSameServer(as: previousConfig)
+                if !addressesSameServer {
+                    logger.notice(
+                        "Leaving \(config.domainIdentifier, privacy: .public) unmounted: a synchronized edit changed the server it addresses"
+                    )
+                }
+                try await syncSavedConnectionRegistration(
+                    config,
+                    previousConfig: previousConfig,
+                    remountIfMounted: addressesSameServer
+                )
             } catch {
                 logger.error(
                     "Failed to re-register changed connection \(config.domainIdentifier, privacy: .public) during reload: \(self.describe(error), privacy: .private)"
@@ -1200,6 +1228,7 @@ public final class ConnectionManager: ObservableObject {
     /// execution time, checked against the generation, and tracked so teardown can cancel
     /// and wait for it.
     public func refreshMountedConnection(for id: UUID) async {
+        guard !isShuttingDown else { return }
         if let inFlight = refreshTasks[id] {
             await inFlight.value
             return
@@ -1244,6 +1273,7 @@ public final class ConnectionManager: ObservableObject {
     /// The repair recreates the convenience symlink, so it is tracked as a task that
     /// `disconnect` can cancel and wait for — see `cancelAndAwaitSymlinkWork(for:)`.
     public func repairMountState(for id: UUID) async {
+        guard !isShuttingDown else { return }
         if let inFlight = mountRepairTasks[id] {
             await inFlight.value
             return
@@ -1495,9 +1525,15 @@ public final class ConnectionManager: ObservableObject {
         }
     }
 
+    /// Register the domain for a saved connection and bring its mount back in line.
+    ///
+    /// `remountIfMounted` is what a caller answers when it cannot vouch for the edit: a
+    /// mounted connection is still torn down, but not brought back up with a credential the
+    /// user never chose to send to this address. See `reloadConnectionsFromStorage`.
     public func syncSavedConnectionRegistration(
         _ config: ConnectionConfig,
-        previousConfig: ConnectionConfig?
+        previousConfig: ConnectionConfig?,
+        remountIfMounted: Bool = true
     ) async throws {
         guard let mountProvider else { return }
 
@@ -1532,6 +1568,10 @@ public final class ConnectionManager: ObservableObject {
         let currentMountState = effectiveMountState(for: config.id)
         if currentMountState.isMounted || currentMountState == .mounting {
             await disconnect(config.id, using: previousConfig)
+            guard remountIfMounted else {
+                setMountState(.unmounted, for: config)
+                return
+            }
             // The teardown publishes its own failure but cannot report one by returning, so
             // what it left behind is checked here: a filesystem that would not close or a
             // domain still connected is old runtime state for the *previous* config, and

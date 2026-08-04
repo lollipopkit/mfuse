@@ -868,6 +868,108 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNil(credentialProvider.credentials[config.id])
     }
 
+    /// Quit works from one-time snapshots of what is running. Lifecycle work admitted
+    /// after those snapshots is neither cancelled nor waited for, so it would publish a
+    /// connection or a mount once quit had already reported everything torn down.
+    func testShutdownRefusesLifecycleWorkStartedAfterIt() async throws {
+        let config = ConnectionConfig(
+            name: "AfterShutdown",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-after-shutdown-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.shutdown()
+        await mountProvider.clearInvocations()
+
+        await manager.connect(config.id)
+        manager.reconnect(config.id)
+        await manager.refreshMountedConnection(for: config.id)
+        await manager.repairMountState(for: config.id)
+
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+        let registrations = await mountProvider.ensureRegisteredInvocations
+        XCTAssertTrue(registrations.isEmpty, "a connection was brought up after shutdown")
+    }
+
+    /// An edit that arrived from another device carries no consent to send this device's
+    /// stored secret somewhere new — credentials are keyed by connection id and do not
+    /// travel with the config — so a synced change of server leaves the mount down.
+    func testExternalEditToAnotherServerDoesNotRemount() async throws {
+        let config = ConnectionConfig(
+            name: "SyncedElsewhere",
+            backendType: .sftp,
+            host: "old.example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-synced-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        // What another device wrote to the shared store: same connection, different server.
+        var movedConfig = config
+        movedConfig.host = "new.example.com"
+        try storage.saveConnections([movedConfig])
+        await manager.reloadConnectionsFromStorage()
+
+        XCTAssertEqual(manager.connections.first?.host, "new.example.com")
+        // The domain carries the new config, so the row is right…
+        let registrations = await mountProvider.ensureRegisteredConfigs.map(\.host)
+        XCTAssertEqual(registrations, ["new.example.com"])
+        // …but nothing reconnected it with the credential the old server issued.
+        let reconnects = await mountProvider.reconnectInvocations
+        XCTAssertTrue(reconnects.isEmpty, "a synced change of server remounted automatically")
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+    }
+
+    /// A rename or an auto-mount toggle addresses the same server, so it still remounts.
+    func testExternalEditToTheSameServerStillRemounts() async throws {
+        let config = ConnectionConfig(
+            name: "SyncedRename",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-rename-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        var renamedConfig = config
+        renamedConfig.name = "SyncedRenameNewName"
+        try storage.saveConnections([renamedConfig])
+        await manager.reloadConnectionsFromStorage()
+        _ = await waitForMountState(config.id)
+
+        let reconnects = await mountProvider.reconnectInvocations
+        XCTAssertEqual(reconnects, [config.domainIdentifier])
+        XCTAssertTrue(manager.effectiveMountState(for: config.id).isMounted)
+    }
+
     /// Quit-time cleanup carries a deadline per connection, so tearing them down one after
     /// another charged every connection behind a hanging backend another five seconds of
     /// quit. They are independent, so they run together and a hang costs only its own.
@@ -1650,16 +1752,12 @@ final class ConnectionManagerTests: XCTestCase {
         await manager.reloadConnectionsFromStorage()
 
         XCTAssertEqual(manager.connections, [config])
-        // Registered again with the new config — once for the reconciliation, once for
-        // the remount that follows it.
-        let ensureRegisteredInvocations = await mountProvider.ensureRegisteredInvocations
-        XCTAssertEqual(ensureRegisteredInvocations, Array(repeating: config.domainIdentifier, count: 2))
-        // Mounted connections are remounted, so the extension picks the new host up now
-        // rather than at the next relaunch.
-        let reconnectInvocations = await mountProvider.reconnectInvocations
-        XCTAssertEqual(reconnectInvocations, [config.domainIdentifier])
-        let remountedState = await waitForMountState(config.id)
-        XCTAssertEqual(remountedState, .mounted(path: mountURL.path))
+        // Registered with the new config, so the domain stops serving the old host from
+        // its bootstrap snapshot. Whether it is then brought back up depends on where the
+        // edit points it — see `testExternalEditToAnotherServerDoesNotRemount` and
+        // `testExternalEditToTheSameServerStillRemounts`.
+        let ensureRegisteredConfigs = await mountProvider.ensureRegisteredConfigs
+        XCTAssertEqual(ensureRegisteredConfigs.map(\.host), ["new.example.com"])
     }
 
     /// Cancelling a connect must stop it, not let the retry delay swallow the cancellation

@@ -138,6 +138,31 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         return components.string ?? bucket ?? BackendType.s3.displayName
     }
 
+    /// Whether this and `other` address the same server with the same identity.
+    ///
+    /// Credentials are stored against a connection's id, not against what it points at, so
+    /// this is the question to ask before reusing one: a changed backend, host, port,
+    /// username, auth method or backend parameter means the secret would be sent somewhere
+    /// it was never issued for. The account labels an OAuth connection shows are display
+    /// only and do not count.
+    public func addressesSameServer(as other: ConnectionConfig) -> Bool {
+        backendType == other.backendType
+            && host == other.host
+            && port == other.port
+            && username == other.username
+            && authMethod == other.authMethod
+            && Self.addressingParameters(parameters) == Self.addressingParameters(other.parameters)
+    }
+
+    private static let displayOnlyParameterKeys: Set<String> = [
+        "oauthAccountName",
+        "oauthAccountEmail"
+    ]
+
+    private static func addressingParameters(_ parameters: [String: String]) -> [String: String] {
+        parameters.filter { !displayOnlyParameterKeys.contains($0.key) }
+    }
+
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.
     static func trimmedParameter(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
