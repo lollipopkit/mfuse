@@ -210,18 +210,30 @@ struct ContentView: View {
     /// removal can finish while a save is in flight — that is one of the ways this save
     /// fails — and putting the old secret back then would leave an orphan for a connection
     /// nobody can see, keyed by an id that never appears again.
+    ///
+    /// Checked on both sides of the write, because the write suspends and the removal is
+    /// not serialized with it. `remove` drops the row before it deletes the credential, so
+    /// a removal that finished inside that window has already deleted the secret it knew
+    /// about and left this one behind — seeing the row gone afterwards is what catches it.
     private func restoreCredential(_ credential: Credential?, for id: UUID) async -> String? {
-        let connectionStillExists = connectionManager.connections.contains { $0.id == id }
         do {
-            if let credential, connectionStillExists {
-                try await credentialProvider.store(credential, for: id)
-            } else {
+            guard let credential, connectionExists(id) else {
                 try await credentialProvider.delete(for: id)
+                return nil
+            }
+            try await credentialProvider.store(credential, for: id)
+            guard connectionExists(id) else {
+                try await credentialProvider.delete(for: id)
+                return nil
             }
             return nil
         } catch {
             return error.localizedDescription
         }
+    }
+
+    private func connectionExists(_ id: UUID) -> Bool {
+        connectionManager.connections.contains { $0.id == id }
     }
 }
 
