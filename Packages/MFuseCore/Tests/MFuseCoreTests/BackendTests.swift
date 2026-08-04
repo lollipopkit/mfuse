@@ -595,6 +595,32 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         )
     }
 
+    /// The legacy shim folds a hidden port into the endpoint, so a config that has merely
+    /// been through the editor's normalization addresses the same server as the one it
+    /// replaced. Reading the raw pair called that a different server and left a working
+    /// mount down for nothing.
+    func testS3AddressesSameServerAcrossThePortNormalization() {
+        let legacy = config(.s3, port: 9000, parameters: ["endpoint": "http://localhost", "bucket": "b"])
+        let normalized = config(.s3, port: 443, parameters: ["endpoint": "http://localhost:9000", "bucket": "b"])
+
+        XCTAssertTrue(legacy.addressesSameServer(as: normalized))
+        XCTAssertTrue(normalized.addressesSameServer(as: legacy))
+
+        // A real move is still a move.
+        let elsewhere = config(.s3, port: 443, parameters: ["endpoint": "http://elsewhere:9000", "bucket": "b"])
+        XCTAssertFalse(normalized.addressesSameServer(as: elsewhere))
+        let otherBucket = config(.s3, port: 443, parameters: ["endpoint": "http://localhost:9000", "bucket": "other"])
+        XCTAssertFalse(normalized.addressesSameServer(as: otherBucket))
+    }
+
+    /// Everything that is not S3 is addressed by host and port, so those still count.
+    func testHostBasedAddressesSameServerComparesPort() {
+        let base = config(.sftp, host: "example.com", port: 22)
+        XCTAssertTrue(base.addressesSameServer(as: config(.sftp, host: "example.com", port: 22)))
+        XCTAssertFalse(base.addressesSameServer(as: config(.sftp, host: "example.com", port: 2222)))
+        XCTAssertFalse(base.addressesSameServer(as: config(.sftp, host: "elsewhere.com", port: 22)))
+    }
+
     func testS3EndpointAppliesConfiguredPortOnlyWhenItAddsInformation() {
         XCTAssertEqual(
             ConnectionConfig.s3Endpoint("http://localhost", applyingConfiguredPort: 9000),

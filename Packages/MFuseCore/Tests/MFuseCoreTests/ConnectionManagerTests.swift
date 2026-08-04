@@ -274,6 +274,7 @@ actor MockMountProvider: MountProvider {
     func ensureRegistered(config: ConnectionConfig) async throws {
         ensureRegisteredInvocations.append(config.domainIdentifier)
         ensureRegisteredConfigs.append(config)
+        operationLog.append("ensureRegistered")
         if let ensureRegisteredGate {
             await ensureRegisteredGate.wait()
         }
@@ -1034,6 +1035,16 @@ final class ConnectionManagerTests: XCTestCase {
         await manager.reloadConnectionsFromStorage()
 
         XCTAssertEqual(manager.connections.first?.parameters["oauthAccountEmail"], "second@example.com")
+        // Taken down *before* the new account was registered: registering first writes the
+        // new bootstrap snapshot while the domain is still up, so the extension would serve
+        // the new account holding the token this device stored for the old one.
+        let operations = await mountProvider.operationLog
+        XCTAssertEqual(operations.first, "disconnect")
+        XCTAssertEqual(operations.filter { $0 == "ensureRegistered" }.count, 1)
+        XCTAssertTrue(
+            operations.firstIndex(of: "disconnect")! < operations.firstIndex(of: "ensureRegistered")!,
+            "the new target was registered while the old mount was still up"
+        )
         let reconnects = await mountProvider.reconnectInvocations
         XCTAssertTrue(reconnects.isEmpty, "the local token was remounted under another account's name")
         XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
@@ -1212,7 +1223,7 @@ final class ConnectionManagerTests: XCTestCase {
         // provider's log is ordered by completion, and the teardown does not complete
         // until the gate opens.
         let operations = await mountProvider.operationLog
-        XCTAssertEqual(operations, ["disconnect", "reconnect"])
+        XCTAssertEqual(operations, ["disconnect", "ensureRegistered", "reconnect"])
         // The mount the user asked for last is the one that stands.
         XCTAssertTrue(manager.effectiveMountState(for: config.id).isMounted)
     }

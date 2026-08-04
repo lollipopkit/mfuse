@@ -1577,6 +1577,20 @@ public final class ConnectionManager: ObservableObject {
         guard isRegistrableConnection(config.id) else {
             throw ConnectionManagerError.connectionNotFound(config.id)
         }
+
+        let wasActiveBeforeRegistration = isActiveMount(config.id)
+        // An edit nobody here vouched for takes its mount down *before* its new address is
+        // registered. Registering first writes the new bootstrap snapshot while the domain
+        // is still up, so the extension serves the new target holding the credential this
+        // device stored for the old one — briefly, but that is the exposure the caller
+        // asked to avoid by refusing the remount at all.
+        if wasActiveBeforeRegistration, !remountIfMounted {
+            await disconnect(config.id, using: previousConfig)
+            guard isCleanupComplete(for: config.id) else {
+                throw ConnectionManagerError.cleanupFailed(config.id)
+            }
+        }
+
         try await mountProvider.ensureRegistered(config: config)
         // Registration suspends too, so the same removal can land inside it. What it
         // created is taken straight back out rather than left behind.
@@ -1596,8 +1610,7 @@ public final class ConnectionManager: ObservableObject {
         // endpoint under a row showing the new one. The teardown below is what fences it:
         // it cancels the attempt and waits for it, and the connect that follows rebuilds
         // everything from the config that is current now.
-        let currentMountState = effectiveMountState(for: config.id)
-        if currentMountState.isMounted || currentMountState == .mounting {
+        if isActiveMount(config.id) {
             await disconnect(config.id, using: previousConfig)
             // Checked before anything is decided on top of it. The teardown publishes its
             // own failure but cannot report one by returning, so what it left behind is
@@ -1617,6 +1630,13 @@ public final class ConnectionManager: ObservableObject {
             // A remount that cannot reach the server is not a registration failure: the
             // domain carries the new config either way, and the row reports the error.
             await connect(config.id)
+            return
+        }
+
+        // Taken down before the registration above, so the row has to say so — the
+        // teardown already removed the link and disconnected the domain.
+        if wasActiveBeforeRegistration, !remountIfMounted {
+            setMountState(.unmounted, for: config)
             return
         }
 
@@ -1841,6 +1861,17 @@ public final class ConnectionManager: ObservableObject {
     /// Whether any `remove(_:)` call for this connection is still running.
     func isRemovalInFlight(for id: UUID) -> Bool {
         removalTasks[id] != nil
+    }
+
+    /// Whether this connection is mounted or on its way there.
+    ///
+    /// `.mounting` counts as much as `.mounted`, and covers a connect still in its
+    /// handshake — `effectiveMountState` reports one whichever stage it has reached. That
+    /// attempt holds the config from before an edit and would go on to reconnect, signal
+    /// and resolve a mount for it.
+    private func isActiveMount(_ id: UUID) -> Bool {
+        let state = effectiveMountState(for: id)
+        return state.isMounted || state == .mounting
     }
 
     /// Whether a domain may be registered for this connection: it is one of ours, and

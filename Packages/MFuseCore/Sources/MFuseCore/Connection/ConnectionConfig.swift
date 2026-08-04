@@ -150,12 +150,29 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// the config carries — the token is device-local — so a changed one means this
     /// device's token belongs to a different account than the row now names.
     public func addressesSameServer(as other: ConnectionConfig) -> Bool {
-        backendType == other.backendType
-            && host == other.host
-            && port == other.port
-            && username == other.username
-            && authMethod == other.authMethod
-            && parameters == other.parameters
+        guard backendType == other.backendType,
+              host == other.host,
+              username == other.username,
+              authMethod == other.authMethod else {
+            return false
+        }
+
+        // S3 addresses by endpoint, and the legacy shim folds a hidden port into it — so
+        // `endpoint=http://host` + port 9000 and `endpoint=http://host:9000` + port 443 are
+        // the same server written two ways. Comparing the raw pair reported a config that
+        // had merely been through the editor's normalization as a different one, and left
+        // a working mount down for nothing. The resolved endpoint is the address; the port
+        // beside it is noise.
+        // TODO: fold back into the plain comparison once the port shim itself is gone.
+        if backendType == .s3 {
+            var address = parameters
+            var otherAddress = other.parameters
+            address["endpoint"] = s3Endpoint
+            otherAddress["endpoint"] = other.s3Endpoint
+            return address == otherAddress
+        }
+
+        return port == other.port && parameters == other.parameters
     }
 
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.
