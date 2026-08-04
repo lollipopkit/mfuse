@@ -9,8 +9,9 @@ struct ContentView: View {
     @State private var editorPresentation: EditorPresentation?
     @State private var showingExtensionGuide = false
     @State private var saveAlert: SaveAlertState?
-    /// Connections whose save is still running, so no two can overlap on one of them.
-    @State private var savingConnectionIDs: Set<UUID> = []
+    /// The save in flight for each connection, so a later one queues behind it instead
+    /// of racing it or being dropped.
+    @State private var saveTasks: [UUID: Task<Void, Never>] = [:]
 
     var body: some View {
         NavigationSplitView {
@@ -131,74 +132,91 @@ struct ContentView: View {
         credential: Credential,
         presentationID: UUID
     ) {
-        // Keyed on the connection, not on the sheet that asked for it: a save suspends
-        // repeatedly while its editor is still on screen and its button still enabled, and
-        // the user can also cancel it and reopen the same mount meanwhile. Two passes over
-        // one connection interleave their credential writes — and an older one's rollback
-        // restores the secret the newer one just stored — while for a new mount both see no
-        // previous config and append the same UUID twice.
-        guard savingConnectionIDs.insert(config.id).inserted else { return }
-        Task {
-            defer { savingConnectionIDs.remove(config.id) }
+        // Queued behind whatever is already saving this connection, not dropped. A save
+        // suspends repeatedly while its editor is still on screen and its button still
+        // enabled, and the user can cancel it, reopen the same mount, re-authorize an
+        // account and save again — discarding that second save would leave the older
+        // credential and config as the ones that stand, silently. Serializing instead
+        // keeps their credential writes from interleaving, keeps an older pass's rollback
+        // from restoring the secret a newer one just stored, and stops two passes over a
+        // new mount from both seeing no previous config and appending the same UUID twice.
+        let precedingSave = saveTasks[config.id]
+        let save = Task { @MainActor in
+            await precedingSave?.value
+            await performSave(config, credential: credential, presentationID: presentationID)
+        }
+        saveTasks[config.id] = save
+        Task { @MainActor in
+            await save.value
+            guard saveTasks[config.id] == save else { return }
+            saveTasks.removeValue(forKey: config.id)
+        }
+    }
+
+    @MainActor
+    private func performSave(
+        _ config: ConnectionConfig,
+        credential: Credential,
+        presentationID: UUID
+    ) async {
+        do {
+            let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
+            let previousCredential = try await credentialProvider.credential(for: config.id)
+            try await credentialProvider.store(credential, for: config.id)
             do {
-                let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
-                let previousCredential = try await credentialProvider.credential(for: config.id)
-                try await credentialProvider.store(credential, for: config.id)
-                do {
-                    if previousConfig != nil {
-                        try connectionManager.update(config)
-                    } else {
-                        try connectionManager.add(config)
-                    }
-                } catch {
-                    // The new credential is already stored, so a rollback that fails leaves
-                    // the old config paired with it — or a credential behind for a mount
-                    // that was never created. Reported alongside the primary failure rather
-                    // than swallowed: only the user can put that right.
-                    let rollbackFailure = await restoreCredential(
-                        previousCredential,
-                        for: config.id
-                    )
-                    throw SaveFailure(primary: error, rollbackFailure: rollbackFailure)
+                if previousConfig != nil {
+                    try connectionManager.update(config)
+                } else {
+                    try connectionManager.add(config)
                 }
-                await MainActor.run {
-                    // Tied to the sheet that started this save: the user can cancel it and
-                    // open another one meanwhile, and dismissing *that* one — and selecting
-                    // a mount they navigated away from — is not what this save is for.
-                    guard editorPresentation?.id == presentationID else { return }
-                    selectedConnection = config
-                    editorPresentation = nil
-                }
-                do {
-                    try await connectionManager.syncSavedConnectionRegistration(
-                        config,
-                        previousConfig: previousConfig
-                    )
-                } catch {
-                    await MainActor.run {
-                        saveAlert = SaveAlertState(
-                            title: AppL10n.string(
-                                "content.warning.domainSyncIssue",
-                                fallback: "Domain Sync Issue"
-                            ),
-                            message: AppL10n.string(
-                                "content.error.savedButDomainSyncFailed",
-                                fallback: "The connection was saved, but File Provider domain sync failed: %@. MFuse will retry reconciliation on the next launch.",
-                                error.localizedDescription
-                            )
-                        )
-                    }
-                }
+            } catch {
+                // The new credential is already stored, so a rollback that fails leaves
+                // the old config paired with it — or a credential behind for a mount
+                // that was never created. Reported alongside the primary failure rather
+                // than swallowed: only the user can put that right.
+                let rollbackFailure = await restoreCredential(
+                    previousCredential,
+                    for: config.id
+                )
+                throw SaveFailure(primary: error, rollbackFailure: rollbackFailure)
+            }
+            await MainActor.run {
+                // Tied to the sheet that started this save: the user can cancel it and
+                // open another one meanwhile, and dismissing *that* one — and selecting
+                // a mount they navigated away from — is not what this save is for.
+                guard editorPresentation?.id == presentationID else { return }
+                selectedConnection = config
+                editorPresentation = nil
+            }
+            do {
+                try await connectionManager.syncSavedConnectionRegistration(
+                    config,
+                    previousConfig: previousConfig
+                )
             } catch {
                 await MainActor.run {
                     saveAlert = SaveAlertState(
                         title: AppL10n.string(
-                            "content.error.unableToSaveMount",
-                            fallback: "Unable to Save Mount"
+                            "content.warning.domainSyncIssue",
+                            fallback: "Domain Sync Issue"
                         ),
-                        message: error.localizedDescription
+                        message: AppL10n.string(
+                            "content.error.savedButDomainSyncFailed",
+                            fallback: "The connection was saved, but File Provider domain sync failed: %@. MFuse will retry reconciliation on the next launch.",
+                            error.localizedDescription
+                        )
                     )
                 }
+            }
+        } catch {
+            await MainActor.run {
+                saveAlert = SaveAlertState(
+                    title: AppL10n.string(
+                        "content.error.unableToSaveMount",
+                        fallback: "Unable to Save Mount"
+                    ),
+                    message: error.localizedDescription
+                )
             }
         }
     }
