@@ -37,16 +37,24 @@ enum MFuseCoreL10n {
     }
 
     private static func localizationCandidates(for localeIdentifier: String) -> [String] {
-        switch localeIdentifier.lowercased() {
-        case "zh-cn", "zh-hans", "zh":
-            return ["zh-Hans", "zh_CN", "zh"]
-        case "zh-tw", "zh-hant":
+        // Underscores first, so `zh_TW` is read as the same locale as `zh-TW`.
+        let normalized = localeIdentifier.replacingOccurrences(of: "_", with: "-")
+        let lowercased = normalized.lowercased()
+
+        // Neither script has a bundle under its regional identifiers, and the generic path
+        // below would resolve every one of them to bare `zh` — which is not shipped either,
+        // leaving Chinese users with the English fallback. Hong Kong and Macau are
+        // Traditional; Singapore is Simplified.
+        if lowercased.hasPrefix("zh-hant") || ["zh-tw", "zh-hk", "zh-mo"].contains(lowercased) {
             return ["zh-Hant", "zh_TW"]
-        default:
-            let normalized = localeIdentifier.replacingOccurrences(of: "_", with: "-")
-            let languageCode = normalized.split(separator: "-").first.map(String.init)
-            return [normalized, localeIdentifier, languageCode].compactMap { $0 }
         }
+        if lowercased == "zh" || lowercased.hasPrefix("zh-hans")
+            || ["zh-cn", "zh-sg"].contains(lowercased) {
+            return ["zh-Hans", "zh_CN", "zh"]
+        }
+
+        let languageCode = normalized.split(separator: "-").first.map(String.init)
+        return [normalized, localeIdentifier, languageCode].compactMap { $0 }
     }
 
     private static func localizedStrings(for localization: String, table: String) -> [String: String]? {

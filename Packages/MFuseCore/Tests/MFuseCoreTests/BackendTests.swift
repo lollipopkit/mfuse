@@ -300,7 +300,9 @@ final class BackendTypeTests: XCTestCase {
             "connectionManager.error.removeWithRestoreFailures": 3,
             "connectionManager.error.deleteCredentialWithRestoreFailures": 3,
             "connectionManager.error.deleteCredentialRecovered": 2,
-            "connectionManager.error.unsupportedBackend": 1
+            "connectionManager.error.unsupportedBackend": 1,
+            "connectionManager.error.removalInProgress": 1,
+            "connectionManager.error.reregisterChangedConnection": 2
         ]
         let locales = ["en", "es", "fr", "id", "it", "ja", "ko", "zh-Hans", "zh-Hant"]
 
@@ -429,6 +431,34 @@ final class BackendTypeTests: XCTestCase {
                 "失敗"
             )
         )
+
+        // Hong Kong and Macau are Traditional too, and an underscored or script-tagged
+        // identifier is the same locale — each one used to fall through to bare `zh`,
+        // which is not shipped, and land on the English fallback.
+        for identifier in ["zh-HK", "zh-MO", "zh_TW", "zh-Hant-HK"] {
+            XCTAssertEqual(
+                MFuseCoreL10n.string(
+                    "auth.publicKey",
+                    localeIdentifier: identifier,
+                    fallback: "Public Key"
+                ),
+                traditional,
+                "\(identifier) did not resolve to the Traditional Chinese resources"
+            )
+        }
+
+        // Simplified keeps its own regional and script-tagged forms.
+        for identifier in ["zh_CN", "zh-SG", "zh-Hans-CN"] {
+            XCTAssertEqual(
+                MFuseCoreL10n.string(
+                    "auth.publicKey",
+                    localeIdentifier: identifier,
+                    fallback: "Public Key"
+                ),
+                simplified,
+                "\(identifier) did not resolve to the Simplified Chinese resources"
+            )
+        }
     }
 
     func testLocalizedErrorsAreNonEmpty() {
