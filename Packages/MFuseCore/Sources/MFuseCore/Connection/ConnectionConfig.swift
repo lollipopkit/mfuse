@@ -143,24 +143,19 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// Credentials are stored against a connection's id, not against what it points at, so
     /// this is the question to ask before reusing one: a changed backend, host, port,
     /// username, auth method or backend parameter means the secret would be sent somewhere
-    /// it was never issued for. The account labels an OAuth connection shows are display
-    /// only and do not count.
+    /// it was never issued for.
+    ///
+    /// Every parameter counts, the OAuth account name and email included. They look like
+    /// labels, but for Dropbox and OneDrive they are the only part of the account identity
+    /// the config carries — the token is device-local — so a changed one means this
+    /// device's token belongs to a different account than the row now names.
     public func addressesSameServer(as other: ConnectionConfig) -> Bool {
         backendType == other.backendType
             && host == other.host
             && port == other.port
             && username == other.username
             && authMethod == other.authMethod
-            && Self.addressingParameters(parameters) == Self.addressingParameters(other.parameters)
-    }
-
-    private static let displayOnlyParameterKeys: Set<String> = [
-        "oauthAccountName",
-        "oauthAccountEmail"
-    ]
-
-    private static func addressingParameters(_ parameters: [String: String]) -> [String: String] {
-        parameters.filter { !displayOnlyParameterKeys.contains($0.key) }
+            && parameters == other.parameters
     }
 
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.

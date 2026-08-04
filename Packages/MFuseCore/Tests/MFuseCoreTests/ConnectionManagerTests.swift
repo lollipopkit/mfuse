@@ -901,6 +901,95 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(registrations.isEmpty, "a connection was brought up after shutdown")
     }
 
+    /// A connect that started before quit can be parked on a teardown when quit begins.
+    /// Resuming from it after quit has taken its snapshots would build a connection nobody
+    /// is left to tear down.
+    func testConnectWaitingOnATeardownGivesUpWhenShutdownStarts() async throws {
+        let config = ConnectionConfig(
+            name: "RemountDuringShutdown",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-shutdown-race-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+        let teardown = Task { @MainActor in await manager.disconnect(config.id) }
+        await gate.waitUntilEntered()
+
+        // Parks on the teardown, as it should — and then quit starts underneath it.
+        let remount = Task { @MainActor in await manager.connect(config.id) }
+        let shutdown = Task { @MainActor in await manager.shutdown() }
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+
+        await gate.open()
+        await teardown.value
+        await shutdown.value
+        await remount.value
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+
+        let reconnects = await mountProvider.reconnectInvocations
+        XCTAssertTrue(reconnects.isEmpty, "a connection came back up after shutdown")
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+    }
+
+    /// For Dropbox and OneDrive the account name and email are the only part of the
+    /// account identity the config carries — the token is device-local. A synced change of
+    /// account therefore must not remount with this device's old token, or the row names
+    /// one account while serving another's files.
+    func testExternalOAuthAccountChangeDoesNotRemount() async throws {
+        registry.register(.dropbox) { _, _ in MockFileSystem() }
+        let config = ConnectionConfig(
+            name: "SyncedAccount",
+            backendType: .dropbox,
+            host: "",
+            authMethod: .oauth,
+            parameters: [
+                "oauthAccountName": "First Account",
+                "oauthAccountEmail": "first@example.com"
+            ]
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-account-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(token: "local-token")
+        try manager.add(config)
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        // Another device re-authorized the same connection against a different account.
+        var reauthorizedConfig = config
+        reauthorizedConfig.parameters["oauthAccountName"] = "Second Account"
+        reauthorizedConfig.parameters["oauthAccountEmail"] = "second@example.com"
+        try storage.saveConnections([reauthorizedConfig])
+        await manager.reloadConnectionsFromStorage()
+
+        XCTAssertEqual(manager.connections.first?.parameters["oauthAccountEmail"], "second@example.com")
+        let reconnects = await mountProvider.reconnectInvocations
+        XCTAssertTrue(reconnects.isEmpty, "the local token was remounted under another account's name")
+        XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
+    }
+
     /// An edit that arrived from another device carries no consent to send this device's
     /// stored secret somewhere new — credentials are keyed by connection id and do not
     /// travel with the config — so a synced change of server leaves the mount down.

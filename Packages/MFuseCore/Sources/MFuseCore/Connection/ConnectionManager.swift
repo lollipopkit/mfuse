@@ -374,6 +374,10 @@ public final class ConnectionManager: ObservableObject {
         // remount a remount.
         if let teardown = disconnectTasks[id] {
             await teardown.value
+            // Re-checked, because that wait is long enough for quit to have started, taken
+            // its snapshots of what to tear down, and finished this very teardown. An
+            // attempt created now appears in none of those snapshots.
+            guard !isShuttingDown else { return }
         }
         // Overlapping callers join the attempt already running instead of returning
         // early: `connect` is awaited for its effect, and a caller that returns before
