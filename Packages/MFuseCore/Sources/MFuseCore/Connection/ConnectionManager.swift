@@ -1480,6 +1480,17 @@ public final class ConnectionManager: ObservableObject {
         let currentMountState = effectiveMountState(for: config.id)
         if currentMountState.isMounted || currentMountState == .mounting {
             await disconnect(config.id, using: previousConfig)
+            // The teardown publishes its own failure but cannot report one by returning, so
+            // what it left behind is checked here: a filesystem that would not close or a
+            // domain still connected is old runtime state for the *previous* config, and
+            // handing that back as a completed switch tells the caller — a save, or a
+            // reload that has already published the edited row — that the connection is now
+            // serving what it shows.
+            guard isCleanupComplete(for: config.id) else {
+                throw ConnectionManagerError.cleanupFailed(config.id)
+            }
+            // A remount that cannot reach the server is not a registration failure: the
+            // domain carries the new config either way, and the row reports the error.
             await connect(config.id)
             return
         }

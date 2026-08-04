@@ -854,6 +854,47 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertNil(credentialProvider.credentials[config.id])
     }
 
+    /// A teardown reports its failure by publishing state, not by returning one, so the
+    /// registration behind it has to look at what was left. Old runtime state for the
+    /// previous config — a domain that would not disconnect — is not a completed switch,
+    /// and reporting one lets a save, or a reload that already published the edited row,
+    /// treat the connection as serving what it now shows.
+    func testEditingAMountedConnectionFailsWhenItsTeardownDoes() async throws {
+        let config = ConnectionConfig(
+            name: "TeardownFailsOnEdit",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-edit-failure-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+        await mountProvider.setUnmountShouldFail(true)
+
+        var edited = config
+        edited.name = "TeardownFailsOnEditRenamed"
+        do {
+            try await manager.syncSavedConnectionRegistration(edited, previousConfig: config)
+            XCTFail("Expected the failed teardown to surface")
+        } catch {
+            XCTAssertEqual(error as? ConnectionManagerError, .cleanupFailed(config.id))
+        }
+
+        // And it stopped there rather than mounting the new config on top of the old
+        // runtime state.
+        let reconnects = await mountProvider.reconnectInvocations
+        XCTAssertTrue(reconnects.isEmpty, "the edit remounted on top of a failed teardown")
+    }
+
     /// A retry loop still backing off outlives the row unless removal tears it down: it
     /// goes on calling `connect` against an id that is gone, and its dictionary entry
     /// stays behind as lifecycle work that never completes.
