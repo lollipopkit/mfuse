@@ -331,6 +331,57 @@ final class FileProviderMountProviderTests: XCTestCase {
         )
     }
 
+    /// Order is the point, not just exclusion: a rename that reached the coordinator
+    /// before a link creation must also run before it, or the link is written against the
+    /// path the rename was about to move. Resuming every waiter at once left that to the
+    /// executor, and let an operation arriving at that moment overtake callers that were
+    /// already queued.
+    func testMountOperationCoordinatorHandsTheLockOverInArrivalOrder() async throws {
+        let coordinator = MountOperationCoordinator()
+        let key = "domain"
+        let order = InvocationRecorder()
+
+        await coordinator.acquire(key)
+
+        let first = Task {
+            await coordinator.acquire(key)
+            order.record("first")
+            await coordinator.release(key)
+        }
+        try await waitForWaiters(1, on: coordinator, key: key)
+        let second = Task {
+            await coordinator.acquire(key)
+            order.record("second")
+            await coordinator.release(key)
+        }
+        try await waitForWaiters(2, on: coordinator, key: key)
+
+        await coordinator.release(key)
+
+        // Handed to the head of the queue alone: the other caller stays queued, and the
+        // key stays held so a newcomer cannot slip in front of it.
+        let stillQueued = await coordinator.waitingCount(for: key)
+        XCTAssertEqual(stillQueued, 1, "release resumed more than the caller it handed the lock to")
+
+        await first.value
+        await second.value
+        XCTAssertEqual(order.invocations, ["first", "second"])
+    }
+
+    private func waitForWaiters(
+        _ expected: Int,
+        on coordinator: MountOperationCoordinator,
+        key: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        for _ in 0..<1000 {
+            if await coordinator.waitingCount(for: key) == expected { return }
+            await Task.yield()
+        }
+        XCTFail("only \(await coordinator.waitingCount(for: key)) of \(expected) callers queued", file: file, line: line)
+    }
+
     func testLegacySymlinkBaseURLUsesSharedContainerLayout() throws {
         let containerURL = temporaryDirectoryURL.appendingPathComponent("group-container", isDirectory: true)
         try FileManager.default.createDirectory(at: containerURL, withIntermediateDirectories: true)

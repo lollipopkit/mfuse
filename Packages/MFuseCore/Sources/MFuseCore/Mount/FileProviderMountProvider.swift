@@ -10,28 +10,46 @@ import os.log
 /// put the stale destination back. Renames take the same lock, so a resolution cannot be
 /// invalidated while it is being acted on.
 ///
+/// Operations run in the order they arrive: a rename that reached this before a link
+/// creation must also run before it, or the link is written against the path the rename
+/// was about to move. Resuming every waiter and letting them race back in would decide
+/// that by executor scheduling, and would let an operation arriving at that moment take
+/// the lock ahead of callers that were already queued.
+///
 /// Not reentrant: nothing inside a held section takes the lock again.
-private actor MountOperationCoordinator {
+actor MountOperationCoordinator {
     private var busyKeys: Set<String> = []
     private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
     /// Waits regardless of the caller's cancellation — every section it guards is bounded
     /// and short, and abandoning one halfway is what this exists to prevent.
     func acquire(_ key: String) async {
-        while busyKeys.contains(key) {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                waiters[key, default: []].append(continuation)
-            }
+        guard busyKeys.contains(key) else {
+            busyKeys.insert(key)
+            return
         }
-        busyKeys.insert(key)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            waiters[key, default: []].append(continuation)
+        }
+        // Resumed holding the lock, handed over by `release`. Re-checking `busyKeys` here
+        // instead is what would let a newcomer overtake this caller.
     }
 
     func release(_ key: String) {
-        busyKeys.remove(key)
-        guard let pending = waiters.removeValue(forKey: key) else { return }
-        for continuation in pending {
-            continuation.resume()
+        guard var queue = waiters[key], !queue.isEmpty else {
+            busyKeys.remove(key)
+            waiters.removeValue(forKey: key)
+            return
         }
+        let next = queue.removeFirst()
+        if queue.isEmpty {
+            waiters.removeValue(forKey: key)
+        } else {
+            waiters[key] = queue
+        }
+        // `busyKeys` stays set: ownership passes straight to the caller that has waited
+        // longest, so an operation arriving now queues behind it rather than racing it.
+        next.resume()
     }
 
     /// Test seam: how many callers are parked behind the operation holding this key.
