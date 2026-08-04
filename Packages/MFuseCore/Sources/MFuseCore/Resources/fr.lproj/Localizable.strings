@@ -41,6 +41,7 @@
 "credential.error.unsupportedPrimaryProvider" = "Le fournisseur d’identifiants actuel ne prend pas en charge la migration iCloud Keychain.";
 "credential.error.modeTransitionFailed" = "Échec de la transition du mode d’identifiants : %1$@. Échec du retour arrière : %2$@";
 "connectionManager.error.cleanupFailed" = "Impossible de nettoyer la connexion %@ avant sa suppression";
+"connectionManager.error.removalInProgress" = "La connexion %@ est en cours de suppression ; enregistrez-la de nouveau une fois l’opération terminée";
 "connectionManager.error.restoreRemovedConnection" = "Impossible de restaurer la connexion supprimée : %@";
 "connectionManager.error.restoreCredential" = "Impossible de restaurer l’identifiant : %@";
 "connectionManager.error.restoreRegistration" = "Impossible de restaurer le domaine File Provider : %@";

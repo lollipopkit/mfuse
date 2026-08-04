@@ -76,10 +76,16 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func unregister(config: ConnectionConfig) async throws {
+        // Bookkeeping first, domain second: removing the domain is the step that cannot be
+        // undone, and failing *after* it left the caller keeping a connection whose domain
+        // was already gone. In this order a failure leaves the config in place with its
+        // domain intact, so the removal can simply be retried — and a domain that briefly
+        // outlives its bootstrap file still resolves through `domain.userInfo` and
+        // `SharedStorage`, which is what `FileProviderDomainStateStore` falls back to.
+        try removeBootstrapConfig(for: config)
         if let domain = try await findDomain(for: config) {
             try await NSFileProviderManager.remove(domain)
         }
-        try removeBootstrapConfig(for: config)
     }
 
     public func reconnect(config: ConnectionConfig) async throws {

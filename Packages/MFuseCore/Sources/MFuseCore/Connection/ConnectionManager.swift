@@ -6,6 +6,7 @@ import os.log
 
 public enum ConnectionManagerError: Error, LocalizedError, Equatable {
     case cleanupFailed(UUID)
+    case removalInProgress(UUID)
 
     public var errorDescription: String? {
         switch self {
@@ -13,6 +14,12 @@ public enum ConnectionManagerError: Error, LocalizedError, Equatable {
             return MFuseCoreL10n.string(
                 "connectionManager.error.cleanupFailed",
                 fallback: "Failed to clean up connection %@ before removal",
+                id.uuidString
+            )
+        case .removalInProgress(let id):
+            return MFuseCoreL10n.string(
+                "connectionManager.error.removalInProgress",
+                fallback: "Connection %@ is being removed; save it again once that finishes",
                 id.uuidString
             )
         }
@@ -26,6 +33,22 @@ public enum ConnectionManagerError: Error, LocalizedError, Equatable {
 @MainActor
 private final class SignalOutcome {
     var error: Error?
+}
+
+/// Resumes quit-time cleanup exactly once, whichever of the work and the deadline gets
+/// there first.
+@MainActor
+private final class ShutdownDeadlineResumer {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    /// Whether this call is the one that resumed.
+    @discardableResult
+    func resume() -> Bool {
+        guard let continuation else { return false }
+        self.continuation = nil
+        continuation.resume()
+        return true
+    }
 }
 
 /// Manages the lifecycle of remote filesystem connections.
@@ -82,6 +105,12 @@ public final class ConnectionManager: ObservableObject {
     private static let mountURLRetryDelay: UInt64 = 500_000_000 // 500 ms in nanoseconds
     private static let transientConnectionRetryCount = 2
     private static let transientConnectionRetryDelay: UInt64 = 750_000_000 // 750 ms in nanoseconds
+    /// How long quit waits for one connection's cleanup before abandoning it.
+    private static let shutdownDeadlineNanoseconds: UInt64 = 5_000_000_000 // 5 seconds
+    private static let shutdownLogger = Logger(
+        subsystem: "com.lollipopkit.mfuse.core",
+        category: "ConnectionManagerShutdown"
+    )
 
     public init(
         storage: SharedStorage,
@@ -104,6 +133,7 @@ public final class ConnectionManager: ObservableObject {
     // MARK: - CRUD
 
     public func add(_ config: ConnectionConfig) throws {
+        try rejectMutationDuringRemoval(of: config.id)
         connections.append(config)
         states[config.id] = .disconnected
         do {
@@ -117,6 +147,7 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func update(_ config: ConnectionConfig) throws {
+        try rejectMutationDuringRemoval(of: config.id)
         if let idx = connections.firstIndex(where: { $0.id == config.id }) {
             let previous = connections[idx]
             connections[idx] = config
@@ -127,6 +158,18 @@ public final class ConnectionManager: ObservableObject {
                 connections[idx] = previous
                 throw error
             }
+        }
+    }
+
+    /// Refuse a write to a connection whose removal is already running.
+    ///
+    /// `performRemove` suspends between deleting the row and deleting its credential, and
+    /// a save landing in that window appends the connection back — after the deletion was
+    /// persisted, and before the credential is destroyed. What is left is a row with no
+    /// secret and no domain, which nothing puts right.
+    private func rejectMutationDuringRemoval(of id: UUID) throws {
+        guard !isRemovalInFlight(for: id) else {
+            throw ConnectionManagerError.removalInProgress(id)
         }
     }
 
@@ -545,8 +588,15 @@ public final class ConnectionManager: ObservableObject {
                     }
                     scheduleMountResolution(for: config, using: mp)
                 } catch {
+                    // The production provider sleeps and calls `Task.checkCancellation()`
+                    // while registering a domain, so a cancelled attempt lands here with a
+                    // `CancellationError` — reporting that as a mount failure would put a
+                    // red row and a notification in front of the user for work they, or a
+                    // teardown, deliberately stopped. The filesystem is still cleaned up
+                    // below; only the verdict is left to the outer handling and the defer.
+                    let wasCancelled = error is CancellationError || Task.isCancelled
                     var desc = describe(error)
-                    if isMissingFileProviderExtensionError(error) {
+                    if !wasCancelled, isMissingFileProviderExtensionError(error) {
                         needsExtensionSetup = true
                     }
                     if let disconnectFailure = await disconnectMountedFileSystem(
@@ -557,6 +607,18 @@ public final class ConnectionManager: ObservableObject {
                         desc += " | \(disconnectFailure)"
                     } else {
                         fileSystems.removeValue(forKey: id)
+                    }
+                    guard !wasCancelled else {
+                        // The mount state was set to `.mounting` before the attempt began.
+                        // A teardown that interrupted it publishes its own state, but a
+                        // caller that simply gave up leaves the row spinning unless this
+                        // clears it.
+                        if isCurrentConnectionAttempt(for: id, generation: localGeneration),
+                           !interruptedConnectionIDs.contains(id),
+                           mountState(for: id) == .mounting {
+                            setMountState(.unmounted, for: config)
+                        }
+                        return
                     }
                     guard isCurrentConnectionAttempt(for: id, generation: localGeneration),
                           !interruptedConnectionIDs.contains(id) else {
@@ -780,8 +842,8 @@ public final class ConnectionManager: ObservableObject {
         }
         // A connect that has not installed a filesystem or reached mounting yet is still
         // connection work. Cancelling it and running its teardown is what stops it
-        // publishing a connection after shutdown returns; the attempt itself is not
-        // awaited, because a backend that ignores cancellation would then hold up quit.
+        // publishing a connection after shutdown returns. The teardown awaits that
+        // cancelled attempt — which is why every wait below carries a deadline.
         let pendingConnectIDs = Set(connectTasks.keys)
         for task in connectTasks.values {
             task.cancel()
@@ -800,11 +862,42 @@ public final class ConnectionManager: ObservableObject {
             pendingMountStateWorkIDs.contains(config.id) ||
             pendingConnectIDs.contains(config.id) ||
             fileSystems[config.id] != nil {
-            await disconnect(config.id)
+            let id = config.id
+            await withShutdownDeadline { [weak self] in
+                await self?.disconnect(id)
+            }
         }
 
         for id in Set(mountResolutionTasks.keys).union(mountRepairTasks.keys).union(refreshTasks.keys) {
-            await cancelAndAwaitMountStateWork(for: id)
+            await withShutdownDeadline { [weak self] in
+                await self?.cancelAndAwaitMountStateWork(for: id)
+            }
+        }
+    }
+
+    /// Run quit-time cleanup, giving up on it once the deadline passes.
+    ///
+    /// Every teardown deliberately *awaits* the work it cancels, so nothing can publish a
+    /// mount, a symlink or a bootstrap snapshot after it returns. A backend or credential
+    /// call that never returns from a cancelled operation would therefore hold the app
+    /// open forever — `applicationShouldTerminate` replies `.terminateLater` and waits on
+    /// exactly this. An abandoned pass keeps running in a process that is about to exit.
+    private func withShutdownDeadline(_ work: @escaping @MainActor () async -> Void) async {
+        let resumer = ShutdownDeadlineResumer()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            // Both tasks can only run at a suspension point, so the continuation is
+            // installed before either of them can reach for it.
+            resumer.continuation = continuation
+            Task { @MainActor in
+                await work()
+                resumer.resume()
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: Self.shutdownDeadlineNanoseconds)
+                if resumer.resume() {
+                    Self.shutdownLogger.error("Quit cleanup timed out; abandoning it")
+                }
+            }
         }
     }
 
@@ -1207,7 +1300,11 @@ public final class ConnectionManager: ObservableObject {
                 // edit, and every provider call below persists what it is handed as the
                 // domain's bootstrap snapshot.
                 guard let config = connections.first(where: { $0.id == id }) else { continue }
-                let generation = generations[config.id] ?? connectionGenerations[config.id, default: 0]
+                // Only connections this pass actually observed. One added while
+                // `domainStates()` was in flight is missing from that list by construction,
+                // and reconciling it against the list would classify a domain it just
+                // mounted as gone — publishing `.unmounted` and removing its symlink.
+                guard let generation = generations[config.id] else { continue }
                 guard isCurrentConnectionAttempt(for: config.id, generation: generation),
                       !isTeardownInFlight(for: config.id),
                       connectTasks[config.id] == nil else {
@@ -1357,7 +1454,16 @@ public final class ConnectionManager: ObservableObject {
         // Read *after* the suspensions above rather than on entry: the user can unmount
         // while `ensureRegistered` is in flight, and a remount decided from the earlier
         // state would bring back the mount they just took down.
-        if effectiveMountState(for: config.id).isMounted {
+        //
+        // `.mounting` counts as much as `.mounted`, and covers a connect still in its
+        // handshake — `effectiveMountState` reports one whichever stage it has reached.
+        // That attempt is holding the config from before this edit and would go on to
+        // reconnect, signal and resolve a mount for it, leaving a domain serving the old
+        // endpoint under a row showing the new one. The teardown below is what fences it:
+        // it cancels the attempt and waits for it, and the connect that follows rebuilds
+        // everything from the config that is current now.
+        let currentMountState = effectiveMountState(for: config.id)
+        if currentMountState.isMounted || currentMountState == .mounting {
             await disconnect(config.id, using: previousConfig)
             await connect(config.id)
             return

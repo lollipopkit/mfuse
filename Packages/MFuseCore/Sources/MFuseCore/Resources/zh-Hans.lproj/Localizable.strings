@@ -41,6 +41,7 @@
 "credential.error.unsupportedPrimaryProvider" = "当前凭证提供器不支持 iCloud Keychain 迁移。";
 "credential.error.modeTransitionFailed" = "凭证模式切换失败：%1$@。回滚失败：%2$@";
 "connectionManager.error.cleanupFailed" = "移除前清理连接 %@ 失败";
+"connectionManager.error.removalInProgress" = "连接 %@ 正在被移除，请在完成后重新保存";
 "connectionManager.error.restoreRemovedConnection" = "恢复已移除的连接失败：%@";
 "connectionManager.error.restoreCredential" = "恢复凭证失败：%@";
 "connectionManager.error.restoreRegistration" = "恢复文件提供程序域失败：%@";

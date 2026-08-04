@@ -792,6 +792,50 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(reconnects.isEmpty, "the edit remounted a connection the user had unmounted")
     }
 
+    /// Removal suspends between deleting the row and deleting its credential. A save
+    /// landing in that window put the connection back after the deletion was persisted and
+    /// then had its brand-new credential destroyed, leaving a row with no secret.
+    func testSavingIsRejectedWhileRemovalIsInFlight() async throws {
+        let config = ConnectionConfig(
+            name: "SaveDuringRemoval",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-save-removal-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+        let removal = Task { @MainActor in try await manager.remove(config) }
+        await waitUntilRemovalStarts(for: config.id)
+
+        var edited = config
+        edited.name = "SaveDuringRemovalRenamed"
+        XCTAssertThrowsError(try manager.update(edited)) { error in
+            XCTAssertEqual(error as? ConnectionManagerError, .removalInProgress(config.id))
+        }
+        XCTAssertThrowsError(try manager.add(edited)) { error in
+            XCTAssertEqual(error as? ConnectionManagerError, .removalInProgress(config.id))
+        }
+
+        await gate.open()
+        try await removal.value
+
+        XCTAssertTrue(manager.connections.isEmpty)
+        XCTAssertTrue(try storage.loadConnections().isEmpty)
+        XCTAssertNil(credentialProvider.credentials[config.id])
+    }
+
     /// A retry loop still backing off outlives the row unless removal tears it down: it
     /// goes on calling `connect` against an id that is gone, and its dictionary entry
     /// stays behind as lifecycle work that never completes.

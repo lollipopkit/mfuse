@@ -41,6 +41,7 @@
 "credential.error.unsupportedPrimaryProvider" = "現在の認証情報プロバイダは iCloud キーチェーン移行をサポートしていません。";
 "credential.error.modeTransitionFailed" = "認証情報モードの切り替えに失敗しました: %1$@。ロールバックにも失敗しました: %2$@";
 "connectionManager.error.cleanupFailed" = "削除前の接続 %@ のクリーンアップに失敗しました";
+"connectionManager.error.removalInProgress" = "接続 %@ は削除中です。完了してから保存し直してください";
 "connectionManager.error.restoreRemovedConnection" = "削除した接続の復元に失敗しました: %@";
 "connectionManager.error.restoreCredential" = "認証情報の復元に失敗しました: %@";
 "connectionManager.error.restoreRegistration" = "File Provider ドメインの復元に失敗しました: %@";

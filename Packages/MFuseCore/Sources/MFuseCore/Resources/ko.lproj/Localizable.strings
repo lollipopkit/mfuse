@@ -41,6 +41,7 @@
 "credential.error.unsupportedPrimaryProvider" = "현재 자격 증명 공급자는 iCloud 키체인 마이그레이션을 지원하지 않습니다.";
 "credential.error.modeTransitionFailed" = "자격 증명 모드 전환에 실패했습니다: %1$@. 롤백에도 실패했습니다: %2$@";
 "connectionManager.error.cleanupFailed" = "삭제 전에 연결 %@ 정리에 실패했습니다";
+"connectionManager.error.removalInProgress" = "연결 %@을(를) 제거하는 중입니다. 완료된 후 다시 저장하세요";
 "connectionManager.error.restoreRemovedConnection" = "삭제된 연결 복원에 실패했습니다: %@";
 "connectionManager.error.restoreCredential" = "자격 증명 복원에 실패했습니다: %@";
 "connectionManager.error.restoreRegistration" = "File Provider 도메인 복원에 실패했습니다: %@";
