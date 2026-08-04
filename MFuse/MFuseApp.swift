@@ -38,50 +38,9 @@ struct MFuseApp: App {
         self.iCloudSyncService = iCloudSyncService
         self.mountProvider = FileProviderMountProvider()
         let registry = BackendRegistry.shared
-        registry.registerAllBuiltIns(
-            sftpFactory: { config, credential in
-                SFTPFileSystem(config: config, credential: credential)
-            },
-            s3Factory: { config, credential in
-                S3FileSystem(config: config, credential: credential)
-            },
-            webdavFactory: { config, credential in
-                WebDAVFileSystem(config: config, credential: credential)
-            },
-            smbFactory: { config, credential in
-                SMBFileSystem(config: config, credential: credential)
-            },
-            ftpFactory: { config, credential in
-                FTPFileSystem(config: config, credential: credential)
-            },
-            nfsFactory: { config, credential in
-                NFSFileSystem(config: config, credential: credential)
-            },
-            googleDriveFactory: { config, credential in
-                GoogleDriveFileSystem(
-                    config: config,
-                    credential: credential
-                ) { updatedCredential in
-                    try await credentialProvider.store(updatedCredential, for: config.id)
-                }
-            },
-            dropboxFactory: { config, credential in
-                DropboxFileSystem(
-                    config: config,
-                    credential: credential
-                ) { updatedCredential in
-                    try await credentialProvider.store(updatedCredential, for: config.id)
-                }
-            },
-            oneDriveFactory: { config, credential in
-                OneDriveFileSystem(
-                    config: config,
-                    credential: credential
-                ) { updatedCredential in
-                    try await credentialProvider.store(updatedCredential, for: config.id)
-                }
-            }
-        )
+        BackendRegistryFactory.register(into: registry) { updatedCredential, connectionID in
+            try await credentialProvider.store(updatedCredential, for: connectionID)
+        }
         let manager = ConnectionManager(
             storage: storage,
             credentialProvider: credentialProvider,
@@ -212,6 +171,66 @@ struct MFuseApp: App {
 
         AppDelegate.allowsTermination = true
         NSApp.terminate(nil)
+    }
+}
+
+/// Builds the app's backend registry, with where refreshed OAuth credentials go left to
+/// the caller.
+///
+/// The OAuth backends persist a token they refreshed, so *which store* they write to is
+/// what separates the app's connections from a throwaway connection test — a test that
+/// wrote through the app's store would leave a real secret under an id no connection has.
+/// Both callers come through here so the two registries cannot drift apart.
+enum BackendRegistryFactory {
+
+    static func register(
+        into registry: BackendRegistry,
+        persistRefreshedCredential: @escaping @Sendable (Credential, UUID) async throws -> Void
+    ) {
+        registry.registerAllBuiltIns(
+            sftpFactory: { config, credential in
+                SFTPFileSystem(config: config, credential: credential)
+            },
+            s3Factory: { config, credential in
+                S3FileSystem(config: config, credential: credential)
+            },
+            webdavFactory: { config, credential in
+                WebDAVFileSystem(config: config, credential: credential)
+            },
+            smbFactory: { config, credential in
+                SMBFileSystem(config: config, credential: credential)
+            },
+            ftpFactory: { config, credential in
+                FTPFileSystem(config: config, credential: credential)
+            },
+            nfsFactory: { config, credential in
+                NFSFileSystem(config: config, credential: credential)
+            },
+            googleDriveFactory: { config, credential in
+                GoogleDriveFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try await persistRefreshedCredential(updatedCredential, config.id)
+                }
+            },
+            dropboxFactory: { config, credential in
+                DropboxFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try await persistRefreshedCredential(updatedCredential, config.id)
+                }
+            },
+            oneDriveFactory: { config, credential in
+                OneDriveFileSystem(
+                    config: config,
+                    credential: credential
+                ) { updatedCredential in
+                    try await persistRefreshedCredential(updatedCredential, config.id)
+                }
+            }
+        )
     }
 }
 

@@ -12,6 +12,16 @@ private final class EphemeralCredentialProvider: CredentialProvider, @unchecked 
 
 struct ConnectionEditorSheet: View {
 
+    /// The backends a connection test runs against, registered so a token they refresh is
+    /// discarded rather than written into the app's credential store: the config under
+    /// test carries a throwaway id, and a secret persisted for it would outlive the test
+    /// under an id no connection will ever have.
+    private static let testBackendRegistry: BackendRegistry = {
+        let registry = BackendRegistry()
+        BackendRegistryFactory.register(into: registry) { _, _ in }
+        return registry
+    }()
+
     @MainActor
     private static let sharedTestConnectionManager = ConnectionManager(
         storage: SharedStorage(
@@ -19,7 +29,8 @@ struct ConnectionEditorSheet: View {
             containerURL: FileManager.default.temporaryDirectory
                 .appendingPathComponent("MFuseTestConnectionManager", isDirectory: true)
         ),
-        credentialProvider: EphemeralCredentialProvider()
+        credentialProvider: EphemeralCredentialProvider(),
+        registry: testBackendRegistry
     )
 
     @Environment(\.credentialProvider) private var credentialProvider
@@ -75,12 +86,16 @@ struct ConnectionEditorSheet: View {
     /// The key path this mount was saved with, so a save that cannot re-read the file can
     /// tell "the same key as before" from "a key the user just pointed us at".
     private let savedPrivateKeyPath: String
+    /// The backend the stored credential was issued for. See
+    /// `savedCredentialForCurrentBackend`.
+    private let savedBackendType: BackendType?
     private let onSave: (ConnectionConfig, Credential) -> Void
 
     init(config: ConnectionConfig?, onSave: @escaping (ConnectionConfig, Credential) -> Void) {
         self.existingID = config?.id
         self.draftID = config?.id ?? UUID()
         self.savedPrivateKeyPath = config?.parameters["privateKeyPath"] ?? ""
+        self.savedBackendType = config?.backendType
         self.onSave = onSave
         _name = State(initialValue: config?.name ?? "")
         _backendType = State(initialValue: config?.backendType ?? .sftp)
@@ -173,6 +188,14 @@ struct ConnectionEditorSheet: View {
                         if !newType.supportedAuthMethods.contains(authMethod) {
                             authMethod = newType.supportedAuthMethods.first ?? .password
                         }
+                        // A secret belongs to the server it was entered for, and this
+                        // switch points the mount at a different one. The auth method can
+                        // survive the switch — SFTP and SMB both use `.password` — so
+                        // nothing else clears it: `clearCredentialState(except:)` runs only
+                        // when the *method* changes, and deliberately keeps the field the
+                        // current method needs, which here is exactly the one that must not
+                        // travel.
+                        clearEnteredSecrets()
                         clearOAuthAuthorizationState()
                     }
                     // Locked while the stored credential is on its way: what it belongs
@@ -489,12 +512,10 @@ struct ConnectionEditorSheet: View {
                     config,
                     credential: credential
                 )
-                // The shared backend registry hands OAuth backends a refresh callback that
-                // writes through the *production* credential store, keyed by the config it
-                // was built from — so a token refreshed during this test leaves a real
-                // secret behind under an id no connection will ever have. Clearing it is
-                // what keeps the test ephemeral; it runs before the cancellation check
-                // because a dismissed sheet must not leave one either.
+                // Belt and braces over the ephemeral registry above: an id that never
+                // belonged to a connection must hold nothing in the app's store either way,
+                // and this runs before the cancellation check so a dismissed sheet leaves
+                // nothing behind.
                 try? await credentialProvider.delete(for: testConnectionID)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
@@ -537,7 +558,7 @@ struct ConnectionEditorSheet: View {
             privateKeyBookmark: privateKeyBookmark,
             accessKeyID: s3AccessKeyID,
             secretAccessKey: s3SecretAccessKey,
-            oauthToken: (usesBundledOAuthFlow ? oauthCredential : storedCredential)?.token
+            oauthToken: (usesBundledOAuthFlow ? oauthCredential : savedCredentialForCurrentBackend)?.token
         )
     }
 
@@ -562,7 +583,7 @@ struct ConnectionEditorSheet: View {
                 // material saved for this exact path. Renaming it or toggling auto-mount
                 // must not fail on that, nor replace a working key with nothing.
                 if privateKeyPath == savedPrivateKeyPath,
-                   let savedPrivateKey = storedCredential?.privateKey {
+                   let savedPrivateKey = savedCredentialForCurrentBackend?.privateKey {
                     return Credential(
                         password: nil,
                         privateKey: savedPrivateKey,
@@ -599,7 +620,7 @@ struct ConnectionEditorSheet: View {
             // saving, and the refresh token lives in `password`. Reconstructing the
             // credential from what the editor shows would drop it, leaving a mount that
             // can never refresh; the stored one is passed through untouched instead.
-            return storedCredential ?? Credential()
+            return savedCredentialForCurrentBackend ?? Credential()
         }
     }
 
@@ -669,6 +690,26 @@ struct ConnectionEditorSheet: View {
         case .agent, .anonymous:
             break
         }
+    }
+
+    /// Drop every secret the sheet is showing, whichever method it belongs to.
+    private func clearEnteredSecrets() {
+        password = ""
+        privateKeyPath = ""
+        privateKeyBookmark = ""
+        s3AccessKeyID = ""
+        s3SecretAccessKey = ""
+    }
+
+    /// The credential this mount was saved with, offered only while the sheet still
+    /// describes the backend it was saved for.
+    ///
+    /// It survives a round trip through the backend picker — that is what keeps a Google
+    /// Drive refresh token from being destroyed by one — but what one server issued must
+    /// never be built into the credential written for another.
+    private var savedCredentialForCurrentBackend: Credential? {
+        guard backendType == savedBackendType else { return nil }
+        return storedCredential
     }
 
     private func clearCredentialState(except method: AuthMethod) {
@@ -860,7 +901,7 @@ struct ConnectionEditorSheet: View {
         if usesBundledOAuthFlow {
             return oauthCredential?.token?.isEmpty == false
         }
-        return storedCredential?.token?.isEmpty == false
+        return savedCredentialForCurrentBackend?.token?.isEmpty == false
     }
 
     private var oauthAccountSummary: String {
