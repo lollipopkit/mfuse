@@ -3,13 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "packageManager": "bun@1.2.18",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "typesafe-i18n": "typesafe-i18n --no-watch",
     "check": "tsc --noEmit -p jsconfig.json && tsc --noEmit -p jsconfig.node.json",
-    "check:bun": "bun run scripts/check-bun-version.js",
-    "build": "bun run check:bun && bun install --frozen-lockfile && bun run check && vite build",
+    "build": "npm ci && npm run check && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
