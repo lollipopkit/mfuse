@@ -89,6 +89,7 @@ struct ConnectionEditorSheet: View {
     /// The key path this mount was saved with, so a save that cannot re-read the file can
     /// tell "the same key as before" from "a key the user just pointed us at".
     private let savedPrivateKeyPath: String
+    private let savedPrivateKeyBookmark: String
     /// The backend the stored credential was issued for. See
     /// `savedCredentialForCurrentBackend`.
     private let savedBackendType: BackendType?
@@ -98,6 +99,7 @@ struct ConnectionEditorSheet: View {
         self.existingID = config?.id
         self.draftID = config?.id ?? UUID()
         self.savedPrivateKeyPath = config?.parameters["privateKeyPath"] ?? ""
+        self.savedPrivateKeyBookmark = config?.parameters["privateKeyBookmark"] ?? ""
         self.savedBackendType = config?.backendType
         self.onSave = onSave
         _name = State(initialValue: config?.name ?? "")
@@ -204,6 +206,11 @@ struct ConnectionEditorSheet: View {
                         // travel.
                         clearEnteredSecrets()
                         clearOAuthAuthorizationState()
+                        // …and put the saved one back when the picker lands where it came
+                        // from. Without this a round trip left the field empty with Save
+                        // still enabled, and saving wrote that emptiness over a working
+                        // password.
+                        restoreSavedSecretsForCurrentBackend()
                     }
                     // Locked while the stored credential is on its way: what it belongs
                     // to must not move under it.
@@ -648,13 +655,15 @@ struct ConnectionEditorSheet: View {
         isLoadingStoredCredential = true
         defer { isLoadingStoredCredential = false }
 
-        // The sheet stays on screen across this await, so what the credential belongs to
-        // has to be pinned before it. Applying it to a backend or method the user has
-        // since switched to is not merely wrong: a Google Drive refresh token lives in
-        // `password`, so a switch to SFTP would drop it into the password field — and the
-        // next save would store it as one.
-        let requestedBackendType = backendType
-        let requestedAuthMethod = authMethod
+        // The sheet stays on screen across this await — every address field included, none
+        // of which is disabled — so what the credential belongs to has to be pinned before
+        // it. Applying it to a backend or method the user has since switched to is not
+        // merely wrong: a Google Drive refresh token lives in `password`, so a switch to
+        // SFTP would drop it into the password field, and the next save would store it as
+        // one. Pointing the form at another host is the same mistake with the secret
+        // intact — it would then be saved, and tested, against a server it was never
+        // issued for.
+        let requestedCredentialTarget = credentialTarget
 
         let credential: Credential?
         do {
@@ -672,8 +681,14 @@ struct ConnectionEditorSheet: View {
             return
         }
         guard let credential else { return }
-        guard backendType == requestedBackendType, authMethod == requestedAuthMethod else {
-            return
+        guard credentialTarget == requestedCredentialTarget else { return }
+
+        // Kept whatever the method is, and not only where the sheet has no field for it:
+        // it is what a round trip through the backend picker restores the fields from, and
+        // what a save falls back to when a key file can no longer be read.
+        // `savedCredentialForCurrentBackend` is what keeps it from reaching another server.
+        if storedCredential == nil {
+            storedCredential = credential
         }
 
         switch authMethod {
@@ -684,12 +699,6 @@ struct ConnectionEditorSheet: View {
         case .publicKey:
             if password.isEmpty {
                 password = credential.passphrase ?? ""
-            }
-            // Kept for the same reason Google Drive's is: the sheet has no field holding
-            // the key material, so a save that cannot re-read the file would otherwise
-            // have nothing to write back. See `buildCredential()`.
-            if storedCredential == nil {
-                storedCredential = credential
             }
         case .accessKey:
             if s3AccessKeyID.isEmpty {
@@ -708,10 +717,53 @@ struct ConnectionEditorSheet: View {
                 if oauthCredential == nil {
                     oauthCredential = credential
                 }
-            } else if storedCredential == nil {
-                storedCredential = credential
             }
         case .agent, .anonymous:
+            break
+        }
+    }
+
+    /// Everything that decides *which server* a secret would be sent to.
+    ///
+    /// The credential load suspends while all of it stays editable, so this is what its
+    /// result has to be checked against — a password belongs to a host, not merely to a
+    /// backend and a method.
+    private var credentialTarget: [String] {
+        [
+            backendType.rawValue,
+            authMethod.rawValue,
+            host.trimmingCharacters(in: .whitespacesAndNewlines),
+            port,
+            username,
+            s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            s3Bucket,
+            s3Region,
+            smbShare,
+            smbDomain,
+            gdClientID,
+            gdRedirectURI
+        ]
+    }
+
+    /// Put back what this mount was saved with, once the picker lands on the backend it
+    /// was saved for.
+    ///
+    /// Clearing on the way out is what stops a secret reaching another server; leaving it
+    /// cleared on the way back would leave Save enabled over an empty field, and writing
+    /// that emptiness destroys a working credential.
+    private func restoreSavedSecretsForCurrentBackend() {
+        guard let credential = savedCredentialForCurrentBackend else { return }
+        switch authMethod {
+        case .password:
+            password = credential.password ?? ""
+        case .publicKey:
+            password = credential.passphrase ?? ""
+            privateKeyPath = savedPrivateKeyPath
+            privateKeyBookmark = savedPrivateKeyBookmark
+        case .accessKey:
+            s3AccessKeyID = credential.accessKeyID ?? ""
+            s3SecretAccessKey = credential.secretAccessKey ?? ""
+        case .agent, .anonymous, .oauth:
             break
         }
     }
