@@ -8,7 +8,8 @@
     "dev": "vite",
     "typesafe-i18n": "typesafe-i18n --no-watch",
     "check": "tsc --noEmit -p jsconfig.json && tsc --noEmit -p jsconfig.node.json",
-    "build": "bun install --frozen-lockfile && bun run check && vite build",
+    "check:bun": "bun run scripts/check-bun-version.js",
+    "build": "bun run check:bun && bun install --frozen-lockfile && bun run check && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {

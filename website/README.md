@@ -16,9 +16,11 @@ Two projects, because TypeScript applies global declarations program-wide:
 `svelte.config.js` and is the only one given `@types/node`. Merging them would make
 `process` and `Buffer` type-check in browser code that cannot use them.
 
-`packageManager` pins the bun release the committed `bun.lock` was produced with — bun
-does not enforce the field itself, so it is there for version managers and CI rather than
-as a local guard.
+`packageManager` pins the bun release the committed `bun.lock` was produced with. bun
+enforces neither that field nor `engines`, so `bun run build` checks it itself
+(`scripts/check-bun-version.js`) and refuses to run a frozen install under a different
+runtime. `bun install` and `bun run dev` are left unguarded. To move the pin, change
+`packageManager` and re-resolve `bun.lock` in the same commit.
 
 ## Editing translations
 
@@ -62,6 +64,28 @@ release may format the output differently, so bump them deliberately, in their o
 **TODO:** drop this section and chain `bun run typesafe-i18n` into `build` once the
 generator supports TypeScript 7.
 
-**TODO:** `.svelte` files are not type-checked — `svelte-check` refuses a
-TypeScript-7-only project, wanting TypeScript 6 installed alongside plus `--tsgo`. Add it
-back to `bun run check` when it supports a single TypeScript 7 install.
+## Checking `.svelte` files
+
+`bun run check` does not reach them, so this is the manual pass — run it before merging a
+change that touches a `.svelte` script block, since nothing else will catch a type error
+in one:
+
+```bash
+# 1. one-off toolchain, anywhere outside the repo — same reasoning as the i18n generator
+mkdir -p /tmp/mfuse-sveltecheck && cd /tmp/mfuse-sveltecheck
+bun add --exact svelte-check@4.4.4 typescript@5.9.3 svelte@5.56.8
+
+# 2. run it against this project
+cd /path/to/mfuse/website
+/tmp/mfuse-sveltecheck/node_modules/.bin/svelte-check --tsconfig ./jsconfig.json --threshold error
+
+# 3. clean up
+rm -rf /tmp/mfuse-sveltecheck
+```
+
+It reports `0 ERRORS` on a clean tree. Keeping `.svelte` script blocks thin — logic in
+`src/lib/*.js`, which `bun run check` does cover — is what keeps this pass cheap.
+
+**TODO:** fold it back into `bun run check` once `svelte-check` supports a single
+TypeScript 7 install; today it wants TypeScript 6 alongside plus `--tsgo`, which is why it
+cannot live in this project's manifest.
