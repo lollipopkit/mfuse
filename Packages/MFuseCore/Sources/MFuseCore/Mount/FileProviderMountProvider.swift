@@ -134,6 +134,15 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func unregister(config: ConnectionConfig) async throws {
+        // Removing the domain invalidates the CloudStorage path the link operations
+        // resolve, so it takes the same lock they do rather than landing in the middle of
+        // one and leaving a link for a domain that no longer exists.
+        try await withMountOperationLock(for: config) {
+            try await performUnregister(config: config)
+        }
+    }
+
+    private func performUnregister(config: ConnectionConfig) async throws {
         // Domain first, bookkeeping second. Removing the bootstrap config ahead of the
         // domain leaves a still-registered domain with nothing to bootstrap from: before
         // macOS 15 there is no `domain.userInfo`, and `reloadConnectionsFromStorage`
@@ -230,7 +239,11 @@ public final class FileProviderMountProvider: MountProvider {
         guard let mountURL = try await resolveMountURL(for: config) else { return nil }
 
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
-        guard !fileManager.fileExists(atPath: symlinkURL.path) else {
+        // Link-aware, because `fileExists` resolves the link: a dangling one — a user's
+        // own, with a managed-looking name, pointing at something that is gone — reads as
+        // absent, and the creation below then fails with EEXIST instead of leaving the
+        // path alone and warning, which is what the ownership test above decided.
+        guard try itemType(at: symlinkURL) == nil else {
             Self.logger.warning(
                 "Skipping symlink creation because target path is occupied by a non-managed item: \(symlinkURL.path, privacy: .public)"
             )

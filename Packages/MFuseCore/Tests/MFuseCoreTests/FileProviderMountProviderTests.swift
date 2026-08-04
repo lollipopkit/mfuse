@@ -253,10 +253,19 @@ final class FileProviderMountProviderTests: XCTestCase {
 
         // Handshake, not a fixed number of yields: this resumes once the second call is
         // actually parked behind the first, which is the only state in which the assertion
-        // below means anything.
-        while await provider.queuedOperationCount(for: config) == 0 {
+        // below means anything. Bounded, so a regression fails the test instead of hanging
+        // the suite on a queue that will never fill.
+        var queuedOperations = 0
+        for _ in 0..<1000 {
+            queuedOperations = await provider.queuedOperationCount(for: config)
+            if queuedOperations > 0 { break }
             await Task.yield()
         }
+        XCTAssertEqual(
+            queuedOperations,
+            1,
+            "the second createSymlink never queued behind the first"
+        )
         let resolutionsDuringTheHeldOperation = await gate.resolutionCount
         XCTAssertEqual(
             resolutionsDuringTheHeldOperation,
@@ -268,15 +277,58 @@ final class FileProviderMountProviderTests: XCTestCase {
         _ = try await stale.value
         _ = try await current.value
 
-        // The queued pass ran once the first released, with its own resolution — the
-        // destination it writes is therefore never older than the pass before it.
+        // The queued pass ran once the first released, and resolved for itself — so the
+        // destination it would write is never older than the pass before it.
         let totalResolutions = await gate.resolutionCount
         XCTAssertEqual(totalResolutions, 2)
+
+        // The link still points at the first pass's destination, and deliberately so:
+        // these temporary paths are not under `~/Library/CloudStorage`, so the ownership
+        // test refuses to replace the existing link and the queued pass leaves it alone.
+        // Asserting it keeps the outcome of this scenario written down — what the
+        // serialization above buys is that the second pass resolves *after* the first has
+        // finished, not that it overwrites what a real mount would have let it replace.
         let symlinkURL = FileProviderMountProvider.symlinkURL(
             for: config,
             baseDir: temporaryDirectoryURL
         )
-        XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path))
+        let destination = try FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path)
+        XCTAssertEqual(destination, olderDestinationURL.path)
+    }
+
+    /// A link whose destination is gone resolves as absent to `fileExists`, so the
+    /// occupied-path check used to wave it through and the creation behind it failed with
+    /// EEXIST — surfacing as a mount error for a path the ownership test had just decided
+    /// to leave alone.
+    func testCreateSymlinkLeavesADanglingForeignLinkAlone() async throws {
+        let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
+        let config = ConnectionConfig(
+            name: "OccupiedByADanglingLink",
+            backendType: .sftp,
+            host: "example.com"
+        )
+        let mountURL = temporaryDirectoryURL.appendingPathComponent("mount")
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        provider.resolveMountURLOverride = { _ in mountURL }
+
+        let symlinkURL = FileProviderMountProvider.symlinkURL(
+            for: config,
+            baseDir: temporaryDirectoryURL
+        )
+        let missingDestinationURL = temporaryDirectoryURL.appendingPathComponent("gone")
+        try FileManager.default.createSymbolicLink(
+            at: symlinkURL,
+            withDestinationURL: missingDestinationURL
+        )
+
+        let createdURL = try await provider.createSymlink(for: config)
+
+        XCTAssertNil(createdURL)
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path),
+            missingDestinationURL.path,
+            "a dangling link that is not ours was replaced"
+        )
     }
 
     func testLegacySymlinkBaseURLUsesSharedContainerLayout() throws {
