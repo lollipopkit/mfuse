@@ -188,6 +188,9 @@ actor MockMountProvider: MountProvider {
     var reconnectInvocations: [String] = []
     var disconnectInvocations: [String] = []
     var signalInvocations: [String] = []
+    /// Provider calls in the order they *completed*, so a test can see work that ran
+    /// while another call was still inside the provider.
+    var operationLog: [String] = []
     var mountURLs: [String: URL] = [:]
     var createSymlinkInvocations: [String] = []
     var removeSymlinkInvocations: [String] = []
@@ -251,6 +254,7 @@ actor MockMountProvider: MountProvider {
 
     /// Lets a test assert on what happened after a setup phase it does not care about.
     func clearInvocations() {
+        operationLog = []
         ensureRegisteredInvocations = []
         ensureRegisteredConfigs = []
         unregisterInvocations = []
@@ -288,6 +292,7 @@ actor MockMountProvider: MountProvider {
         }
         reconnectInvocations.append(config.domainIdentifier)
         disconnectedDomainIDs.remove(config.domainIdentifier)
+        operationLog.append("reconnect")
     }
 
     func disconnect(config: ConnectionConfig) async throws {
@@ -302,6 +307,7 @@ actor MockMountProvider: MountProvider {
             throw MountError.unmountFailed("mock unmount failure")
         }
         disconnectedDomainIDs.insert(config.domainIdentifier)
+        operationLog.append("disconnect")
     }
 
     func domainStates() async throws -> [RegisteredDomainState] {
@@ -860,6 +866,63 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(manager.connections.isEmpty)
         XCTAssertTrue(try storage.loadConnections().isEmpty)
         XCTAssertNil(credentialProvider.credentials[config.id])
+    }
+
+    /// A teardown owns the domain, the convenience link and the filesystem until it
+    /// publishes `.unmounted`. A Mount arriving inside that window used to start a second
+    /// attempt alongside it, and the teardown's final write landed after the mount it never
+    /// saw — leaving the row unmounted with a domain that had just been brought up.
+    func testConnectWaitsForATeardownAlreadyInFlight() async throws {
+        let config = ConnectionConfig(
+            name: "RemountDuringTeardown",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-remount-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+        let teardown = Task { @MainActor in await manager.disconnect(config.id) }
+        await gate.waitUntilEntered()
+
+        let remountStarted = expectation(description: "the remount called connect")
+        let remount = Task { @MainActor in
+            remountStarted.fulfill()
+            await manager.connect(config.id)
+        }
+        await fulfillment(of: [remountStarted], timeout: 5)
+        // The gate stays shut for a while on purpose: an attempt that is free to run
+        // alongside the teardown gets every opportunity to finish here, which is what the
+        // assertions below then see. Parked on the teardown, the remount does nothing at
+        // all in this window.
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+
+        await gate.open()
+        await teardown.value
+        await remount.value
+        _ = await waitForMountState(config.id)
+
+        // The remount ran after the teardown finished, rather than alongside it: the
+        // provider's log is ordered by completion, and the teardown does not complete
+        // until the gate opens.
+        let operations = await mountProvider.operationLog
+        XCTAssertEqual(operations, ["disconnect", "reconnect"])
+        // The mount the user asked for last is the one that stands.
+        XCTAssertTrue(manager.effectiveMountState(for: config.id).isMounted)
     }
 
     /// Registration sync suspends before and inside `ensureRegistered`, and a removal

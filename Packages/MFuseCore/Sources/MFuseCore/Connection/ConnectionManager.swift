@@ -359,6 +359,18 @@ public final class ConnectionManager: ObservableObject {
     // MARK: - Connection lifecycle
 
     public func connect(_ id: UUID) async {
+        // Checked before the wait below, not after it: a removal owns this connection to
+        // the end, and its own teardown is one of the things that would be waited for.
+        guard !isRemovalInFlight(for: id) else { return }
+        // A teardown owns the domain, the convenience link and the filesystem until it
+        // publishes `.unmounted`. An attempt started inside that window works on the same
+        // resources at the same time, and the teardown's final write lands after the mount
+        // it never saw: a row reading unmounted with a live domain behind it, and a
+        // filesystem handle dropped without being closed. Waiting for it is what makes the
+        // remount a remount.
+        if let teardown = disconnectTasks[id] {
+            await teardown.value
+        }
         // Overlapping callers join the attempt already running instead of returning
         // early: `connect` is awaited for its effect, and a caller that returns before
         // the handshake and mount finish reports a connection nobody established yet.
