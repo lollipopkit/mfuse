@@ -90,6 +90,10 @@ struct ConnectionEditorSheet: View {
     /// tell "the same key as before" from "a key the user just pointed us at".
     private let savedPrivateKeyPath: String
     private let savedPrivateKeyBookmark: String
+    /// The account this mount was saved against, restored with its token. See
+    /// `restoreSavedSecretsForCurrentBackend()`.
+    private let savedOAuthAccountName: String
+    private let savedOAuthAccountEmail: String
     /// The backend the stored credential was issued for. See
     /// `savedCredentialForCurrentBackend`.
     private let savedBackendType: BackendType?
@@ -100,6 +104,8 @@ struct ConnectionEditorSheet: View {
         self.draftID = config?.id ?? UUID()
         self.savedPrivateKeyPath = config?.parameters["privateKeyPath"] ?? ""
         self.savedPrivateKeyBookmark = config?.parameters["privateKeyBookmark"] ?? ""
+        self.savedOAuthAccountName = config?.parameters["oauthAccountName"] ?? ""
+        self.savedOAuthAccountEmail = config?.parameters["oauthAccountEmail"] ?? ""
         self.savedBackendType = config?.backendType
         self.onSave = onSave
         _name = State(initialValue: config?.name ?? "")
@@ -763,7 +769,18 @@ struct ConnectionEditorSheet: View {
         case .accessKey:
             s3AccessKeyID = credential.accessKeyID ?? ""
             s3SecretAccessKey = credential.secretAccessKey ?? ""
-        case .agent, .anonymous, .oauth:
+        case .oauth:
+            // `clearOAuthAuthorizationState()` drops the token on the way out, and the
+            // bundled flows read *only* `oauthCredential` to decide whether an account is
+            // connected — so without this a round trip through the picker left Save and
+            // Test disabled on a mount whose stored token is right here, demanding a
+            // re-authorization for nothing. The account labels come back with it, or a
+            // save would drop them from the config.
+            guard usesBundledOAuthFlow, oauthCredential == nil else { return }
+            oauthCredential = credential
+            oauthAccountName = savedOAuthAccountName
+            oauthAccountEmail = savedOAuthAccountEmail
+        case .agent, .anonymous:
             break
         }
     }
