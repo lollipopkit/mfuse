@@ -91,11 +91,13 @@ struct ConnectionEditorSheet: View {
     private let savedPrivateKeyPath: String
     private let savedPrivateKeyBookmark: String
     /// The account this mount was saved against, restored with its token. See
-    /// `restoreSavedSecretsForCurrentBackend()`.
+    /// `restoreSavedSecretsForCurrentTarget()`.
     private let savedOAuthAccountName: String
     private let savedOAuthAccountEmail: String
+    /// The server this mount was saved against. See `savedCredentialForCurrentTarget`.
+    private let savedServerIdentity: ServerIdentity
     /// The backend the stored credential was issued for. See
-    /// `savedCredentialForCurrentBackend`.
+    /// `savedCredentialForCurrentTarget`.
     private let savedBackendType: BackendType?
     private let onSave: (ConnectionConfig, Credential) -> Void
 
@@ -116,11 +118,12 @@ struct ConnectionEditorSheet: View {
         // old value forward would silently stamp it onto whatever address is saved next:
         // a legacy "http://localhost" + 9000 config re-pointed at "https://s3.example.com"
         // would go on connecting to port 9000.
-        _port = State(initialValue: config.map { existing in
+        let initialPort = config.map { existing in
             existing.backendType.usesHostBasedAddressing
                 ? "\(existing.port)"
                 : "\(existing.backendType.defaultPort)"
-        } ?? "")
+        } ?? ""
+        _port = State(initialValue: initialPort)
         _username = State(initialValue: config?.username ?? "")
         // Normalized on open, not just on a backend switch: a config carrying a method its
         // backend does not support — written by an older build, or synced from one — has no
@@ -141,7 +144,8 @@ struct ConnectionEditorSheet: View {
         _s3Region = State(initialValue: params["region"] ?? "us-east-1")
         // Resolved, not raw: this is where a legacy config's hidden port is folded into
         // the endpoint, so editing one keeps reaching the server it reached before.
-        _s3Endpoint = State(initialValue: config?.s3Endpoint ?? params["endpoint"] ?? "")
+        let initialS3Endpoint = config?.s3Endpoint ?? params["endpoint"] ?? ""
+        _s3Endpoint = State(initialValue: initialS3Endpoint)
         _s3PathStyle = State(initialValue: params["pathStyle"] == "true")
         _webdavTLS = State(initialValue: params["tls"] != "false")
         _smbShare = State(initialValue: params["share"] ?? "")
@@ -152,6 +156,20 @@ struct ConnectionEditorSheet: View {
         _gdRedirectURI = State(initialValue: params["redirectURI"] ?? "")
         _oauthAccountName = State(initialValue: params["oauthAccountName"] ?? "")
         _oauthAccountEmail = State(initialValue: params["oauthAccountEmail"] ?? "")
+        // Built from the same values the fields above start with, so "back where it
+        // started" is decided by exactly what the user sees.
+        self.savedServerIdentity = ServerIdentity(
+            host: (config?.host ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            port: initialPort,
+            username: config?.username ?? "",
+            s3Endpoint: initialS3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            s3Bucket: params["bucket"] ?? "",
+            s3Region: params["region"] ?? "us-east-1",
+            smbShare: params["share"] ?? "",
+            smbDomain: params["domain"] ?? "",
+            gdClientID: params["clientID"] ?? "",
+            gdRedirectURI: params["redirectURI"] ?? ""
+        )
     }
 
     var body: some View {
@@ -216,7 +234,7 @@ struct ConnectionEditorSheet: View {
                         // from. Without this a round trip left the field empty with Save
                         // still enabled, and saving wrote that emptiness over a working
                         // password.
-                        restoreSavedSecretsForCurrentBackend()
+                        restoreSavedSecretsForCurrentTarget()
                     }
                     // Locked while the stored credential is on its way: what it belongs
                     // to must not move under it.
@@ -433,12 +451,24 @@ struct ConnectionEditorSheet: View {
         .task(id: existingID) {
             await loadStoredCredentialIfNeeded()
         }
+        .onChange(of: serverIdentity) { _, _ in
+            // A secret belongs to the server it was issued for, and these fields are what
+            // name that server. Editing one — a host, an S3 endpoint, a Google OAuth client
+            // — points the mount at a different party, and the password or token already on
+            // screen would otherwise be saved and sent there. Clearing is visible: the field
+            // empties, so what is saved is what the user can see.
+            //
+            // Restored when the fields name the saved server again, so correcting a typo
+            // does not cost the credential this sheet cannot load a second time.
+            clearEnteredSecrets()
+            restoreSavedSecretsForCurrentTarget()
+        }
         .onChange(of: authMethod) { _, newMethod in
             // A method the backend switch installed is not a choice about credentials: the
             // switch already cleared everything on screen, and destroying the saved
             // credential here as well would make a round trip through the picker — Google
             // Drive to SFTP and back — lose a refresh token this sheet cannot load again,
-            // and then write the emptiness over it on save. `savedCredentialForCurrentBackend`
+            // and then write the emptiness over it on save. `savedCredentialForCurrentTarget`
             // is what keeps it from reaching the wrong backend meanwhile.
             if backendNormalizedAuthMethod == newMethod {
                 backendNormalizedAuthMethod = nil
@@ -588,7 +618,7 @@ struct ConnectionEditorSheet: View {
             privateKeyBookmark: privateKeyBookmark,
             accessKeyID: s3AccessKeyID,
             secretAccessKey: s3SecretAccessKey,
-            oauthToken: (usesBundledOAuthFlow ? oauthCredential : savedCredentialForCurrentBackend)?.token
+            oauthToken: (usesBundledOAuthFlow ? oauthCredential : savedCredentialForCurrentTarget)?.token
         )
     }
 
@@ -613,7 +643,7 @@ struct ConnectionEditorSheet: View {
                 // material saved for this exact path. Renaming it or toggling auto-mount
                 // must not fail on that, nor replace a working key with nothing.
                 if privateKeyPath == savedPrivateKeyPath,
-                   let savedPrivateKey = savedCredentialForCurrentBackend?.privateKey {
+                   let savedPrivateKey = savedCredentialForCurrentTarget?.privateKey {
                     return Credential(
                         password: nil,
                         privateKey: savedPrivateKey,
@@ -650,7 +680,7 @@ struct ConnectionEditorSheet: View {
             // saving, and the refresh token lives in `password`. Reconstructing the
             // credential from what the editor shows would drop it, leaving a mount that
             // can never refresh; the stored one is passed through untouched instead.
-            return savedCredentialForCurrentBackend ?? Credential()
+            return savedCredentialForCurrentTarget ?? Credential()
         }
     }
 
@@ -692,7 +722,7 @@ struct ConnectionEditorSheet: View {
         // Kept whatever the method is, and not only where the sheet has no field for it:
         // it is what a round trip through the backend picker restores the fields from, and
         // what a save falls back to when a key file can no longer be read.
-        // `savedCredentialForCurrentBackend` is what keeps it from reaching another server.
+        // `savedCredentialForCurrentTarget` is what keeps it from reaching another server.
         if storedCredential == nil {
             storedCredential = credential
         }
@@ -729,26 +759,34 @@ struct ConnectionEditorSheet: View {
         }
     }
 
-    /// Everything that decides *which server* a secret would be sent to.
+    /// The server a secret would be sent to, as the fields currently name it.
+    private var serverIdentity: ServerIdentity {
+        ServerIdentity(
+            host: host.trimmingCharacters(in: .whitespacesAndNewlines),
+            port: port,
+            username: username,
+            s3Endpoint: s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            s3Bucket: s3Bucket,
+            s3Region: s3Region,
+            smbShare: smbShare,
+            smbDomain: smbDomain,
+            gdClientID: gdClientID,
+            gdRedirectURI: gdRedirectURI
+        )
+    }
+
+    /// Everything that decides *which server* a secret would be sent to, the backend and
+    /// method included.
     ///
     /// The credential load suspends while all of it stays editable, so this is what its
     /// result has to be checked against — a password belongs to a host, not merely to a
     /// backend and a method.
-    private var credentialTarget: [String] {
-        [
-            backendType.rawValue,
-            authMethod.rawValue,
-            host.trimmingCharacters(in: .whitespacesAndNewlines),
-            port,
-            username,
-            s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
-            s3Bucket,
-            s3Region,
-            smbShare,
-            smbDomain,
-            gdClientID,
-            gdRedirectURI
-        ]
+    private var credentialTarget: CredentialTarget {
+        CredentialTarget(
+            backendType: backendType,
+            authMethod: authMethod,
+            server: serverIdentity
+        )
     }
 
     /// Put back what this mount was saved with, once the picker lands on the backend it
@@ -757,8 +795,8 @@ struct ConnectionEditorSheet: View {
     /// Clearing on the way out is what stops a secret reaching another server; leaving it
     /// cleared on the way back would leave Save enabled over an empty field, and writing
     /// that emptiness destroys a working credential.
-    private func restoreSavedSecretsForCurrentBackend() {
-        guard let credential = savedCredentialForCurrentBackend else { return }
+    private func restoreSavedSecretsForCurrentTarget() {
+        guard let credential = savedCredentialForCurrentTarget else { return }
         switch authMethod {
         case .password:
             password = credential.password ?? ""
@@ -795,13 +833,15 @@ struct ConnectionEditorSheet: View {
     }
 
     /// The credential this mount was saved with, offered only while the sheet still
-    /// describes the backend it was saved for.
+    /// describes the server it was saved against.
     ///
-    /// It survives a round trip through the backend picker — that is what keeps a Google
-    /// Drive refresh token from being destroyed by one — but what one server issued must
-    /// never be built into the credential written for another.
-    private var savedCredentialForCurrentBackend: Credential? {
-        guard backendType == savedBackendType else { return nil }
+    /// It survives a round trip through the picker or a retyped host — that is what keeps
+    /// a Google Drive refresh token from being destroyed by one — but what one server
+    /// issued must never be built into the credential written for another.
+    private var savedCredentialForCurrentTarget: Credential? {
+        guard backendType == savedBackendType, serverIdentity == savedServerIdentity else {
+            return nil
+        }
         return storedCredential
     }
 
@@ -994,7 +1034,7 @@ struct ConnectionEditorSheet: View {
         if usesBundledOAuthFlow {
             return oauthCredential?.token?.isEmpty == false
         }
-        return savedCredentialForCurrentBackend?.token?.isEmpty == false
+        return savedCredentialForCurrentTarget?.token?.isEmpty == false
     }
 
     private var oauthAccountSummary: String {
@@ -1078,6 +1118,28 @@ struct ConnectionEditorSheet: View {
             )
         }
     }
+}
+
+/// The fields that name the server a secret would be sent to.
+private struct ServerIdentity: Equatable {
+    let host: String
+    let port: String
+    let username: String
+    let s3Endpoint: String
+    let s3Bucket: String
+    let s3Region: String
+    let smbShare: String
+    let smbDomain: String
+    let gdClientID: String
+    let gdRedirectURI: String
+}
+
+/// That server plus how the mount authenticates to it — what a stored credential belongs
+/// to, in full.
+private struct CredentialTarget: Equatable {
+    let backendType: BackendType
+    let authMethod: AuthMethod
+    let server: ServerIdentity
 }
 
 /// A snapshot of everything a connection test depends on, so its result can be dropped
