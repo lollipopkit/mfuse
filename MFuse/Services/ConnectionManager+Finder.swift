@@ -32,8 +32,17 @@ extension ConnectionManager {
                 guard canRevealMount(for: config.id) else {
                     // An unmount that raced this call already ran removeSymlink, so the
                     // link just recreated has to go with it rather than being left
-                    // pointing at a domain that is gone.
-                    try? await mountProvider.removeSymlink(for: config)
+                    // pointing at a domain that is gone. A failure here leaves exactly
+                    // that, and nothing else is looking: reveal is not part of the
+                    // teardown, so the next pass over this connection is whatever the user
+                    // does next.
+                    do {
+                        try await mountProvider.removeSymlink(for: config)
+                    } catch {
+                        Self.finderLogger.error(
+                            "Left a convenience link behind for \(config.id.uuidString, privacy: .public) after an unmount raced Reveal: \(error.localizedDescription, privacy: .private)"
+                        )
+                    }
                     // The removal suspends, and a remount landing inside that window owns
                     // this link: stripping a live mount of its shortcut is the other half
                     // of the race, so it is put back the way the manager's own teardown
