@@ -205,7 +205,12 @@ public final class ConnectionManager: ObservableObject {
         return try await task.value
     }
 
-    private func performRemove(_ config: ConnectionConfig) async throws {
+    private func performRemove(_ requestedConfig: ConnectionConfig) async throws {
+        // Pinned to the row as it is now, not to the revision the caller is holding: a UI
+        // snapshot taken before an edit — or before an external reload — would otherwise
+        // unregister and, on rollback, re-register a host, name and parameter set that
+        // disagree with the connection `previousConnections` restores to storage.
+        let config = connections.first(where: { $0.id == requestedConfig.id }) ?? requestedConfig
         advanceConnectionGeneration(for: config.id)
         let shouldCleanupMount = states[config.id]?.isConnected == true
             || {
@@ -1464,7 +1469,19 @@ public final class ConnectionManager: ObservableObject {
         // A refresh in flight is holding the config from before this edit, and its
         // `signalEnumerator` would write that one back over the snapshot registered here.
         await cancelAndAwaitRefresh(for: config.id)
+        // A removal that ran while this was suspended has already taken the row, the
+        // domain and the credential; registering now would put an orphan domain and
+        // bootstrap snapshot back for a connection that no longer exists.
+        guard isRegistrableConnection(config.id) else {
+            throw ConnectionManagerError.connectionNotFound(config.id)
+        }
         try await mountProvider.ensureRegistered(config: config)
+        // Registration suspends too, so the same removal can land inside it. What it
+        // created is taken straight back out rather than left behind.
+        guard isRegistrableConnection(config.id) else {
+            try? await mountProvider.unregister(config: config)
+            throw ConnectionManagerError.connectionNotFound(config.id)
+        }
 
         // Read *after* the suspensions above rather than on entry: the user can unmount
         // while `ensureRegistered` is in flight, and a remount decided from the earlier
@@ -1716,6 +1733,12 @@ public final class ConnectionManager: ObservableObject {
     /// Whether any `remove(_:)` call for this connection is still running.
     func isRemovalInFlight(for id: UUID) -> Bool {
         removalTasks[id] != nil
+    }
+
+    /// Whether a domain may be registered for this connection: it is one of ours, and
+    /// nothing is in the middle of taking it away.
+    private func isRegistrableConnection(_ id: UUID) -> Bool {
+        connections.contains(where: { $0.id == id }) && !isRemovalInFlight(for: id)
     }
 
     /// Whether a teardown for this connection is running, from the moment `disconnect`

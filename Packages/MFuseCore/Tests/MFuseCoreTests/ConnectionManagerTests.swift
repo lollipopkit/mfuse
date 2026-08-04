@@ -180,7 +180,11 @@ actor MockMountProvider: MountProvider {
     var registeredDomainIDs: Set<String> = []
     var disconnectedDomainIDs: Set<String> = []
     var ensureRegisteredInvocations: [String] = []
+    /// The configs, not just their ids: cleanup and rollback have to act on the same
+    /// revision of a connection, and only the contents show which one they used.
+    var ensureRegisteredConfigs: [ConnectionConfig] = []
     var unregisterInvocations: [String] = []
+    var unregisterConfigs: [ConnectionConfig] = []
     var reconnectInvocations: [String] = []
     var disconnectInvocations: [String] = []
     var signalInvocations: [String] = []
@@ -248,7 +252,9 @@ actor MockMountProvider: MountProvider {
     /// Lets a test assert on what happened after a setup phase it does not care about.
     func clearInvocations() {
         ensureRegisteredInvocations = []
+        ensureRegisteredConfigs = []
         unregisterInvocations = []
+        unregisterConfigs = []
         reconnectInvocations = []
         disconnectInvocations = []
         signalInvocations = []
@@ -258,6 +264,7 @@ actor MockMountProvider: MountProvider {
 
     func ensureRegistered(config: ConnectionConfig) async throws {
         ensureRegisteredInvocations.append(config.domainIdentifier)
+        ensureRegisteredConfigs.append(config)
         if let ensureRegisteredGate {
             await ensureRegisteredGate.wait()
         }
@@ -266,6 +273,7 @@ actor MockMountProvider: MountProvider {
 
     func unregister(config: ConnectionConfig) async throws {
         unregisterInvocations.append(config.domainIdentifier)
+        unregisterConfigs.append(config)
         if unregisterShouldFail {
             throw MountError.unmountFailed("mock unmount failure")
         }
@@ -852,6 +860,92 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(manager.connections.isEmpty)
         XCTAssertTrue(try storage.loadConnections().isEmpty)
         XCTAssertNil(credentialProvider.credentials[config.id])
+    }
+
+    /// Registration sync suspends before and inside `ensureRegistered`, and a removal
+    /// running there takes the row, the domain and the credential with it. Registering
+    /// afterwards would leave a domain and a bootstrap snapshot behind for a connection
+    /// that no longer exists, with nothing left to clean them up.
+    func testRegistrationSyncDoesNotResurrectARemovedConnection() async throws {
+        let config = ConnectionConfig(
+            name: "RemovedDuringRegistration",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        let gate = TestGate()
+        await mountProvider.setEnsureRegisteredGate(gate)
+        let registration = Task { @MainActor in
+            try await manager.syncSavedConnectionRegistration(config, previousConfig: config)
+        }
+        await gate.waitUntilEntered()
+
+        // Nothing this removal needs is gated, so it runs to completion while the
+        // registration is still suspended inside `ensureRegistered`.
+        try await manager.remove(config)
+        await gate.open()
+
+        do {
+            try await registration.value
+            XCTFail("Expected the registration to refuse a connection that was removed")
+        } catch {
+            XCTAssertEqual(error as? ConnectionManagerError, .connectionNotFound(config.id))
+        }
+
+        let registeredDomainIDs = await mountProvider.registeredDomainIDs
+        XCTAssertFalse(
+            registeredDomainIDs.contains(config.domainIdentifier),
+            "the removed connection's domain was registered again"
+        )
+        XCTAssertTrue(manager.connections.isEmpty)
+    }
+
+    /// Removal is handed a config by a caller that may be holding an older revision of it.
+    /// Cleanup and rollback both have to act on the row as it is now, or the domain is
+    /// restored with a host and name that disagree with the connection restored to storage.
+    func testRemovalUsesTheCurrentRevisionRatherThanTheCallersSnapshot() async throws {
+        let staleConfig = ConnectionConfig(
+            name: "StaleSnapshot",
+            backendType: .sftp,
+            host: "old.example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[staleConfig.id] = Credential(password: "pass")
+        try manager.add(staleConfig)
+
+        var editedConfig = staleConfig
+        editedConfig.name = "EditedSinceTheSnapshot"
+        editedConfig.host = "new.example.com"
+        try manager.update(editedConfig)
+        await mountProvider.clearInvocations()
+
+        // Fails on the last step, which is the one that rolls the removal back.
+        credentialProvider.deleteError = RemoteFileSystemError.operationFailed("delete failed")
+
+        do {
+            try await manager.remove(staleConfig)
+            XCTFail("Expected the failed credential deletion to surface")
+        } catch {
+            // The rollback is what this test is about; the error itself is covered
+            // elsewhere.
+        }
+
+        let unregisteredHosts = await mountProvider.unregisterConfigs.map(\.host)
+        XCTAssertEqual(unregisteredHosts, ["new.example.com"])
+        let restoredHosts = await mountProvider.ensureRegisteredConfigs.map(\.host)
+        XCTAssertEqual(
+            restoredHosts,
+            ["new.example.com"],
+            "the domain was restored with the revision the caller was holding"
+        )
+        XCTAssertEqual(manager.connections.first?.host, "new.example.com")
     }
 
     /// A teardown reports its failure by publishing state, not by returning one, so the

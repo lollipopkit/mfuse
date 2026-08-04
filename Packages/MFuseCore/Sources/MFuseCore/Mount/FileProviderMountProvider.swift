@@ -76,11 +76,14 @@ public final class FileProviderMountProvider: MountProvider {
     /// Test seams for `unregister`'s two steps, which exist so its ordering — the domain
     /// before the bootstrap config it is the last fallback for — can be exercised without
     /// a registered File Provider domain. Never set in production.
-    var removeRegisteredDomainOverride: ((ConnectionConfig) async throws -> Void)?
-    var removeBootstrapConfigOverride: ((ConnectionConfig) throws -> Void)?
+    /// `nonisolated(unsafe)`, and only sound because of that "never in production": a
+    /// test sets these once, before the provider is handed to anything that could call it
+    /// concurrently.
+    nonisolated(unsafe) var removeRegisteredDomainOverride: ((ConnectionConfig) async throws -> Void)?
+    nonisolated(unsafe) var removeBootstrapConfigOverride: ((ConnectionConfig) throws -> Void)?
     /// Test seam: replaces the CloudStorage lookup so a resolution can be held at the
     /// point where another pass interleaves. Never set in production.
-    var resolveMountURLOverride: ((ConnectionConfig) async throws -> URL?)?
+    nonisolated(unsafe) var resolveMountURLOverride: ((ConnectionConfig) async throws -> URL?)?
 
     private let operationCoordinator = MountOperationCoordinator()
 
