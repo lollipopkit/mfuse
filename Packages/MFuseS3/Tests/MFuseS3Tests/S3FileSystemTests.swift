@@ -175,6 +175,56 @@ import SotoCore
     _ = await first.result
 }
 
+/// The attempt is shared, so the caller that happened to start it does not own it: its
+/// cancellation must not take the connection down for callers that joined it and were
+/// never cancelled themselves.
+@Test func cancellingTheStarterLeavesAJoinedConnectRunning() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        await coordinator.waitForRelease()
+    }
+
+    let starter = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    let joiner = Task { try await fileSystem.connect() }
+    while await fileSystem.pendingConnectWaiterCount == 0 {
+        await Task.yield()
+    }
+
+    starter.cancel()
+    await coordinator.release()
+
+    // The joiner asked for a connection and never withdrew, so it gets one.
+    switch await joiner.result {
+    case .success:
+        break
+    case .failure(let error):
+        Issue.record("the joined connect was taken down with the starter: \(error)")
+    }
+    #expect(await fileSystem.isConnected)
+
+    // The starter still answers for itself.
+    switch await starter.result {
+    case .success:
+        Issue.record("expected the cancelled starter to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+
+    try await fileSystem.disconnect()
+}
+
 /// The interrupted attempt shuts down the client it built as it unwinds. `disconnect()`
 /// returning before that lets a replacement attempt allocate a second client while the
 /// first one is still open — and Soto asserts on a client released without a shutdown.
@@ -254,6 +304,24 @@ private actor ProbeCoordinator {
     private var nextWaiterID = 0
     private var waiters: [Waiter] = []
     private var unwound = false
+    private var isReleased = false
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Holds a probe without observing cancellation, which is what a backend that ignores
+    /// it looks like from here.
+    func waitForRelease() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func release() {
+        isReleased = true
+        let pending = releaseWaiters
+        releaseWaiters = []
+        for continuation in pending {
+            continuation.resume()
+        }
+    }
 
     /// Whether a probe has finished unwinding after being cancelled.
     var didUnwind: Bool { unwound }

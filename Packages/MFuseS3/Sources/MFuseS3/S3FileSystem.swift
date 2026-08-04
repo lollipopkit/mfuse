@@ -38,6 +38,9 @@ public actor S3FileSystem: RemoteFileSystem {
     /// Test seam: whether a connection attempt is still registered for deduplication.
     var hasPendingConnectTask: Bool { connectTask != nil }
 
+    /// Test seam: how many callers are parked on an attempt someone else started.
+    var pendingConnectWaiterCount: Int { connectWaiters.count }
+
     public var isConnected: Bool { s3 != nil }
 
     public init(config: ConnectionConfig, credential: MFuseCore.Credential) {
@@ -98,11 +101,14 @@ public actor S3FileSystem: RemoteFileSystem {
             do {
                 // Cancellation does not reach into an unstructured task, so without this a
                 // cancelled caller would keep waiting for a probe that then publishes a
-                // client nobody is left to disconnect.
+                // client nobody is left to disconnect. It is forwarded through
+                // `relinquishConnectAttempt` rather than applied directly: this caller
+                // started the probe, but callers that joined it since are waiting on the
+                // same task and were never cancelled themselves.
                 try await withTaskCancellationHandler {
                     try await task.value
                 } onCancel: {
-                    task.cancel()
+                    Task { await self.relinquishConnectAttempt(task) }
                 }
             } catch {
                 // Runs before the `defer` above clears `connectTask`, so a caller that
@@ -119,9 +125,32 @@ public actor S3FileSystem: RemoteFileSystem {
                 resumeConnectWaiters(of: task, with: .failure(interrupted))
                 throw interrupted
             }
-            resumeConnectWaiters(of: task, with: .success(()))
+            // Joiners first, then this caller's own answer. A cancellation that arrived
+            // while the probe was still running left the probe to them, so the connection
+            // is established and published and only this caller no longer wants it —
+            // reporting the cancellation is what stops it acting on one it never took.
+            //
+            // Only when a joiner is actually taking it: a cancelled caller that is the last
+            // one interested returns success instead, because throwing would have it drop
+            // the only reference to a live `AWSClient` without shutting it down. Its own
+            // cancellation handling then disconnects it properly.
+            let resumedJoiners = resumeConnectWaiters(of: task, with: .success(()))
+            if resumedJoiners {
+                try Task.checkCancellation()
+            }
             return
         }
+    }
+
+    /// Give up this caller's interest in the probe it started.
+    ///
+    /// Cancelling the shared task outright would take the connection down for callers that
+    /// joined it and were never cancelled; the starter stays on `task.value` either way, so
+    /// they are still resumed when it finishes.
+    private func relinquishConnectAttempt(_ task: Task<Void, Error>) {
+        let hasJoiners = connectWaiters.values.contains { $0.task == task }
+        guard !hasJoiners else { return }
+        task.cancel()
     }
 
     /// Wait for the attempt another caller started, without waiting past *this* caller's
@@ -153,6 +182,11 @@ public actor S3FileSystem: RemoteFileSystem {
         } onCancel: {
             Task { await self.cancelConnectWaiter(waiterID) }
         }
+        // The handler above removes this waiter through a task hop, so an attempt that
+        // finished in the same turn can resume it first and leave that hop with nothing to
+        // cancel. Without this check the cancellation would simply be lost and a caller
+        // that gave up would be handed a connection anyway.
+        try Task.checkCancellation()
         return joined
     }
 
@@ -160,7 +194,12 @@ public actor S3FileSystem: RemoteFileSystem {
         connectWaiters.removeValue(forKey: waiterID)?.continuation.resume(throwing: CancellationError())
     }
 
-    private func resumeConnectWaiters(of task: Task<Void, Error>, with result: Result<Void, Error>) {
+    /// Returns whether anyone was waiting.
+    @discardableResult
+    private func resumeConnectWaiters(
+        of task: Task<Void, Error>,
+        with result: Result<Void, Error>
+    ) -> Bool {
         let waiters = connectWaiters.filter { $0.value.task == task }
         for waiterID in waiters.keys {
             connectWaiters.removeValue(forKey: waiterID)
@@ -168,6 +207,7 @@ public actor S3FileSystem: RemoteFileSystem {
         for waiter in waiters.values {
             waiter.continuation.resume(with: result)
         }
+        return !waiters.isEmpty
     }
 
     private func performConnect() async throws {
@@ -284,7 +324,13 @@ public actor S3FileSystem: RemoteFileSystem {
             if Self.authenticationIndicators.contains(code) {
                 return .authenticationFailed
             }
-            if code == "nosuchbucket" {
+            // The probe is a list against the bucket, so a not-found answer is about the
+            // bucket. S3-compatible servers report it as `NoSuchBucket`, as a plain
+            // `NotFound`, or with nothing but a 404 — the same spread `isNotFoundError`
+            // already handles for objects. Blaming the endpoint for any of them sends the
+            // user to check the network for a bucket name that is simply wrong.
+            if code == "nosuchbucket" || code == "notfound"
+                || awsError.context?.responseCode.code == 404 {
                 return missingBucketError(bucket: bucket)
             }
             if !code.isEmpty {
