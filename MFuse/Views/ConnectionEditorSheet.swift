@@ -132,11 +132,12 @@ struct ConnectionEditorSheet: View {
         // backend does not support — written by an older build, or synced from one — has no
         // row in the picker to correct it, so it would be saved and tested as-is. An S3
         // mount stuck on `.password` saves with no access keys and then fails every time.
-        _authMethod = State(initialValue: config.map { existing in
+        let initialAuthMethod = config.map { existing in
             existing.backendType.supportedAuthMethods.contains(existing.authMethod)
                 ? existing.authMethod
                 : existing.backendType.supportedAuthMethods.first ?? existing.authMethod
-        } ?? .password)
+        } ?? .password
+        _authMethod = State(initialValue: initialAuthMethod)
         _remotePath = State(initialValue: config?.remotePath ?? "/")
         _autoMountOnLaunch = State(initialValue: config?.autoMountOnLaunch ?? false)
         // Backend-specific parameters
@@ -161,17 +162,21 @@ struct ConnectionEditorSheet: View {
         _oauthAccountEmail = State(initialValue: params["oauthAccountEmail"] ?? "")
         // Built from the same values the fields above start with, so "back where it
         // started" is decided by exactly what the user sees.
-        self.savedServerIdentity = ServerIdentity(
-            host: (config?.host ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
-            port: initialPort,
-            username: config?.username ?? "",
-            s3Endpoint: initialS3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
-            s3Bucket: params["bucket"] ?? "",
-            s3Region: params["region"] ?? "us-east-1",
-            smbShare: params["share"] ?? "",
-            smbDomain: params["domain"] ?? "",
-            gdClientID: params["clientID"] ?? "",
-            gdRedirectURI: params["redirectURI"] ?? ""
+        self.savedServerIdentity = Self.serverIdentity(
+            backendType: config?.backendType ?? .sftp,
+            usesUsername: (config?.backendType.usesUsername ?? false) && initialAuthMethod != .anonymous,
+            values: ServerIdentityValues(
+                host: config?.host ?? "",
+                port: initialPort,
+                username: config?.username ?? "",
+                s3Endpoint: initialS3Endpoint,
+                s3Bucket: params["bucket"] ?? "",
+                s3Region: params["region"] ?? "us-east-1",
+                smbShare: params["share"] ?? "",
+                smbDomain: params["domain"] ?? "",
+                gdClientID: params["clientID"] ?? "",
+                gdRedirectURI: params["redirectURI"] ?? ""
+            )
         )
     }
 
@@ -772,17 +777,52 @@ struct ConnectionEditorSheet: View {
 
     /// The server a secret would be sent to, as the fields currently name it.
     private var serverIdentity: ServerIdentity {
-        ServerIdentity(
-            host: host.trimmingCharacters(in: .whitespacesAndNewlines),
-            port: port,
-            username: username,
-            s3Endpoint: s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
-            s3Bucket: s3Bucket,
-            s3Region: s3Region,
-            smbShare: smbShare,
-            smbDomain: smbDomain,
-            gdClientID: gdClientID,
-            gdRedirectURI: gdRedirectURI
+        Self.serverIdentity(
+            backendType: backendType,
+            usesUsername: usesUsernameField,
+            values: ServerIdentityValues(
+                host: host,
+                port: port,
+                username: username,
+                s3Endpoint: s3Endpoint,
+                s3Bucket: s3Bucket,
+                s3Region: s3Region,
+                smbShare: smbShare,
+                smbDomain: smbDomain,
+                gdClientID: gdClientID,
+                gdRedirectURI: gdRedirectURI
+            )
+        )
+    }
+
+    /// Only the fields the selected backend actually addresses by.
+    ///
+    /// The others still hold whatever a detour through another backend left in them —
+    /// a bucket typed while S3 was selected, say — and counting those would make an SFTP
+    /// mount look like it had moved to a different server, leaving its saved credential
+    /// unrestorable and Save ready to write an empty one over it. `makeConfig` drops the
+    /// same fields for the same reason.
+    private static func serverIdentity(
+        backendType: BackendType,
+        usesUsername: Bool,
+        values: ServerIdentityValues
+    ) -> ServerIdentity {
+        let usesHostBasedAddressing = backendType.usesHostBasedAddressing
+        return ServerIdentity(
+            host: usesHostBasedAddressing
+                ? values.host.trimmingCharacters(in: .whitespacesAndNewlines)
+                : "",
+            port: usesHostBasedAddressing ? values.port : "",
+            username: usesUsername ? values.username : "",
+            s3Endpoint: backendType == .s3
+                ? values.s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+                : "",
+            s3Bucket: backendType == .s3 ? values.s3Bucket : "",
+            s3Region: backendType == .s3 ? values.s3Region : "",
+            smbShare: backendType == .smb ? values.smbShare : "",
+            smbDomain: backendType == .smb ? values.smbDomain : "",
+            gdClientID: backendType == .googleDrive ? values.gdClientID : "",
+            gdRedirectURI: backendType == .googleDrive ? values.gdRedirectURI : ""
         )
     }
 
@@ -1129,6 +1169,21 @@ struct ConnectionEditorSheet: View {
             )
         }
     }
+}
+
+/// The address fields as the sheet currently holds them, before the selected backend
+/// decides which of them mean anything.
+private struct ServerIdentityValues {
+    let host: String
+    let port: String
+    let username: String
+    let s3Endpoint: String
+    let s3Bucket: String
+    let s3Region: String
+    let smbShare: String
+    let smbDomain: String
+    let gdClientID: String
+    let gdRedirectURI: String
 }
 
 /// The fields that name the server a secret would be sent to.
