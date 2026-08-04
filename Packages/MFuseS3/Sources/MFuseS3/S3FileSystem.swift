@@ -58,10 +58,11 @@ public actor S3FileSystem: RemoteFileSystem {
     // requests are signed for — and a whitespace-only value still trips the guard in
     // `performConnect()` instead of reaching S3 as a blank bucket.
     private var bucket: String { config.s3Bucket ?? "" }
-    private var region: String { config.parameters["region"] ?? "us-east-1" }
-    // Resolved in MFuseCore so the address shown in the UI is the one connected to.
+    // Resolved in MFuseCore too, so what the UI compares — and decides a synced edit by —
+    // is what requests are actually signed for.
+    private var region: String { config.s3Region }
     private var customEndpoint: String? { config.s3Endpoint }
-    private var pathStyle: Bool { config.parameters["pathStyle"] == "true" }
+    private var pathStyle: Bool { config.s3UsesPathStyle }
 
     private func isNotFoundError(_ error: Error) -> Bool {
         if let awsError = error as? AWSErrorType {

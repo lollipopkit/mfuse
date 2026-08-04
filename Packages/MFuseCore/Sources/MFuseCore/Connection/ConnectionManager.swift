@@ -1828,6 +1828,13 @@ public final class ConnectionManager: ObservableObject {
         guard let mountProvider else { return nil }
         do {
             try await mountProvider.ensureRegistered(config: config)
+            // A domain comes back connected, and the removal that is being undone tore the
+            // mount down before it got here — so the state restored beside this says the
+            // connection is not mounted. Leaving the domain active shows the mount in
+            // Finder under a row reporting it unmounted, with nothing to reconcile the two.
+            if !mountState(for: config.id).isMounted {
+                try await mountProvider.disconnect(config: config)
+            }
             return nil
         } catch {
             logger.error(

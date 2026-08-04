@@ -275,6 +275,9 @@ actor MockMountProvider: MountProvider {
         ensureRegisteredInvocations.append(config.domainIdentifier)
         ensureRegisteredConfigs.append(config)
         operationLog.append("ensureRegistered")
+        // A domain that has just been added is active, the way `NSFileProviderManager.add`
+        // leaves one — which is what makes putting it back a decision about its state.
+        disconnectedDomainIDs.remove(config.domainIdentifier)
         if let ensureRegisteredGate {
             await ensureRegisteredGate.wait()
         }
@@ -1312,6 +1315,12 @@ final class ConnectionManagerTests: XCTestCase {
             "the domain was restored with the revision the caller was holding"
         )
         XCTAssertEqual(manager.connections.first?.host, "new.example.com")
+        // A domain comes back connected, and the state restored beside it says this
+        // connection is not mounted — so the domain has to be put back that way too,
+        // rather than showing a live mount under a row that reports none.
+        let disconnectedDomainIDs = await mountProvider.disconnectedDomainIDs
+        XCTAssertTrue(disconnectedDomainIDs.contains(staleConfig.domainIdentifier))
+        XCTAssertEqual(manager.mountState(for: staleConfig.id), .unmounted)
     }
 
     /// A teardown reports its failure by publishing state, not by returning one, so the

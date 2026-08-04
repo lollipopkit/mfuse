@@ -606,11 +606,38 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         XCTAssertTrue(legacy.addressesSameServer(as: normalized))
         XCTAssertTrue(normalized.addressesSameServer(as: legacy))
 
+        // Written differently, resolved the same: the editor omits a default region and a
+        // false path-style flag, and a legacy or synced config may spell both out.
+        let spelledOut = config(
+            .s3,
+            port: 443,
+            parameters: [
+                "endpoint": "http://localhost:9000",
+                "bucket": "b",
+                "region": "us-east-1",
+                "pathStyle": "false"
+            ]
+        )
+        XCTAssertTrue(normalized.addressesSameServer(as: spelledOut))
+        XCTAssertTrue(spelledOut.addressesSameServer(as: normalized))
+
         // A real move is still a move.
         let elsewhere = config(.s3, port: 443, parameters: ["endpoint": "http://elsewhere:9000", "bucket": "b"])
         XCTAssertFalse(normalized.addressesSameServer(as: elsewhere))
         let otherBucket = config(.s3, port: 443, parameters: ["endpoint": "http://localhost:9000", "bucket": "other"])
         XCTAssertFalse(normalized.addressesSameServer(as: otherBucket))
+        let otherRegion = config(
+            .s3,
+            port: 443,
+            parameters: ["endpoint": "http://localhost:9000", "bucket": "b", "region": "eu-west-1"]
+        )
+        XCTAssertFalse(normalized.addressesSameServer(as: otherRegion))
+        let pathStyle = config(
+            .s3,
+            port: 443,
+            parameters: ["endpoint": "http://localhost:9000", "bucket": "b", "pathStyle": "true"]
+        )
+        XCTAssertFalse(normalized.addressesSameServer(as: pathStyle))
     }
 
     /// Everything that is not S3 is addressed by host and port, so those still count.

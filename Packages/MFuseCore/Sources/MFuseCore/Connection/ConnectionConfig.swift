@@ -113,6 +113,29 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         Self.trimmedParameter(parameters["bucket"])
     }
 
+    /// The region requests are signed for. Absent means AWS's default, which is what the
+    /// editor stores as "nothing".
+    public var s3Region: String {
+        parameters["region"] ?? Self.defaultS3Region
+    }
+
+    /// Whether requests address the bucket by path. Anything but an explicit "true" is
+    /// virtual-host style, which is what the backend does with it.
+    public var s3UsesPathStyle: Bool {
+        parameters["pathStyle"] == "true"
+    }
+
+    public static let defaultS3Region = "us-east-1"
+
+    /// The parameter keys that spell out an S3 address, each of which has a resolved form
+    /// above. Everything else in `parameters` is compared as written.
+    private static let s3AddressingParameterKeys: Set<String> = [
+        "endpoint",
+        "bucket",
+        "region",
+        "pathStyle"
+    ]
+
     /// The endpoint with the bucket appended to its *path*, stripped of anything secret.
     ///
     /// Joining the raw strings puts the bucket after whatever the endpoint ends with, so
@@ -165,11 +188,19 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         // beside it is noise.
         // TODO: fold back into the plain comparison once the port shim itself is gone.
         if backendType == .s3 {
-            var address = parameters
-            var otherAddress = other.parameters
-            address["endpoint"] = s3Endpoint
-            otherAddress["endpoint"] = other.s3Endpoint
-            return address == otherAddress
+            // Compared as the backend resolves them, not as they happen to be written: an
+            // absent region and an explicit "us-east-1" are one region, `pathStyle=false`
+            // and no `pathStyle` are one addressing style, and a bucket differs from itself
+            // by the whitespace around it. Reading the raw dictionary called each of those
+            // pairs a different server and left a working mount down for nothing.
+            guard s3Endpoint == other.s3Endpoint,
+                  s3Bucket == other.s3Bucket,
+                  s3Region == other.s3Region,
+                  s3UsesPathStyle == other.s3UsesPathStyle else {
+                return false
+            }
+            return parameters.filter { !Self.s3AddressingParameterKeys.contains($0.key) }
+                == other.parameters.filter { !Self.s3AddressingParameterKeys.contains($0.key) }
         }
 
         return port == other.port && parameters == other.parameters
