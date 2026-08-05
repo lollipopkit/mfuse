@@ -798,6 +798,58 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(manager.state(for: config.id), .disconnected)
     }
 
+    /// Quit tears down what it snapshots, and a removal is midway through the connection
+    /// list, storage, the domain and the credential — with a rollback through all four
+    /// behind it. Returning while one runs leaves those writes to land, or not, in a
+    /// process that is exiting, and takes the teardown snapshot of a list it is changing.
+    func testShutdownWaitsForAnInFlightRemoval() async throws {
+        final class ShutdownFlag {
+            var didFinish = false
+        }
+
+        let config = ConnectionConfig(
+            name: "RemovalDuringQuit",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        manager.mountProvider = mountProvider
+        try manager.add(config)
+        await mountProvider.setDomainStates([
+            RegisteredDomainState(identifier: config.domainIdentifier, isDisconnected: false)
+        ])
+
+        // Held where the removal reads the credential it is about to delete: the domain is
+        // unregistered by then and the connection list and storage are next. The connection
+        // is neither connected nor mounted, so quit's own teardown list does not contain it
+        // — only the removal does.
+        let gate = TestGate()
+        credentialProvider.credentialLookupGate = gate
+        let removal = Task { @MainActor in try await manager.remove(config) }
+        await gate.waitUntilEntered()
+        XCTAssertTrue(manager.isRemovalInFlight(for: config.id))
+
+        let flag = ShutdownFlag()
+        let shutdown = Task { @MainActor in
+            await manager.shutdown()
+            flag.didFinish = true
+        }
+        for _ in 0..<200 {
+            await Task.yield()
+        }
+        XCTAssertFalse(
+            flag.didFinish,
+            "quit returned while a removal was still writing storage and provider state"
+        )
+
+        await gate.open()
+        await shutdown.value
+        try await removal.value
+        XCTAssertTrue(manager.connections.isEmpty)
+        XCTAssertFalse(manager.isRemovalInFlight(for: config.id))
+    }
+
     /// The save writes the new credential into the store the extension reads before it can
     /// replace the bootstrap config the extension reads it *against*, so a target change
     /// takes the old address down first. The mount it took down is the caller's to put

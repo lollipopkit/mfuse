@@ -528,13 +528,47 @@ struct ConnectionEditorSheet: View {
             return hasConnectedOAuthAccount
         }
         if backendType == .s3 {
-            let hasValidPort = UInt16(port) != nil || port.isEmpty
             let hasRequiredAccessKeyCredentials =
                 authMethod != .accessKey || (!s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty)
-            return !Self.isBlank(s3Bucket) && hasValidPort && hasRequiredAccessKeyCredentials
+            return !Self.isBlank(s3Bucket)
+                && hasValidPort
+                && hasValidS3Endpoint
+                && hasRequiredAccessKeyCredentials
         }
-        return !backendType.requiresServerEndpoint
-            || (!Self.isBlank(host) && (UInt16(port) != nil || port.isEmpty))
+        // A password mount saves the field as the credential outright, so an empty one is
+        // stored as the secret and every connection then fails on it. The S3 keys above
+        // are required for the same reason.
+        if authMethod == .password, password.isEmpty {
+            return false
+        }
+        return !backendType.requiresServerEndpoint || (!Self.isBlank(host) && hasValidPort)
+    }
+
+    /// A port the backends can dial. Zero parses and is persisted, but every host-based
+    /// backend hands `config.port` straight to its client, where it is not an address.
+    private var hasValidPort: Bool {
+        guard !port.isEmpty else { return true }
+        guard let parsed = UInt16(port) else { return false }
+        return parsed != 0
+    }
+
+    /// A custom endpoint the S3 backend can address, or none at all.
+    ///
+    /// Soto is handed this string as its endpoint and `ConnectionConfig` folds a legacy
+    /// port into it through `URLComponents`; neither can do anything with a value that is
+    /// not an http(s) URL, so saving one produces a mount that cannot connect and a row
+    /// whose address renders as the bucket alone.
+    private var hasValidS3Endpoint: Bool {
+        let trimmed = s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        guard let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              !host.isEmpty else {
+            return false
+        }
+        return true
     }
 
     private static func isBlank(_ value: String) -> Bool {

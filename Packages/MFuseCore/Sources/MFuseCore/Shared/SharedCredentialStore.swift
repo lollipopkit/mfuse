@@ -129,6 +129,18 @@ public final class SharedCredentialStore: @unchecked Sendable {
             Self.logger.error(
                 "Failed to remove legacy shared credential at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
+            // The secret is already in the Keychain, so failing the write that put it there
+            // would only cost the caller the credential it just stored. What must not
+            // survive is the cleartext copy: deleting needs the directory to be writable
+            // and emptying only the file, so this is a second chance at the part that
+            // matters even when the first one is refused.
+            do {
+                try Data().write(to: url, options: .atomic)
+            } catch {
+                Self.logger.fault(
+                    "Left a readable legacy credential file at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+            }
         }
     }
 
@@ -171,27 +183,43 @@ public final class SharedCredentialStore: @unchecked Sendable {
         try deleteLegacyKeychainData(account: account)
     }
 
+    /// Both Keychain partitions, the one this store writes to first.
+    ///
+    /// A legacy item was written under whatever iCloud-sync setting was in force at the
+    /// time, which need not be the one in force now: probing only this store's partition
+    /// leaves an item in the other one invisible — the credential is never migrated, so the
+    /// mount stops authenticating, and the item stays behind in an access group nothing
+    /// else cleans up.
+    private var legacySyncModes: [KeychainItemSyncMode] {
+        syncMode == .synchronizable ? [.synchronizable, .local] : [.local, .synchronizable]
+    }
+
     private func migrateLegacyKeychainDataIfNeeded(account: String) throws -> Data? {
         for legacyAccessGroup in legacyAccessGroups {
-            guard let legacyData = try readKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            ) else {
-                continue
-            }
+            for legacySyncMode in legacySyncModes {
+                guard let legacyData = try readKeychainData(
+                    account: account,
+                    accessGroup: legacyAccessGroup,
+                    useDataProtectionKeychain: true,
+                    syncMode: legacySyncMode
+                ) else {
+                    continue
+                }
 
-            try writeKeychainData(
-                legacyData,
-                account: account,
-                useDataProtectionKeychain: true
-            )
-            try deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
-            return legacyData
+                try writeKeychainData(
+                    legacyData,
+                    account: account,
+                    useDataProtectionKeychain: true
+                )
+                // Deleted from the partition it was found in, not from this store's.
+                try deleteKeychainData(
+                    account: account,
+                    accessGroup: legacyAccessGroup,
+                    useDataProtectionKeychain: true,
+                    syncMode: legacySyncMode
+                )
+                return legacyData
+            }
         }
 
         return nil
@@ -202,21 +230,27 @@ public final class SharedCredentialStore: @unchecked Sendable {
             return
         }
         for legacyAccessGroup in legacyAccessGroups {
-            try? deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
+            for legacySyncMode in legacySyncModes {
+                try? deleteKeychainData(
+                    account: account,
+                    accessGroup: legacyAccessGroup,
+                    useDataProtectionKeychain: true,
+                    syncMode: legacySyncMode
+                )
+            }
         }
     }
 
     private func deleteLegacyKeychainData(account: String) throws {
         for legacyAccessGroup in legacyAccessGroups {
-            try deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
+            for legacySyncMode in legacySyncModes {
+                try deleteKeychainData(
+                    account: account,
+                    accessGroup: legacyAccessGroup,
+                    useDataProtectionKeychain: true,
+                    syncMode: legacySyncMode
+                )
+            }
         }
     }
 
@@ -283,12 +317,14 @@ public final class SharedCredentialStore: @unchecked Sendable {
     private func readKeychainData(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncMode: KeychainItemSyncMode? = nil
     ) throws -> Data? {
         var query = baseQuery(
             account: account,
             accessGroup: accessGroup,
-            useDataProtectionKeychain: useDataProtectionKeychain
+            useDataProtectionKeychain: useDataProtectionKeychain,
+            syncMode: syncMode
         )
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -307,12 +343,14 @@ public final class SharedCredentialStore: @unchecked Sendable {
     private func deleteKeychainData(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncMode: KeychainItemSyncMode? = nil
     ) throws {
         let query = baseQuery(
             account: account,
             accessGroup: accessGroup,
-            useDataProtectionKeychain: useDataProtectionKeychain
+            useDataProtectionKeychain: useDataProtectionKeychain,
+            syncMode: syncMode
         )
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -323,7 +361,8 @@ public final class SharedCredentialStore: @unchecked Sendable {
     private func baseQuery(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncMode: KeychainItemSyncMode? = nil
     ) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -336,9 +375,12 @@ public final class SharedCredentialStore: @unchecked Sendable {
         if useDataProtectionKeychain {
             query[kSecUseDataProtectionKeychain as String] = true
         }
-        if syncMode == .synchronizable {
-            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
-        }
+        // Stated for both modes, the way `KeychainService` states it. Omitting it leaves
+        // the partition to the Keychain's default rather than to this store, and the two
+        // modes exist precisely so a local item and a synchronized one are never confused
+        // for each other — a read, an update or a delete must address the one it was told.
+        query[kSecAttrSynchronizable as String] =
+            (syncMode ?? self.syncMode) == .synchronizable ? kCFBooleanTrue : kCFBooleanFalse
         return query
     }
 

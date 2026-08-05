@@ -300,6 +300,10 @@ public final class ConnectionManager: ObservableObject {
             )
         }
         connections.removeAll { $0.id == config.id }
+        // Advanced with the list, not only once the removal has succeeded: a reload that
+        // read storage before this point would otherwise pass its own fence and publish
+        // that older snapshot on top of what this pass — or the rollback below — leaves.
+        connectionsRevision += 1
         states.removeValue(forKey: config.id)
         mountStates.removeValue(forKey: config.id)
         fileSystems.removeValue(forKey: config.id)
@@ -906,6 +910,16 @@ public final class ConnectionManager: ObservableObject {
         // and would publish a connection, a mount or an error once quit had already
         // reported the connections as torn down.
         isShuttingDown = true
+        // Before anything is snapshotted: a removal is midway through the connection list,
+        // storage, the domain and the credential, and it rolls back through all four when
+        // one of them fails. Quit returning while that runs leaves those writes to land —
+        // or not — in a process that is exiting, and the snapshot below would be taken of a
+        // list the removal is still changing. Awaited under the same deadline as every
+        // other piece of quit-time cleanup, so a removal that hangs costs only its own.
+        let pendingRemovalIDs = Array(removalTasks.keys)
+        await runConcurrentlyForShutdown(over: pendingRemovalIDs) { manager, id in
+            _ = await manager.removalTasks[id]?.result
+        }
         for task in reconnectTasks.values {
             task.cancel()
         }
@@ -1457,7 +1471,18 @@ public final class ConnectionManager: ObservableObject {
             // Remove stale domains
             for domainID in domainStatesByID.keys where !knownDomainIDs.contains(domainID) {
                 let remover = staleDomainRemover ?? _removeStaleProviderDomain
-                try? await remover(domainID)
+                do {
+                    try await remover(domainID)
+                } catch {
+                    // This pass cannot report — it is the periodic one and answers no
+                    // caller — but a domain left registered for a connection nobody has is
+                    // one Finder still shows. Startup reconciliation retries it and does
+                    // report, so what is missing here is only the record of why it is
+                    // still there.
+                    logger.error(
+                        "Failed to remove stale domain \(domainID, privacy: .public) during mount sync; startup reconciliation will retry it: \(self.describe(error), privacy: .private)"
+                    )
+                }
             }
 
             try? await cleanupOrphanedSymlinks(for: connections)
@@ -1674,9 +1699,14 @@ public final class ConnectionManager: ObservableObject {
         }
 
         // Re-fenced here rather than only on entry: the teardown above suspends, and a
-        // newer edit can be saved — and registered — inside it. Registering now would write
-        // this pass's older config over the snapshot that edit just made authoritative,
-        // leaving the extension serving a revision neither the UI nor storage shows.
+        // removal, a quit or a newer edit can each land inside it. Registering then puts
+        // back a domain a removal has taken away, adds one after quit took its teardown
+        // snapshot — leaving a domain nothing brings down — or writes this pass's older
+        // config over the snapshot a newer edit just made authoritative, leaving the
+        // extension serving a revision neither the UI nor storage shows.
+        guard isRegistrableConnection(config.id) else {
+            throw ConnectionManagerError.connectionNotFound(config.id)
+        }
         guard isCurrentRevision(config) else { return }
 
         do {
@@ -1890,6 +1920,11 @@ public final class ConnectionManager: ObservableObject {
         fileSystem restoredFileSystem: (any RemoteFileSystem)?
     ) {
         connections = restoredConnections
+        // The restored row is a change to the list like any other. Without this, a reload
+        // that read storage while the removal had already taken the row out still matches
+        // the revision it captured, and publishes that snapshot — dropping in memory the
+        // connection this restore just put back into storage.
+        connectionsRevision += 1
         if let restoredState {
             states[id] = restoredState
         } else {
