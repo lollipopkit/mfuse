@@ -8,6 +8,7 @@ public enum ConnectionManagerError: Error, LocalizedError, Equatable {
     case cleanupFailed(UUID)
     case removalInProgress(UUID)
     case connectionNotFound(UUID)
+    case revisionConflict(UUID)
 
     public var errorDescription: String? {
         switch self {
@@ -27,6 +28,12 @@ public enum ConnectionManagerError: Error, LocalizedError, Equatable {
             return MFuseCoreL10n.string(
                 "connectionManager.error.connectionNotFound",
                 fallback: "Connection %@ no longer exists",
+                id.uuidString
+            )
+        case .revisionConflict(let id):
+            return MFuseCoreL10n.string(
+                "connectionManager.error.revisionConflict",
+                fallback: "Connection %@ was changed elsewhere; reopen it and make the change again",
                 id.uuidString
             )
         }
@@ -86,6 +93,11 @@ public final class ConnectionManager: ObservableObject {
     /// Set once `shutdown()` starts, and never cleared: it works from snapshots of what
     /// was running, so anything admitted afterwards would escape the teardown entirely.
     private var isShuttingDown = false
+    /// Bumped whenever the connection list changes. A reload reads storage and then
+    /// suspends repeatedly before publishing what it read, so this is how it can tell
+    /// that a save or a removal landed in the meantime and its snapshot is no longer the
+    /// truth to publish.
+    private var connectionsRevision = 0
     /// Serialized rather than counted: two removals of the same connection can overlap,
     /// and each captures the state it would roll back to, so an earlier pass resuming
     /// after a later one succeeded would restore the connection that one just removed.
@@ -113,6 +125,7 @@ public final class ConnectionManager: ObservableObject {
     private static let baseDelay: UInt64 = 1_000_000_000 // 1 second in nanoseconds
     private static let mountURLRetryCount = 20
     private static let mountURLRetryDelay: UInt64 = 500_000_000 // 500 ms in nanoseconds
+    private static let reloadRetryCount = 3
     private static let transientConnectionRetryCount = 2
     private static let transientConnectionRetryDelay: UInt64 = 750_000_000 // 750 ms in nanoseconds
     /// How long quit waits for one connection's cleanup before abandoning it.
@@ -148,6 +161,7 @@ public final class ConnectionManager: ObservableObject {
         states[config.id] = .disconnected
         do {
             try storage.saveConnections(connections)
+            connectionsRevision += 1
             onLocalConnectionsDidChange?(connections)
         } catch {
             connections.removeAll { $0.id == config.id }
@@ -156,7 +170,13 @@ public final class ConnectionManager: ObservableObject {
         }
     }
 
-    public func update(_ config: ConnectionConfig) throws {
+    /// Save an edit to an existing connection.
+    ///
+    /// `expected` is the revision the edit was made against. A connection can be replaced
+    /// under its own id while an editor is open — from another device, or by a later save
+    /// — and writing on top of that would drop the newer revision without a word. Pass
+    /// `nil` only where there is nothing to have missed.
+    public func update(_ config: ConnectionConfig, expecting expected: ConnectionConfig?) throws {
         try rejectMutationDuringRemoval(of: config.id)
         // A removal that finished while the caller was saving leaves nothing to update.
         // Returning quietly told the editor the edit had been applied, and the credential
@@ -165,9 +185,13 @@ public final class ConnectionManager: ObservableObject {
             throw ConnectionManagerError.connectionNotFound(config.id)
         }
         let previous = connections[idx]
+        if let expected, previous != expected {
+            throw ConnectionManagerError.revisionConflict(config.id)
+        }
         connections[idx] = config
         do {
             try storage.saveConnections(connections)
+            connectionsRevision += 1
             onLocalConnectionsDidChange?(connections)
         } catch {
             connections[idx] = previous
@@ -356,6 +380,7 @@ public final class ConnectionManager: ObservableObject {
             )
         }
         connectionGenerations.removeValue(forKey: config.id)
+        connectionsRevision += 1
         onLocalConnectionsDidChange?(connections)
     }
 
@@ -1097,6 +1122,26 @@ public final class ConnectionManager: ObservableObject {
     }
 
     public func reloadConnectionsFromStorage() async {
+        // Retried rather than applied blindly: everything below reads storage once and then
+        // suspends — through teardowns, unregisters and symlink work — before publishing
+        // what it read. A save or a removal completing in one of those windows makes that
+        // snapshot stale, and publishing it would resurrect a row the user deleted or
+        // overwrite an edit that is already on disk. Reading again is what resolves it,
+        // because those mutations persist before they return.
+        for attempt in 0..<Self.reloadRetryCount {
+            if await applyStorageSnapshot() { return }
+            logger.notice(
+                "Connections changed while reloading them; reading storage again (attempt \(attempt + 1, privacy: .public))"
+            )
+        }
+        logger.error(
+            "Gave up reloading connections from storage after \(Self.reloadRetryCount, privacy: .public) attempts"
+        )
+    }
+
+    /// Returns whether the snapshot it read was still current when it came to publish it.
+    private func applyStorageSnapshot() async -> Bool {
+        let revision = connectionsRevision
         let reloadedConnections: [ConnectionConfig]
         do {
             reloadedConnections = try storage.loadConnections()
@@ -1104,7 +1149,7 @@ public final class ConnectionManager: ObservableObject {
             logger.error(
                 "Failed to reload connections from storage: \(String(describing: error), privacy: .public)"
             )
-            return
+            return true
         }
         let currentConnections = connections
         let currentIDs = Set(currentConnections.map(\.id))
@@ -1155,7 +1200,11 @@ public final class ConnectionManager: ObservableObject {
             await cancelAndAwaitSymlinkWork(for: removedConfig.id)
         }
 
+        // Nothing else may have changed the list in the meantime, or this would publish a
+        // view of it from before that change.
+        guard connectionsRevision == revision else { return false }
         connections = nextConnections
+        connectionsRevision += 1
         for config in nextConnections where !currentIDs.contains(config.id) {
             states[config.id] = .disconnected
         }
@@ -1209,6 +1258,7 @@ public final class ConnectionManager: ObservableObject {
                 onStateChange?(config, errorState)
             }
         }
+        return true
     }
 
     // MARK: - Mount state
@@ -1577,14 +1627,19 @@ public final class ConnectionManager: ObservableObject {
         guard isRegistrableConnection(config.id) else {
             throw ConnectionManagerError.connectionNotFound(config.id)
         }
+        guard isCurrentRevision(config) else { return }
 
-        let wasActiveBeforeRegistration = isActiveMount(config.id)
-        // An edit nobody here vouched for takes its mount down *before* its new address is
+        // An edit nobody here vouched for takes the mount down *before* its new address is
         // registered. Registering first writes the new bootstrap snapshot while the domain
         // is still up, so the extension serves the new target holding the credential this
         // device stored for the old one — briefly, but that is the exposure the caller
         // asked to avoid by refusing the remount at all.
-        if wasActiveBeforeRegistration, !remountIfMounted {
+        //
+        // Unconditional, not gated on the published state: at launch that state is empty
+        // while a domain from the last run may still be mounted, and an iCloud reload can
+        // reach here before `syncMounts` has discovered it. A teardown for a connection
+        // that is already down costs a `domainNotFound` the teardown logs and ignores.
+        if !remountIfMounted {
             await disconnect(config.id, using: previousConfig)
             guard isCleanupComplete(for: config.id) else {
                 throw ConnectionManagerError.cleanupFailed(config.id)
@@ -1635,7 +1690,7 @@ public final class ConnectionManager: ObservableObject {
 
         // Taken down before the registration above, so the row has to say so — the
         // teardown already removed the link and disconnected the domain.
-        if wasActiveBeforeRegistration, !remountIfMounted {
+        if !remountIfMounted {
             setMountState(.unmounted, for: config)
             return
         }
@@ -1870,6 +1925,22 @@ public final class ConnectionManager: ObservableObject {
         removalTasks[id] != nil
     }
 
+    /// Whether the manager still holds exactly this revision of the connection.
+    ///
+    /// A save and an iCloud reload can both reach registration for one id, and each brings
+    /// the config it was started with: writing an older one over the newer would leave the
+    /// extension serving a revision neither the UI nor storage shows. The newer one brings
+    /// its own registration, so the older simply stands down.
+    private func isCurrentRevision(_ config: ConnectionConfig) -> Bool {
+        guard connections.contains(config) else {
+            logger.notice(
+                "Skipping registration for \(config.domainIdentifier, privacy: .public): a newer revision of it arrived first"
+            )
+            return false
+        }
+        return true
+    }
+
     /// Whether this connection is mounted or on its way there.
     ///
     /// `.mounting` counts as much as `.mounted`, and covers a connect still in its
@@ -1884,7 +1955,11 @@ public final class ConnectionManager: ObservableObject {
     /// Whether a domain may be registered for this connection: it is one of ours, and
     /// nothing is in the middle of taking it away.
     private func isRegistrableConnection(_ id: UUID) -> Bool {
-        connections.contains(where: { $0.id == id }) && !isRemovalInFlight(for: id)
+        // Quit counts as "not ours to register": it snapshots what to tear down and
+        // returns, so a domain registered after that snapshot is one nothing takes down.
+        !isShuttingDown
+            && connections.contains(where: { $0.id == id })
+            && !isRemovalInFlight(for: id)
     }
 
     /// Whether a teardown for this connection is running, from the moment `disconnect`

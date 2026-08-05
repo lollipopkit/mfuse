@@ -43,6 +43,7 @@
 "connectionManager.error.cleanupFailed" = "移除前清理連線 %@ 失敗";
 "connectionManager.error.removalInProgress" = "連線 %@ 正在移除中，請於完成後重新儲存";
 "connectionManager.error.connectionNotFound" = "連線 %@ 已不存在";
+"connectionManager.error.revisionConflict" = "連線 %@ 已在他處被修改，請重新開啟後再改一次";
 "connectionManager.error.restoreRemovedConnection" = "還原已移除的連線失敗：%@";
 "connectionManager.error.restoreCredential" = "還原憑證失敗：%@";
 "connectionManager.error.restoreRegistration" = "還原檔案提供者網域失敗：%@";

@@ -43,6 +43,7 @@
 "connectionManager.error.cleanupFailed" = "移除前清理连接 %@ 失败";
 "connectionManager.error.removalInProgress" = "连接 %@ 正在被移除，请在完成后重新保存";
 "connectionManager.error.connectionNotFound" = "连接 %@ 已不存在";
+"connectionManager.error.revisionConflict" = "连接 %@ 已在别处被修改，请重新打开后再改一次";
 "connectionManager.error.restoreRemovedConnection" = "恢复已移除的连接失败：%@";
 "connectionManager.error.restoreCredential" = "恢复凭证失败：%@";
 "connectionManager.error.restoreRegistration" = "恢复文件提供程序域失败：%@";

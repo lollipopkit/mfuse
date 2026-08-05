@@ -140,9 +140,24 @@ actor TestGate {
         }
     }
 
-    func waitUntilEntered() async {
+    /// Bounded: a change that stops the gated call from being reached at all would
+    /// otherwise hang the whole suite here rather than failing the test that assumed it.
+    func waitUntilEntered(timeoutNanoseconds: UInt64 = 10_000_000_000) async {
         guard !entered else { return }
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+            await self?.resumeEntryWaiters()
+        }
         await withCheckedContinuation { entryWaiters.append($0) }
+        timeout.cancel()
+    }
+
+    private func resumeEntryWaiters() {
+        let pending = entryWaiters
+        entryWaiters = []
+        for continuation in pending {
+            continuation.resume()
+        }
     }
 
     /// Wait until the call held here has been cancelled.
@@ -462,7 +477,7 @@ final class ConnectionManagerTests: XCTestCase {
         )
         try manager.add(config)
         config.name = "Updated"
-        try manager.update(config)
+        try manager.update(config, expecting: nil)
         XCTAssertEqual(manager.connections.first?.name, "Updated")
     }
 
@@ -800,6 +815,9 @@ final class ConnectionManagerTests: XCTestCase {
 
         var edited = config
         edited.name = "EditDuringUnmountRenamed"
+        // Saved first, the way the app does it: registration acts on the connection the
+        // manager holds, and refuses to write a revision it has already replaced.
+        try manager.update(edited, expecting: config)
         let gate = TestGate()
         await mountProvider.setEnsureRegisteredGate(gate)
         let registration = Task { @MainActor in
@@ -818,6 +836,39 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertTrue(reconnects.isEmpty, "the edit remounted a connection the user had unmounted")
     }
 
+    /// An editor is open on the revision it was given, and a connection can be replaced
+    /// under that id meanwhile — by another device or a later save. Writing on top of it
+    /// would drop the newer revision without a word.
+    func testUpdatingAgainstAnOutdatedRevisionFails() throws {
+        let config = ConnectionConfig(
+            name: "Contested",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        try manager.add(config)
+
+        var arrivedElsewhere = config
+        arrivedElsewhere.host = "elsewhere.example.com"
+        try manager.update(arrivedElsewhere, expecting: config)
+
+        var editedFromTheOldRevision = config
+        editedFromTheOldRevision.name = "ContestedRenamed"
+        XCTAssertThrowsError(
+            try manager.update(editedFromTheOldRevision, expecting: config)
+        ) { error in
+            XCTAssertEqual(error as? ConnectionManagerError, .revisionConflict(config.id))
+        }
+        XCTAssertEqual(manager.connections.first?.host, "elsewhere.example.com")
+        XCTAssertEqual(try storage.loadConnections().first?.host, "elsewhere.example.com")
+
+        // An edit made against what is actually there still goes through.
+        var editedFromTheCurrentRevision = arrivedElsewhere
+        editedFromTheCurrentRevision.name = "ContestedRenamed"
+        try manager.update(editedFromTheCurrentRevision, expecting: arrivedElsewhere)
+        XCTAssertEqual(manager.connections.first?.name, "ContestedRenamed")
+    }
+
     /// A removal that finished while a save was in flight leaves nothing to update.
     /// Returning quietly told the editor the edit had been applied, and the credential the
     /// save had already written stayed behind for a connection nobody can see.
@@ -829,7 +880,7 @@ final class ConnectionManagerTests: XCTestCase {
             username: "user"
         )
 
-        XCTAssertThrowsError(try manager.update(config)) { error in
+        XCTAssertThrowsError(try manager.update(config, expecting: nil)) { error in
             XCTAssertEqual(error as? ConnectionManagerError, .connectionNotFound(config.id))
         }
         XCTAssertTrue(manager.connections.isEmpty)
@@ -865,7 +916,7 @@ final class ConnectionManagerTests: XCTestCase {
 
         var edited = config
         edited.name = "SaveDuringRemovalRenamed"
-        XCTAssertThrowsError(try manager.update(edited)) { error in
+        XCTAssertThrowsError(try manager.update(edited, expecting: nil)) { error in
             XCTAssertEqual(error as? ConnectionManagerError, .removalInProgress(config.id))
         }
         XCTAssertThrowsError(try manager.add(edited)) { error in
@@ -1292,7 +1343,7 @@ final class ConnectionManagerTests: XCTestCase {
         var editedConfig = staleConfig
         editedConfig.name = "EditedSinceTheSnapshot"
         editedConfig.host = "new.example.com"
-        try manager.update(editedConfig)
+        try manager.update(editedConfig, expecting: staleConfig)
         await mountProvider.clearInvocations()
 
         // Fails on the last step, which is the one that rolls the removal back.
@@ -1351,6 +1402,7 @@ final class ConnectionManagerTests: XCTestCase {
 
         var edited = config
         edited.name = "TeardownFailsOnEditRenamed"
+        try manager.update(edited, expecting: config)
         do {
             try await manager.syncSavedConnectionRegistration(edited, previousConfig: config)
             XCTFail("Expected the failed teardown to surface")

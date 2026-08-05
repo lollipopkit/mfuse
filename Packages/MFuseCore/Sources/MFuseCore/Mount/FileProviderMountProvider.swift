@@ -136,21 +136,27 @@ public final class FileProviderMountProvider: MountProvider {
         do {
             try persistBootstrapConfig(for: config)
         } catch {
-            if existingDomain == nil {
-                let persistError = error
-                do {
+            let persistError = error
+            do {
+                if let existingDomain {
+                    // Put the registration back as it was. `add` above already updated the
+                    // domain — its display name, and on macOS 15 its `userInfo` — while the
+                    // snapshot beside it is still the previous config, and that pairing is
+                    // what the extension bootstraps from before macOS 15.
+                    try await NSFileProviderManager.add(existingDomain)
+                } else {
                     try await NSFileProviderManager.remove(domain)
-                } catch {
-                    let rollbackError = error
-                    Self.logger.error(
-                        "persistBootstrapConfig(for:) failed for domain \(domain.identifier.rawValue, privacy: .public): \(persistError.localizedDescription, privacy: .public); rollback via NSFileProviderManager.remove(domain) also failed: \(rollbackError.localizedDescription, privacy: .public)"
-                    )
-                    throw MountError.mountFailed(
-                        "persistBootstrapConfig(for:) failed for \(domain.identifier.rawValue): \(persistError.localizedDescription); rollback via NSFileProviderManager.remove(domain) failed: \(rollbackError.localizedDescription)"
-                    )
                 }
+            } catch {
+                let rollbackError = error
+                Self.logger.error(
+                    "persistBootstrapConfig(for:) failed for domain \(domain.identifier.rawValue, privacy: .public): \(persistError.localizedDescription, privacy: .private); restoring the previous registration also failed: \(rollbackError.localizedDescription, privacy: .private)"
+                )
+                throw MountError.mountFailed(
+                    "persistBootstrapConfig(for:) failed for \(domain.identifier.rawValue): \(persistError.localizedDescription); restoring the previous registration failed: \(rollbackError.localizedDescription)"
+                )
             }
-            throw error
+            throw persistError
         }
     }
 

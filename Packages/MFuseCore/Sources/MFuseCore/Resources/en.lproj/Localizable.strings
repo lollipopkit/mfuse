@@ -43,6 +43,7 @@
 "connectionManager.error.cleanupFailed" = "Failed to clean up connection %@ before removal";
 "connectionManager.error.removalInProgress" = "Connection %@ is being removed; save it again once that finishes";
 "connectionManager.error.connectionNotFound" = "Connection %@ no longer exists";
+"connectionManager.error.revisionConflict" = "Connection %@ was changed elsewhere; reopen it and make the change again";
 "connectionManager.error.restoreRemovedConnection" = "Failed to restore the removed connection: %@";
 "connectionManager.error.restoreCredential" = "Failed to restore the credential: %@";
 "connectionManager.error.restoreRegistration" = "Failed to restore the File Provider domain: %@";

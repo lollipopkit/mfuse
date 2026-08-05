@@ -43,6 +43,7 @@
 "connectionManager.error.cleanupFailed" = "Gagal membersihkan koneksi %@ sebelum dihapus";
 "connectionManager.error.removalInProgress" = "Koneksi %@ sedang dihapus; simpan lagi setelah proses itu selesai";
 "connectionManager.error.connectionNotFound" = "Koneksi %@ sudah tidak ada";
+"connectionManager.error.revisionConflict" = "Koneksi %@ telah diubah di tempat lain; buka lagi dan ulangi perubahannya";
 "connectionManager.error.restoreRemovedConnection" = "Gagal memulihkan koneksi yang dihapus: %@";
 "connectionManager.error.restoreCredential" = "Gagal memulihkan kredensial: %@";
 "connectionManager.error.restoreRegistration" = "Gagal memulihkan domain File Provider: %@";

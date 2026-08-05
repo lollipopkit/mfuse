@@ -43,6 +43,7 @@
 "connectionManager.error.cleanupFailed" = "Impossibile ripulire la connessione %@ prima della rimozione";
 "connectionManager.error.removalInProgress" = "La connessione %@ è in fase di rimozione; salvala di nuovo al termine";
 "connectionManager.error.connectionNotFound" = "La connessione %@ non esiste più";
+"connectionManager.error.revisionConflict" = "La connessione %@ è stata modificata altrove; riaprila e ripeti la modifica";
 "connectionManager.error.restoreRemovedConnection" = "Impossibile ripristinare la connessione rimossa: %@";
 "connectionManager.error.restoreCredential" = "Impossibile ripristinare la credenziale: %@";
 "connectionManager.error.restoreRegistration" = "Impossibile ripristinare il dominio File Provider: %@";

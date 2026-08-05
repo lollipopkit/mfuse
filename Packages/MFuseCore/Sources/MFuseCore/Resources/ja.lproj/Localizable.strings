@@ -43,6 +43,7 @@
 "connectionManager.error.cleanupFailed" = "削除前の接続 %@ のクリーンアップに失敗しました";
 "connectionManager.error.removalInProgress" = "接続 %@ は削除中です。完了してから保存し直してください";
 "connectionManager.error.connectionNotFound" = "接続 %@ は存在しません";
+"connectionManager.error.revisionConflict" = "接続 %@ は別の場所で変更されました。開き直して変更をやり直してください";
 "connectionManager.error.restoreRemovedConnection" = "削除した接続の復元に失敗しました: %@";
 "connectionManager.error.restoreCredential" = "認証情報の復元に失敗しました: %@";
 "connectionManager.error.restoreRegistration" = "File Provider ドメインの復元に失敗しました: %@";

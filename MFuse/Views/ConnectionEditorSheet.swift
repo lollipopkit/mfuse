@@ -902,48 +902,24 @@ struct ConnectionEditorSheet: View {
         return storedCredential
     }
 
+    /// Drop the credential state an explicit change of method leaves behind.
+    ///
+    /// `password` goes with the rest, and that is the point: the account password and the
+    /// key passphrase are one field of state behind two labels, so leaving it in place
+    /// carried an SFTP password into the passphrase — where `buildCredential()` would sign
+    /// a key with it — and a passphrase back out as the server password. Only what the
+    /// chosen method has its own fields for is kept.
     private func clearCredentialState(except method: AuthMethod) {
-        switch method {
-        case .password:
-            storedCredential = nil
+        password = ""
+        storedCredential = nil
+        privateKeyPath = ""
+        privateKeyBookmark = ""
+        s3AccessKeyID = ""
+        s3SecretAccessKey = ""
+        if method != .oauth {
             oauthCredential = nil
             oauthAccountName = ""
             oauthAccountEmail = ""
-            privateKeyPath = ""
-            privateKeyBookmark = ""
-            s3AccessKeyID = ""
-            s3SecretAccessKey = ""
-        case .publicKey:
-            storedCredential = nil
-            oauthCredential = nil
-            oauthAccountName = ""
-            oauthAccountEmail = ""
-            s3AccessKeyID = ""
-            s3SecretAccessKey = ""
-        case .agent, .anonymous:
-            password = ""
-            storedCredential = nil
-            oauthCredential = nil
-            oauthAccountName = ""
-            oauthAccountEmail = ""
-            privateKeyPath = ""
-            privateKeyBookmark = ""
-            s3AccessKeyID = ""
-            s3SecretAccessKey = ""
-        case .accessKey:
-            password = ""
-            storedCredential = nil
-            oauthCredential = nil
-            oauthAccountName = ""
-            oauthAccountEmail = ""
-            privateKeyPath = ""
-            privateKeyBookmark = ""
-        case .oauth:
-            password = ""
-            privateKeyPath = ""
-            privateKeyBookmark = ""
-            s3AccessKeyID = ""
-            s3SecretAccessKey = ""
         }
     }
 

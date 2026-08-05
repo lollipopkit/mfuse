@@ -39,7 +39,7 @@ struct ContentView: View {
                         config,
                         credential: credential,
                         presentationID: presentation.id,
-                        wasExistingConnection: presentation.config != nil
+                        openedConfig: presentation.config
                     )
                 }
             )
@@ -132,7 +132,7 @@ struct ContentView: View {
         _ config: ConnectionConfig,
         credential: Credential,
         presentationID: UUID,
-        wasExistingConnection: Bool
+        openedConfig: ConnectionConfig?
     ) {
         // Queued behind whatever is already saving this connection, not dropped. A save
         // suspends repeatedly while its editor is still on screen and its button still
@@ -149,7 +149,7 @@ struct ContentView: View {
                 config,
                 credential: credential,
                 presentationID: presentationID,
-                wasExistingConnection: wasExistingConnection
+                openedConfig: openedConfig
             )
         }
         saveTasks[config.id] = save
@@ -165,21 +165,25 @@ struct ContentView: View {
         _ config: ConnectionConfig,
         credential: Credential,
         presentationID: UUID,
-        wasExistingConnection: Bool
+        openedConfig: ConnectionConfig?
     ) async {
         do {
             let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
             let previousCredential = try await credentialProvider.credential(for: config.id)
-            try await credentialProvider.store(credential, for: config.id)
             do {
+                // Inside the rollback, because a store can fail *after* committing part of
+                // itself: the mirrored provider writes the primary keychain item first and
+                // the shared one second, so a failure on the second leaves the new secret
+                // already paired with the old config.
+                try await credentialProvider.store(credential, for: config.id)
                 // Read now, not from `previousConfig`: a removal can finish while this save
                 // is queued or suspended, and adding the connection back then is not
                 // "saving an edit" — it resurrects a row and a credential the user deleted.
                 // A new mount is still an add, including a second save of the same draft,
                 // where the first one has since created it.
                 if connectionExists(config.id) {
-                    try connectionManager.update(config)
-                } else if wasExistingConnection {
+                    try connectionManager.update(config, expecting: openedConfig)
+                } else if openedConfig != nil {
                     throw ConnectionManagerError.connectionNotFound(config.id)
                 } else {
                     try connectionManager.add(config)

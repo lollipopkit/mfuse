@@ -43,6 +43,7 @@
 "connectionManager.error.cleanupFailed" = "삭제 전에 연결 %@ 정리에 실패했습니다";
 "connectionManager.error.removalInProgress" = "연결 %@을(를) 제거하는 중입니다. 완료된 후 다시 저장하세요";
 "connectionManager.error.connectionNotFound" = "연결 %@이(가) 더 이상 존재하지 않습니다";
+"connectionManager.error.revisionConflict" = "연결 %@이(가) 다른 곳에서 변경되었습니다. 다시 열어 변경을 반복하세요";
 "connectionManager.error.restoreRemovedConnection" = "삭제된 연결 복원에 실패했습니다: %@";
 "connectionManager.error.restoreCredential" = "자격 증명 복원에 실패했습니다: %@";
 "connectionManager.error.restoreRegistration" = "File Provider 도메인 복원에 실패했습니다: %@";

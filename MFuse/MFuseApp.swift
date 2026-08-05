@@ -126,8 +126,9 @@ struct MFuseApp: App {
             }
         }
 
-        // Menu bar extra
-        MenuBarExtra("MFuse", systemImage: "externaldrive.connected.to.line.below") {
+        // Menu bar extra. Filled, because the menu bar is where it sits next to other
+        // apps' icons — the outline variant reads as lighter than everything around it.
+        MenuBarExtra("MFuse", systemImage: "externaldrive.connected.to.line.below.fill") {
             MenuBarView()
                 .environmentObject(connectionManager)
                 .environmentObject(appSettings)
@@ -237,12 +238,10 @@ enum BackendRegistryFactory {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var allowsTermination = false
     static var isTerminationInProgress = false
-    static var requestsFullTermination = false
     static var shutdownHandler: (@MainActor () async -> Void)?
 
     @MainActor
     static func requestFullTermination() {
-        requestsFullTermination = true
         NSApp.terminate(nil)
     }
 
@@ -250,14 +249,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func activateMainInterface() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    @MainActor
-    private static func keepRunningInMenuBar(_ application: NSApplication) {
-        application.windows.forEach { window in
-            window.orderOut(nil)
-        }
-        application.setActivationPolicy(.accessory)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -272,22 +263,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateLater
         }
 
-        guard Self.requestsFullTermination else {
-            Self.keepRunningInMenuBar(sender)
-            return .terminateCancel
-        }
-
+        // Every request to quit is answered by quitting. Cancelling the ones that did not
+        // come from the menu bar's own Quit item meant Command-Q, the application menu and
+        // the Dock did nothing at all — and, worse, that a logout or a restart was refused
+        // by this app, with the mounts never torn down. Staying in the menu bar is what
+        // *closing the window* does, below.
         Self.isTerminationInProgress = true
 
         Task { @MainActor in
             await Self.shutdownHandler?()
             Self.allowsTermination = true
-            Self.requestsFullTermination = false
             Self.isTerminationInProgress = false
             sender.reply(toApplicationShouldTerminate: true)
         }
 
         return .terminateLater
+    }
+
+    /// Closing the last window leaves MFuse running in the menu bar, which is where its
+    /// mounts are managed from — and drops the Dock icon, so it stops looking like an app
+    /// with nothing open. "Open MFuse" in the menu brings both back.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            MainActor.assumeIsolated {
+                Self.keepRunningInMenuBarIfLastWindowCloses(notification.object as? NSWindow)
+            }
+        }
+    }
+
+    @MainActor
+    private static func keepRunningInMenuBarIfLastWindowCloses(_ closingWindow: NSWindow?) {
+        guard NSApp.activationPolicy() == .regular else { return }
+        // Only real windows count: the menu bar's own popover is one too, and it is never
+        // what the user closed.
+        let remaining = NSApp.windows.filter { window in
+            window !== closingWindow && window.isVisible && window.canBecomeMain
+        }
+        guard remaining.isEmpty else { return }
+        NSApp.setActivationPolicy(.accessory)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
