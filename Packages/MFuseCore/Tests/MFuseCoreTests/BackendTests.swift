@@ -641,6 +641,87 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         XCTAssertFalse(normalized.addressesSameServer(as: pathStyle))
     }
 
+    /// S3 addresses by endpoint and the account backends by their token: neither is handed
+    /// a host, a port or a username. A value an older build left in one of those fields is
+    /// therefore not part of the address, and comparing it anyway made the save that
+    /// normalizes it away read as a move to another server — which took the mount down and
+    /// then withheld the credential it needed to come back up.
+    func testFieldsTheBackendDoesNotAddressByAreNotAnIdentityChange() {
+        func config(
+            _ type: BackendType,
+            host: String,
+            port: UInt16,
+            username: String,
+            authMethod: AuthMethod,
+            parameters: [String: String]
+        ) -> ConnectionConfig {
+            ConnectionConfig(
+                name: "Test",
+                backendType: type,
+                host: host,
+                port: port,
+                username: username,
+                authMethod: authMethod,
+                remotePath: "/",
+                parameters: parameters
+            )
+        }
+
+        // The port is left alone here: S3's legacy shim folds it into the endpoint, so for
+        // that backend it carries the address rather than noise. See
+        // `testS3AddressesSameServerAcrossThePortNormalization`.
+        let s3Parameters = ["endpoint": "https://s3.example.com", "bucket": "b"]
+        let legacyS3 = config(
+            .s3,
+            host: "s3.example.com",
+            port: BackendType.s3.defaultPort,
+            username: "stale",
+            authMethod: .accessKey,
+            parameters: s3Parameters
+        )
+        let normalizedS3 = config(
+            .s3,
+            host: "",
+            port: BackendType.s3.defaultPort,
+            username: "",
+            authMethod: .accessKey,
+            parameters: s3Parameters
+        )
+        XCTAssertTrue(legacyS3.addressesSameServer(as: normalizedS3))
+        XCTAssertTrue(normalizedS3.addressesSameServer(as: legacyS3))
+
+        let account = ["oauthAccountName": "someone@example.com"]
+        let legacyDropbox = config(
+            .dropbox,
+            host: "api.dropboxapi.com",
+            port: 8443,
+            username: "stale",
+            authMethod: .oauth,
+            parameters: account
+        )
+        let normalizedDropbox = config(
+            .dropbox,
+            host: "",
+            port: BackendType.dropbox.defaultPort,
+            username: "",
+            authMethod: .oauth,
+            parameters: account
+        )
+        XCTAssertTrue(legacyDropbox.addressesSameServer(as: normalizedDropbox))
+        XCTAssertTrue(normalizedDropbox.addressesSameServer(as: legacyDropbox))
+
+        // What the config does carry of the account identity still counts.
+        let otherAccount = config(
+            .dropbox,
+            host: "",
+            port: BackendType.dropbox.defaultPort,
+            username: "",
+            authMethod: .oauth,
+            parameters: ["oauthAccountName": "someone.else@example.com"]
+        )
+        XCTAssertFalse(normalizedDropbox.addressesSameServer(as: otherAccount))
+    }
+
     /// Everything that is not S3 is addressed by host and port, so those still count.
     func testHostBasedAddressesSameServerComparesPort() {
         let base = config(.sftp, host: "example.com", port: 22)

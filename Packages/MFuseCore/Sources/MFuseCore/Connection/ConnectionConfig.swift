@@ -174,9 +174,22 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// device's token belongs to a different account than the row now names.
     public func addressesSameServer(as other: ConnectionConfig) -> Bool {
         guard backendType == other.backendType,
-              host == other.host,
-              username == other.username,
               authMethod == other.authMethod else {
+            return false
+        }
+
+        // Compared only where the backend reads them. S3 addresses by endpoint and the
+        // account backends by their token; none of them is handed a host, a port or a
+        // username, so a value left in one of those fields by an older build — or synced
+        // from a device still writing it — is not part of the address. Comparing it anyway
+        // made the save that normalizes it away read as a move to another server, which
+        // took a working mount down and then refused to bring it back up. `makeConfig`
+        // drops the same fields, and the editor's own `serverIdentity` ignores them for the
+        // same reason.
+        if backendType.usesHostBasedAddressing, host != other.host || port != other.port {
+            return false
+        }
+        if backendType.usesUsername, username != other.username {
             return false
         }
 
@@ -203,7 +216,7 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
                 == other.parameters.filter { !Self.s3AddressingParameterKeys.contains($0.key) }
         }
 
-        return port == other.port && parameters == other.parameters
+        return parameters == other.parameters
     }
 
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.
