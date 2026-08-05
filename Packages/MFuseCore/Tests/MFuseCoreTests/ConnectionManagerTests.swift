@@ -214,6 +214,7 @@ actor MockMountProvider: MountProvider {
     var staleDomainsRemoved: [String] = []
     var unmountShouldFail = false
     var unregisterShouldFail = false
+    var ensureRegisteredShouldFail = false
     var signalShouldFail = false
     var removeSymlinkShouldFail = false
     var disconnectGate: TestGate?
@@ -250,6 +251,10 @@ actor MockMountProvider: MountProvider {
 
     func setUnregisterShouldFail(_ shouldFail: Bool) {
         unregisterShouldFail = shouldFail
+    }
+
+    func setEnsureRegisteredShouldFail(_ shouldFail: Bool) {
+        ensureRegisteredShouldFail = shouldFail
     }
 
     func setRemoveSymlinkShouldFail(_ shouldFail: Bool) {
@@ -295,6 +300,9 @@ actor MockMountProvider: MountProvider {
         disconnectedDomainIDs.remove(config.domainIdentifier)
         if let ensureRegisteredGate {
             await ensureRegisteredGate.wait()
+        }
+        if ensureRegisteredShouldFail {
+            throw MountError.mountFailed("mock registration failure")
         }
         registeredDomainIDs.insert(config.domainIdentifier)
     }
@@ -788,6 +796,112 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: symlinkURL.path))
         XCTAssertEqual(manager.mountState(for: config.id), .unmounted)
         XCTAssertEqual(manager.state(for: config.id), .disconnected)
+    }
+
+    /// The save writes the new credential into the store the extension reads before it can
+    /// replace the bootstrap config the extension reads it *against*, so a target change
+    /// takes the old address down first. The mount it took down is the caller's to put
+    /// back, which is what the return value says.
+    func testPrepareForTargetChangeTakesTheMountDownAndReportsIt() async throws {
+        let config = ConnectionConfig(
+            name: "TargetChange",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-target-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.clearInvocations()
+
+        let wasMounted = try await manager.prepareForTargetChange(config.id)
+        XCTAssertTrue(wasMounted)
+        XCTAssertEqual(manager.effectiveMountState(for: config.id), .unmounted)
+        XCTAssertEqual(manager.state(for: config.id), .disconnected)
+        let disconnects = await mountProvider.disconnectInvocations
+        XCTAssertEqual(disconnects, [config.domainIdentifier])
+
+        // Nothing to put back for a connection that was already down.
+        let wasMountedAgain = try await manager.prepareForTargetChange(config.id)
+        XCTAssertFalse(wasMountedAgain)
+    }
+
+    /// The teardown is what makes it safe to store the new secret, so a save must not get
+    /// past it when old runtime state is still there to receive one.
+    func testPrepareForTargetChangeFailsWhenTheTeardownDoes() async throws {
+        let config = ConnectionConfig(
+            name: "TargetChangeFailure",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-target-fail-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+        await mountProvider.setUnmountShouldFail(true)
+
+        do {
+            _ = try await manager.prepareForTargetChange(config.id)
+            XCTFail("Expected the failed teardown to be reported")
+        } catch let error as ConnectionManagerError {
+            XCTAssertEqual(error, .cleanupFailed(config.id))
+        }
+    }
+
+    /// A failed registration leaves the domain serving the config from before the edit,
+    /// while the row already shows the edited one. Left as `.mounted`, it reads as a mount
+    /// that matches what it displays.
+    func testFailedRegistrationStopsAMountedRowReadingAsClean() async throws {
+        let config = ConnectionConfig(
+            name: "RegistrationFailure",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-registration-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+
+        await manager.connect(config.id)
+        let mountedState = await waitForMountState(config.id)
+        XCTAssertTrue(mountedState.isMounted)
+
+        var edited = config
+        edited.remotePath = "/elsewhere"
+        try manager.update(edited, expecting: config)
+        await mountProvider.setEnsureRegisteredShouldFail(true)
+
+        do {
+            try await manager.syncSavedConnectionRegistration(edited, previousConfig: config)
+            XCTFail("Expected the failed registration to be reported")
+        } catch {
+            // The caller reports it; the row must not go on claiming a clean mount.
+        }
+        guard case .error = manager.mountState(for: config.id) else {
+            XCTFail("the row still reads as \(manager.mountState(for: config.id)) after its registration failed")
+            return
+        }
     }
 
     /// An edit remounts a connection so its domain serves the new config, but the user can

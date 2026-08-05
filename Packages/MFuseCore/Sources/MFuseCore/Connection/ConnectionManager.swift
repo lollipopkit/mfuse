@@ -1610,6 +1610,29 @@ public final class ConnectionManager: ObservableObject {
         }
     }
 
+    /// Take a connection down before a save points it at a different server, and report
+    /// whether it was up.
+    ///
+    /// Credentials are keyed by connection id and shared with the File Provider extension,
+    /// which reads them against whatever the domain currently bootstraps. A save that
+    /// changes the target writes the new secret before it can replace that bootstrap
+    /// config, so between the two the extension would authenticate the *old* server with a
+    /// secret the user issued for the new one. Taking the old target down first is what
+    /// closes that window; the caller brings the connection back up once the switch is
+    /// complete, which is what the return value is for.
+    ///
+    /// Throws when the teardown left runtime state behind: the save must not go on to
+    /// store the new credential while something is still talking to the old address.
+    @discardableResult
+    public func prepareForTargetChange(_ id: UUID) async throws -> Bool {
+        let wasActive = isActiveMount(id)
+        await disconnect(id)
+        guard isCleanupComplete(for: id) else {
+            throw ConnectionManagerError.cleanupFailed(id)
+        }
+        return wasActive
+    }
+
     /// Register the domain for a saved connection and bring its mount back in line.
     ///
     /// `remountIfMounted` is what a caller answers when it cannot vouch for the edit: a
@@ -1656,7 +1679,19 @@ public final class ConnectionManager: ObservableObject {
         // leaving the extension serving a revision neither the UI nor storage shows.
         guard isCurrentRevision(config) else { return }
 
-        try await mountProvider.ensureRegistered(config: config)
+        do {
+            try await mountProvider.ensureRegistered(config: config)
+        } catch {
+            // A mounted row would otherwise go on reporting a clean mount while the domain
+            // under it is still registered for the previous config — the registration that
+            // would have replaced it is exactly what just failed. The caller reports the
+            // failure, but only the state the row reads from stops it showing a mount that
+            // matches what it displays.
+            if isActiveMount(config.id) {
+                setMountState(.error(describe(error)), for: config)
+            }
+            throw error
+        }
         // Registration suspends too, so the same removal can land inside it. What it
         // created is taken straight back out rather than left behind.
         guard isRegistrableConnection(config.id) else {

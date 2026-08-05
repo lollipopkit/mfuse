@@ -182,6 +182,17 @@ struct ContentView: View {
         do {
             let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
             let previousCredential = try await credentialProvider.credential(for: config.id)
+            // Before the new secret exists anywhere the extension can read it. Credentials
+            // are keyed by connection id and shared with it, while the domain still
+            // bootstraps the address this edit is moving away from — so storing first
+            // leaves a window where the old server is authenticated with a secret the user
+            // issued for the new one. A failure here fails the save with nothing written.
+            let shouldRemountAfterTargetChange: Bool
+            if let previousConfig, !config.addressesSameServer(as: previousConfig) {
+                shouldRemountAfterTargetChange = try await connectionManager.prepareForTargetChange(config.id)
+            } else {
+                shouldRemountAfterTargetChange = false
+            }
             do {
                 // Inside the rollback, because a store can fail *after* committing part of
                 // itself: the mirrored provider writes the primary keychain item first and
@@ -224,6 +235,13 @@ struct ContentView: View {
                     config,
                     previousConfig: previousConfig
                 )
+                // Put back the mount the teardown above took down for the switch. Only
+                // after the registration went through: the domain carries the new address
+                // from here on, and mounting one that still bootstraps the old one is the
+                // state this whole ordering exists to avoid.
+                if shouldRemountAfterTargetChange {
+                    await connectionManager.connect(config.id)
+                }
             } catch {
                 await MainActor.run {
                     saveAlert = SaveAlertState(

@@ -160,16 +160,34 @@ public final class FileProviderMountProvider: MountProvider {
                 throw MountError.extensionNotEnabled
             }
             if shouldRetryMountAfterDomainRefresh(error) {
+                var removedDomain: NSFileProviderDomain?
                 if let stale = try await findDomain(for: config) {
                     try await NSFileProviderManager.remove(stale)
+                    removedDomain = stale
                     try await Task.sleep(nanoseconds: FileProviderConstants.domainRemovalSettleNanoseconds)
                 }
-                try Task.checkCancellation()
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-                try Task.checkCancellation()
                 do {
+                    try Task.checkCancellation()
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                    try Task.checkCancellation()
                     try await NSFileProviderManager.add(domain)
                 } catch {
+                    // The refresh took the registered domain out to put a fresh one in its
+                    // place, and the replacement never arrived — through a failure or
+                    // through the cancellation the waits above observe. Every caller reads
+                    // a throw from here as "the registration is unchanged": a save reports
+                    // that it will retry on the next launch, a reload keeps the row. Left
+                    // as it is, the mount is simply gone until then, so what was removed
+                    // goes back. Best effort, and never at the cost of the failure itself.
+                    if let removedDomain {
+                        do {
+                            try await NSFileProviderManager.add(removedDomain)
+                        } catch let restoreError {
+                            Self.logger.error(
+                                "Failed to restore domain \(removedDomain.identifier.rawValue, privacy: .public) after its refresh could not re-add it: \(restoreError.localizedDescription, privacy: .private)"
+                            )
+                        }
+                    }
                     if isExtensionNotEnabledError(error) {
                         throw MountError.extensionNotEnabled
                     }

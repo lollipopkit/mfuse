@@ -10,6 +10,9 @@ import os.log
 public final class DomainManager: ObservableObject {
     private static let replicatedDomainMigrationDefaultsKey =
         "com.lollipopkit.mfuse.fileprovider.replicated-domain-migration-v1"
+    /// How many times a reconciliation pass re-reads a connection that was edited inside
+    /// its own registration before leaving it to the save that keeps editing it.
+    private static let registrationRevisionAttempts = 2
     private static let logger = Logger(subsystem: "com.lollipopkit.mfuse", category: "DomainManager")
 
     struct SyncDomainsError: LocalizedError {
@@ -85,12 +88,14 @@ public final class DomainManager: ObservableObject {
             uniqueKeysWithValues: existingDomainStates.map { ($0.identifier, $0) }
         )
 
-        for config in connectionManager.connections {
+        for id in connectionManager.connections.map(\.id) {
+            let config: ConnectionConfig
             do {
-                try await mountProvider.ensureRegistered(config: config)
+                guard let registered = try await registerCurrentRevision(of: id) else { continue }
+                config = registered
             } catch {
                 errors.append(
-                    .init(id: config.domainIdentifier, operation: .register, error: error)
+                    .init(id: id.uuidString, operation: .register, error: error)
                 )
                 continue
             }
@@ -131,6 +136,35 @@ public final class DomainManager: ObservableObject {
         if !errors.isEmpty {
             throw SyncDomainsError(errors: errors)
         }
+    }
+
+    /// Register the revision of a connection the manager holds *now*, and return it.
+    ///
+    /// Reconciliation runs asynchronously after the window is up, and every step of it
+    /// suspends, so the user can save an edit between the connection list this loop started
+    /// from and the moment it reaches a given connection — or inside the registration
+    /// itself. Registering the config the loop set out with would write the pre-edit target
+    /// over the one the row and storage show, and the extension would then bootstrap the
+    /// server the user just edited away from. Re-reading and re-checking is what leaves the
+    /// newer revision on top; the save registers its own config either way.
+    ///
+    /// Returns `nil` when the connection is gone, or when edits keep landing inside the
+    /// registration — that save owns the domain, so this pass leaves it and its connect
+    /// state alone.
+    private func registerCurrentRevision(of id: UUID) async throws -> ConnectionConfig? {
+        for _ in 0..<Self.registrationRevisionAttempts {
+            guard let config = connectionManager.connections.first(where: { $0.id == id }) else {
+                return nil
+            }
+            try await mountProvider.ensureRegistered(config: config)
+            if connectionManager.connections.contains(config) {
+                return config
+            }
+        }
+        Self.logger.notice(
+            "Leaving \(id.uuidString, privacy: .public) to the save that keeps editing it during reconciliation"
+        )
+        return nil
     }
 
     private func removeStaleDomainsAndSymlinks() async throws {
@@ -214,7 +248,9 @@ public final class DomainManager: ObservableObject {
         for domainID in domainIDs {
             guard let config = knownConfigsByDomainID[domainID] else { continue }
             do {
-                try await mountProvider.ensureRegistered(config: config)
+                // Same staleness as the reconciliation loop, and a wider window: the
+                // removal above settles for a fixed delay before anything is registered.
+                _ = try await registerCurrentRevision(of: config.id)
             } catch {
                 errors.append(.init(id: domainID, operation: .register, error: error))
             }

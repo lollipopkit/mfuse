@@ -115,18 +115,28 @@ final class SharedCredentialStoreProvider: @unchecked Sendable {
     }
 
     func credential(for connectionID: UUID) throws -> Credential? {
-        let store = lock.withLock { self.store }
-        return try store.credential(for: connectionID)
+        try currentStore().credential(for: connectionID)
     }
 
     func store(_ credential: Credential, for connectionID: UUID) throws {
-        let store = lock.withLock { self.store }
-        try store.store(credential, for: connectionID)
+        try currentStore().store(credential, for: connectionID)
     }
 
-    func replace(syncMode: KeychainItemSyncMode) {
-        lock.withLock {
-            self.store = SharedCredentialStore(syncMode: syncMode)
+    /// The store for the sync mode that is configured *now*.
+    ///
+    /// Read on every access rather than chosen once: turning iCloud sync on or off moves
+    /// every credential to the other Keychain sync mode, and the extension is a separate
+    /// process the app cannot call into. An instance built before the change would keep
+    /// looking in the mode the items have left — reporting an authentication failure for
+    /// every domain until the extension happens to be recreated — and would write refreshed
+    /// OAuth tokens back there, where nothing reads them.
+    private func currentStore() -> SharedCredentialStore {
+        let syncMode: KeychainItemSyncMode = SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
+        return lock.withLock {
+            if store.syncMode != syncMode {
+                store = SharedCredentialStore(syncMode: syncMode)
+            }
+            return store
         }
     }
 }
@@ -218,18 +228,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     public required init(domain: NSFileProviderDomain) {
         self.domain = domain
         super.init()
-        Self.swapCredentialStoreForCurrentSettings()
         Self.registerBackends()
-    }
-
-    static func swapCredentialStore(syncMode: KeychainItemSyncMode) {
-        sharedCredentialStoreProvider.replace(syncMode: syncMode)
-    }
-
-    static func swapCredentialStoreForCurrentSettings() {
-        swapCredentialStore(
-            syncMode: SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
-        )
     }
 
     public var domainVersion: NSFileProviderDomainVersion {
