@@ -38,6 +38,11 @@ public actor S3FileSystem: RemoteFileSystem {
     /// the exact suspension point where `disconnect()` interleaves. Never set in production.
     var connectivityProbe: (@Sendable () async throws -> Void)?
 
+    /// Test seam: runs at the head of an attempt, before it reads or writes anything the
+    /// actor publishes, so an attempt can be held there while its replacement connects.
+    /// Never set in production.
+    var attemptStartHook: (@Sendable () async -> Void)?
+
     /// Test seam: whether a connection attempt is still registered for deduplication.
     var hasPendingConnectTask: Bool { connectTask != nil }
 
@@ -53,6 +58,10 @@ public actor S3FileSystem: RemoteFileSystem {
 
     func setConnectivityProbe(_ probe: (@Sendable () async throws -> Void)?) {
         connectivityProbe = probe
+    }
+
+    func setAttemptStartHook(_ hook: (@Sendable () async -> Void)?) {
+        attemptStartHook = hook
     }
 
     // MARK: - Config Helpers
@@ -223,6 +232,21 @@ public actor S3FileSystem: RemoteFileSystem {
     /// Returns the client it published, which is what tells the caller that started this
     /// attempt whether the connection it is about to report is still its own.
     private func performConnect() async throws -> AWSClient {
+        if let attemptStartHook {
+            await attemptStartHook()
+        }
+
+        // Creating the task does not run its body, so an attempt can be cancelled and
+        // replaced before it reaches its first line. Checked before anything below reads
+        // the published client: `disconnect()` cancels the attempt it de-registers in the
+        // turn that clears it, and only a cleared attempt can be replaced, so an attempt
+        // that finds itself cancelled here has been superseded — and what is published by
+        // then belongs to the attempt that replaced it. Tearing that down as this
+        // attempt's own leftover takes a live connection from the caller that established
+        // it, which then fails its identity check and reports a connection it made as
+        // interrupted.
+        try Task.checkCancellation()
+
         // A previous attempt can leave a client behind — the File Provider extension
         // times out and retries `connect()`, and Soto asserts in `AWSClient.deinit` if a
         // client is released without being shut down.
@@ -284,7 +308,7 @@ public actor S3FileSystem: RemoteFileSystem {
             // Raw SDK errors are not RemoteFileSystemError, so callers such as the File
             // Provider extension cannot classify them and fall back to "server
             // unreachable" even for bad credentials.
-            throw Self.mapConnectionError(error, bucket: bucket)
+            throw Self.mapConnectionError(error, bucket: bucket, endpoint: customEndpoint)
         }
 
         // `disconnect()` may have run while the probe above was suspended; publishing now
@@ -324,14 +348,17 @@ public actor S3FileSystem: RemoteFileSystem {
     ///
     /// Credential problems must surface as `.authenticationFailed` so the UI prompts for
     /// new keys instead of blaming the network.
-    static func mapConnectionError(_ error: Error, bucket: String) -> RemoteFileSystemError {
+    static func mapConnectionError(
+        _ error: Error,
+        bucket: String,
+        endpoint: String?
+    ) -> RemoteFileSystemError {
         if let remoteError = error as? RemoteFileSystemError {
             return remoteError
         }
 
-        // Classify from the structured answer wherever the SDK provides one. The scan below
-        // reads the whole error, endpoint hostname included, so a transport failure
-        // against `unauthorized.example.com` would otherwise be blamed on the keys.
+        // Classify from the structured answer wherever the SDK provides one: it is a
+        // diagnosis, where the scan below is only a reading of prose.
         if let awsError = error as? AWSErrorType {
             if let classified = classifyAWSError(
                 code: awsError.errorCode,
@@ -344,7 +371,11 @@ public actor S3FileSystem: RemoteFileSystem {
         }
 
         // Fallback for SDK errors that carry no structured code.
-        let description = String(describing: error)
+        let description = Self.withoutConfiguredAddress(
+            String(describing: error),
+            bucket: bucket,
+            endpoint: endpoint
+        )
         let normalized = description.lowercased()
         if Self.authenticationIndicators.contains(where: { normalized.contains($0) }) {
             return .authenticationFailed
@@ -353,6 +384,27 @@ public actor S3FileSystem: RemoteFileSystem {
             return missingBucketError(bucket: bucket)
         }
         return unreachableEndpointError(bucket: bucket, error: error)
+    }
+
+    /// The description with the address the request was aimed at taken out of it.
+    ///
+    /// The scan reads an unstructured description for words like "unauthorized", and a
+    /// transport failure spells out what it could not reach: a DNS or TCP failure against
+    /// `https://unauthorized.internal.example` carries no error code to classify it by, so
+    /// the endpoint's own name was read as a rejection of the keys and sent the user to
+    /// re-enter credentials that work. The bucket goes with it — it names a target too, and
+    /// virtual-host addressing puts it in the hostname.
+    private static func withoutConfiguredAddress(
+        _ description: String,
+        bucket: String,
+        endpoint: String?
+    ) -> String {
+        let host = endpoint.flatMap { URLComponents(string: $0)?.host }
+        var stripped = description
+        for token in [endpoint, host, bucket].compactMap({ $0 }) where !token.isEmpty {
+            stripped = stripped.replacingOccurrences(of: token, with: " ", options: .caseInsensitive)
+        }
+        return stripped
     }
 
     /// Classify an SDK error from its structured parts, or `nil` to fall through to the
@@ -391,8 +443,10 @@ public actor S3FileSystem: RemoteFileSystem {
         }
         if !code.isEmpty {
             // Any other structured code is the SDK's own diagnosis, and it outranks
-            // whatever the description happens to spell: falling through would let
-            // `RequestTimeout` against `unauthorized.example.com` read as bad keys.
+            // whatever the description happens to spell: falling through would let a
+            // `RequestTimeout` naming a redirect target or a proxy that reads like an
+            // auth failure be reported as bad keys. Only the configured address is taken
+            // out of the scan below, and a description can name more than that.
             return unreachableEndpointError(bucket: bucket, error: error)
         }
         return nil

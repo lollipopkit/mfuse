@@ -18,7 +18,7 @@ import SotoCore
         "InvalidSecurity",
         "NotAuthorized"
     ] {
-        let mapped = S3FileSystem.mapConnectionError(StubError(text: code), bucket: "b")
+        let mapped = S3FileSystem.mapConnectionError(StubError(text: code), bucket: "b", endpoint: nil)
         guard case .authenticationFailed = mapped else {
             Issue.record("\(code) mapped to \(mapped) instead of .authenticationFailed")
             continue
@@ -30,21 +30,21 @@ import SotoCore
 /// stays out of the message: connection errors are surfaced through `LocalizedError` and
 /// logged with public privacy by both the app and the File Provider bootstrap.
 @Test func missingBucketIsReportedWithoutNamingIt() {
-    let mapped = S3FileSystem.mapConnectionError(StubError(text: "NoSuchBucket"), bucket: "photos")
+    let mapped = S3FileSystem.mapConnectionError(StubError(text: "NoSuchBucket"), bucket: "photos", endpoint: nil)
     guard case .connectionFailed(let message) = mapped else {
         Issue.record("expected .connectionFailed, got \(mapped)")
         return
     }
     #expect(!message.contains("photos"))
     #expect(message.contains("bucket"))
-    #expect(message != S3FileSystem.mapConnectionError(StubError(text: "boom"), bucket: "photos").errorDescription)
+    #expect(message != S3FileSystem.mapConnectionError(StubError(text: "boom"), bucket: "photos", endpoint: nil).errorDescription)
 }
 
 /// SDK descriptions can carry response diagnostics from a custom endpoint, and error
 /// descriptions are logged with public privacy — they must not reach the message.
 @Test func unclassifiedErrorsDoNotLeakTheSDKDescription() {
     let secret = "x-amz-signature=deadbeef"
-    let mapped = S3FileSystem.mapConnectionError(StubError(text: secret), bucket: "b")
+    let mapped = S3FileSystem.mapConnectionError(StubError(text: secret), bucket: "b", endpoint: nil)
     guard case .connectionFailed(let message) = mapped else {
         Issue.record("expected .connectionFailed, got \(mapped)")
         return
@@ -56,7 +56,8 @@ import SotoCore
 @Test func alreadyClassifiedErrorsPassThrough() {
     let mapped = S3FileSystem.mapConnectionError(
         RemoteFileSystemError.authenticationFailed,
-        bucket: "b"
+        bucket: "b",
+        endpoint: nil
     )
     guard case .authenticationFailed = mapped else {
         Issue.record("expected .authenticationFailed, got \(mapped)")
@@ -258,12 +259,66 @@ import SotoCore
     _ = await attempt.result
 }
 
+/// Creating the task does not run its body, so an attempt can be cancelled and replaced
+/// before it reaches its first line. It must not then tear down the client the replacement
+/// published: that takes a live connection from the caller that established it, which goes
+/// on to fail its own identity check and report the connection it made as interrupted.
+@Test func supersededAttemptLeavesTheReplacementConnectionAlone() async throws {
+    let held = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe { }
+    // Holds the first attempt at the head of its body, which is where a body that has not
+    // been scheduled yet resumes.
+    await fileSystem.setAttemptStartHook {
+        await held.probeStarted()
+        await held.waitForRelease()
+    }
+
+    let superseded = Task { try await fileSystem.connect() }
+    await held.waitForProbes(count: 1)
+    // Only the first attempt is held; the replacement runs to completion.
+    await fileSystem.setAttemptStartHook(nil)
+
+    // Cancels and de-registers the held attempt, then waits for it to unwind — which is
+    // what leaves room for the replacement below while it is still held.
+    let disconnected = Task { try await fileSystem.disconnect() }
+    while await fileSystem.hasPendingConnectTask {
+        await Task.yield()
+    }
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+
+    await held.release()
+    switch await superseded.result {
+    case .success:
+        Issue.record("expected the superseded attempt to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+    try await disconnected.value
+
+    // The connection the replacement published is still the one the actor holds.
+    #expect(await fileSystem.isConnected)
+
+    try await fileSystem.disconnect()
+}
+
 /// Endpoint diagnostics carry the configured hostname, so classifying by scanning the
 /// whole description can blame the credentials for an unrelated transport failure.
 @Test func structuredErrorCodesOutrankTheDescriptionScan() {
     let mapped = S3FileSystem.mapConnectionError(
         StubAWSError(errorCode: "NoSuchBucket"),
-        bucket: "photos"
+        bucket: "photos",
+        endpoint: nil
     )
     guard case .connectionFailed(let message) = mapped else {
         Issue.record("expected .connectionFailed, got \(mapped)")
@@ -276,7 +331,8 @@ import SotoCore
     // names an endpoint reading like one.
     let transport = S3FileSystem.mapConnectionError(
         StubAWSError(errorCode: "RequestTimeout"),
-        bucket: "photos"
+        bucket: "photos",
+        endpoint: nil
     )
     guard case .connectionFailed = transport else {
         Issue.record("expected .connectionFailed, got \(transport)")
@@ -327,9 +383,52 @@ import SotoCore
     )
 }
 
+/// A transport failure carries no error code to classify it by, and it names the host it
+/// could not reach — so a self-hosted endpoint whose own name reads like a rejection was
+/// reported as bad credentials, sending the user to re-enter keys that work.
+@Test func unreachableEndpointIsNotBlamedOnTheCredentials() {
+    let endpoint = "https://unauthorized.internal.example"
+    for description in [
+        "NIOConnectionError(host: \"unauthorized.internal.example\", port: 443)",
+        "could not connect to \(endpoint)"
+    ] {
+        let mapped = S3FileSystem.mapConnectionError(
+            StubError(text: description),
+            bucket: "photos",
+            endpoint: endpoint
+        )
+        guard case .connectionFailed = mapped else {
+            Issue.record("\"\(description)\" mapped to \(mapped) instead of an endpoint failure")
+            continue
+        }
+    }
+
+    // The bucket names a target too, and virtual-host addressing puts it in the hostname.
+    let bucketNamed = S3FileSystem.mapConnectionError(
+        StubError(text: "connection refused: accessdenied.storage.internal"),
+        bucket: "accessdenied",
+        endpoint: nil
+    )
+    guard case .connectionFailed = bucketNamed else {
+        Issue.record("a bucket name reading like a rejection mapped to \(bucketNamed)")
+        return
+    }
+
+    // The keys are still blamed when the error, rather than the address, says so.
+    let rejected = S3FileSystem.mapConnectionError(
+        StubError(text: "AccessDenied"),
+        bucket: "photos",
+        endpoint: endpoint
+    )
+    guard case .authenticationFailed = rejected else {
+        Issue.record("expected .authenticationFailed, got \(rejected)")
+        return
+    }
+}
+
 /// The description scan still classifies SDK errors that carry no structured code.
 @Test func descriptionScanRemainsForErrorsWithoutACode() {
-    let mapped = S3FileSystem.mapConnectionError(StubError(text: "AccessDenied"), bucket: "b")
+    let mapped = S3FileSystem.mapConnectionError(StubError(text: "AccessDenied"), bucket: "b", endpoint: nil)
     guard case .authenticationFailed = mapped else {
         Issue.record("expected .authenticationFailed, got \(mapped)")
         return
