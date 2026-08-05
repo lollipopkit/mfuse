@@ -722,6 +722,24 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         XCTAssertFalse(normalizedDropbox.addressesSameServer(as: otherAccount))
     }
 
+    /// Regression: requests are signed for the region, and the editor stores the Region
+    /// field as typed — so a stray space, or a field the user emptied, reached Soto as a
+    /// region that does not exist.
+    func testS3RegionIsTrimmedAndBlankReadsAsTheDefault() {
+        XCTAssertEqual(config(.s3, parameters: ["region": " eu-west-1 "]).s3Region, "eu-west-1")
+        XCTAssertEqual(config(.s3, parameters: ["region": ""]).s3Region, ConnectionConfig.defaultS3Region)
+        XCTAssertEqual(config(.s3, parameters: ["region": "   "]).s3Region, ConnectionConfig.defaultS3Region)
+        XCTAssertEqual(config(.s3).s3Region, ConnectionConfig.defaultS3Region)
+        XCTAssertEqual(config(.s3, parameters: ["region": "eu-west-1"]).s3Region, "eu-west-1")
+
+        // And so the whitespace is not a move to another server either.
+        let padded = config(.s3, parameters: ["bucket": "b", "region": " eu-west-1 "])
+        let trimmed = config(.s3, parameters: ["bucket": "b", "region": "eu-west-1"])
+        XCTAssertTrue(padded.addressesSameServer(as: trimmed))
+        XCTAssertTrue(trimmed.addressesSameServer(as: padded))
+        XCTAssertFalse(trimmed.addressesSameServer(as: config(.s3, parameters: ["bucket": "b", "region": "eu-west-2"])))
+    }
+
     /// A port that only repeats the scheme's default is not part of the endpoint, so
     /// writing it out either way addresses one server.
     func testS3AddressesSameServerAcrossADefaultPortInTheEndpoint() {

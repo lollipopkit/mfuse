@@ -115,8 +115,13 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
 
     /// The region requests are signed for. Absent means AWS's default, which is what the
     /// editor stores as "nothing".
+    ///
+    /// Trimmed like the bucket and the endpoint, and read as absent when it holds only
+    /// whitespace: the editor writes the Region field through as typed and an emptied one
+    /// as `""`, so `"us-east-1 "` or `""` reached Soto as `Region(rawValue:)` and signed
+    /// and routed requests for a region that does not exist.
     public var s3Region: String {
-        parameters["region"] ?? Self.defaultS3Region
+        Self.trimmedParameter(parameters["region"]) ?? Self.defaultS3Region
     }
 
     /// Whether requests address the bucket by path. Anything but an explicit "true" is
