@@ -11,9 +11,15 @@ public final class SharedCredentialStore: @unchecked Sendable {
         subsystem: "com.lollipopkit.mfuse",
         category: "SharedCredentialStore"
     )
-    private static let service = "com.lollipopkit.mfuse.credentials"
+    /// The Keychain service every credential item is filed under.
+    public static let defaultService = "com.lollipopkit.mfuse.credentials"
 
     public let containerURL: URL
+    /// Overridable so tests do not file their fixtures under the service the installed
+    /// app uses: an unentitled process — every test binary — has no access group, which
+    /// puts its items in the login Keychain, where nothing but a matching service tells
+    /// them apart from a developer's real credentials.
+    public let service: String
     private let accessGroup: String?
     private let allowLegacyKeychainMigration: Bool
     private let legacyAccessGroups: [String]
@@ -26,6 +32,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
             forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
         ),
         accessGroup: String? = AppGroupConstants.keychainAccessGroup,
+        service: String = SharedCredentialStore.defaultService,
         syncMode: KeychainItemSyncMode = SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local,
         allowLegacyKeychainMigration: Bool = true,
         legacyAccessGroups: [String] = [AppGroupConstants.legacyKeychainAccessGroup].compactMap { $0 }
@@ -42,6 +49,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
             )
         }
         self.accessGroup = accessGroup
+        self.service = service
         self.syncMode = syncMode
         self.allowLegacyKeychainMigration = allowLegacyKeychainMigration
         self.legacyAccessGroups = legacyAccessGroups.filter { $0 != accessGroup }
@@ -319,7 +327,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
     ) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
         if let group = accessGroup {

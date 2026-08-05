@@ -1,4 +1,5 @@
 import XCTest
+import Security
 @testable import MFuseCore
 
 private final class InMemoryCredentialProvider: @unchecked Sendable, CredentialProvider {
@@ -22,6 +23,14 @@ final class SharedStorageTests: XCTestCase {
     private var legacyDefaults: UserDefaults!
     private var legacyDefaultsSuiteName: String!
     private var containerURL: URL!
+    /// The Keychain service this test's fixtures are filed under.
+    ///
+    /// A test binary carries no App Group entitlement, so `SharedCredentialStore` falls
+    /// back to the login Keychain with no access group — the developer's own. Under the
+    /// production service the fixtures were indistinguishable from real credentials and
+    /// simply accumulated, one item per stored connection id, for every run. Filed under a
+    /// service of their own they can be deleted wholesale, whichever ids they used.
+    private var keychainService: String!
 
     override func setUp() {
         super.setUp()
@@ -30,6 +39,7 @@ final class SharedStorageTests: XCTestCase {
         legacyDefaults.removePersistentDomain(forName: legacyDefaultsSuiteName)
         containerURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SharedStorageTests-\(UUID().uuidString)", isDirectory: true)
+        keychainService = "\(SharedCredentialStore.defaultService).tests.\(UUID().uuidString)"
     }
 
     override func tearDown() {
@@ -39,7 +49,37 @@ final class SharedStorageTests: XCTestCase {
         if let containerURL {
             try? FileManager.default.removeItem(at: containerURL)
         }
+        if let keychainService {
+            Self.deleteKeychainItems(service: keychainService)
+        }
         super.tearDown()
+    }
+
+    private func makeSharedCredentialStore() -> SharedCredentialStore {
+        SharedCredentialStore(containerURL: containerURL, service: keychainService)
+    }
+
+    /// Remove every credential item this test filed, by service rather than by id: a store
+    /// writes on paths the test never names — the legacy-file migration and the mirror
+    /// backfill both do — so tracking the ids would miss exactly the items that leaked.
+    private static func deleteKeychainItems(service: String) {
+        for synchronizable in [kCFBooleanFalse, kCFBooleanTrue] as [CFBoolean] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrSynchronizable as String: synchronizable
+            ]
+            let status = SecItemDelete(query as CFDictionary)
+            XCTAssertTrue(
+                status == errSecSuccess
+                    || status == errSecItemNotFound
+                    // Synchronizable items live in the data protection Keychain, which a
+                    // test binary has no entitlement to reach — and so no way to have
+                    // written to either. Nothing to clean up rather than a failure.
+                    || status == errSecMissingEntitlement,
+                "Failed to clean up Keychain fixtures for \(service): \(status)"
+            )
+        }
     }
 
     func testSaveAndLoadConnectionsFromFileBackedStorage() throws {
@@ -180,7 +220,7 @@ final class SharedStorageTests: XCTestCase {
     }
 
     func testSharedCredentialStorePersistsAndDeletesCredentials() throws {
-        let store = SharedCredentialStore(containerURL: containerURL)
+        let store = makeSharedCredentialStore()
         let connectionID = UUID()
         let credential = Credential(
             password: "secret",
@@ -202,7 +242,7 @@ final class SharedStorageTests: XCTestCase {
     }
 
     func testSharedCredentialStoreReadDoesNotCreateDirectory() throws {
-        let store = SharedCredentialStore(containerURL: containerURL)
+        let store = makeSharedCredentialStore()
         let connectionID = UUID()
         let credentialsDirectory = containerURL
             .appendingPathComponent("Library", isDirectory: true)
@@ -215,7 +255,7 @@ final class SharedStorageTests: XCTestCase {
     }
 
     func testSharedCredentialStoreMigratesLegacyCredentialFileIntoKeychain() throws {
-        let store = SharedCredentialStore(containerURL: containerURL)
+        let store = makeSharedCredentialStore()
         let connectionID = UUID()
         let credential = Credential(password: "legacy-secret", token: "legacy-token")
         let legacyURL = try store.credentialURL(for: connectionID)
@@ -233,7 +273,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderBackfillsMirrorFromPrimary() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
         let connectionID = UUID()
         let credential = Credential(password: "primary-only")
@@ -247,7 +287,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderPrefersPrimaryAndRepairsMirror() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
         let connectionID = UUID()
         let primaryCredential = Credential(token: "fresh-token")
@@ -264,7 +304,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderFallsBackToMirrorWhenPrimaryMissing() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
         let connectionID = UUID()
         let mirroredCredential = Credential(token: "mirror-only")
@@ -279,7 +319,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderReportsLocalCredentialState() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let connectionID = UUID()
         let credential = Credential(token: "local-token")
         let provider = MirroredCredentialProvider(
@@ -299,7 +339,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderReportsMixedCredentialStateAcrossModes() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let localConnectionID = UUID()
         let synchronizableConnectionID = UUID()
         let provider = MirroredCredentialProvider(
