@@ -77,6 +77,9 @@ struct ConnectionEditorSheet: View {
     @State private var testSuccess = false
     @State private var didLoadStoredCredential = false
     @State private var isLoadingStoredCredential = false
+    /// Whether the stored credential could not be read. Saving replaces it outright, so
+    /// there is then nothing to fall back on for a field the user leaves empty.
+    @State private var didFailToLoadStoredCredential = false
     /// The method a backend switch installed, pending its change handler. See
     /// `onChange(of: authMethod)`.
     @State private var backendNormalizedAuthMethod: AuthMethod?
@@ -510,7 +513,14 @@ struct ConnectionEditorSheet: View {
     // MARK: - Validation
 
     private var isValid: Bool {
-        guard !name.isEmpty else { return false }
+        // Trimmed, because what is saved is: `makeConfig` trims the host, `sanitizeName`
+        // builds the symlink filename from the name, and `ConnectionConfig.s3Bucket` reads
+        // a whitespace-only bucket as none at all. Accepting one here let the user save a
+        // mount whose row shows nothing and whose backend is handed a blank address.
+        guard !Self.isBlank(name) else { return false }
+        // A credential that could not be read cannot be kept, and Save writes whatever the
+        // fields hold over it. See `loadStoredCredentialIfNeeded`.
+        guard !didFailToLoadStoredCredential || hasEnteredCredential else { return false }
         if backendType == .googleDrive {
             return !gdClientID.isEmpty && !gdRedirectURI.isEmpty
         }
@@ -521,9 +531,36 @@ struct ConnectionEditorSheet: View {
             let hasValidPort = UInt16(port) != nil || port.isEmpty
             let hasRequiredAccessKeyCredentials =
                 authMethod != .accessKey || (!s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty)
-            return !s3Bucket.isEmpty && hasValidPort && hasRequiredAccessKeyCredentials
+            return !Self.isBlank(s3Bucket) && hasValidPort && hasRequiredAccessKeyCredentials
         }
-        return !backendType.requiresServerEndpoint || (!host.isEmpty && (UInt16(port) != nil || port.isEmpty))
+        return !backendType.requiresServerEndpoint
+            || (!Self.isBlank(host) && (UInt16(port) != nil || port.isEmpty))
+    }
+
+    private static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Whether the form itself carries the secret this mount needs, rather than relying on
+    /// the stored one.
+    ///
+    /// Only consulted when that stored one could not be read: every method here is filled
+    /// from it on open, so an empty field then means the save would write emptiness over a
+    /// working secret. Google Drive has no field to fill — its refresh token is only ever
+    /// written by the sign-in that follows a save — so nothing can stand in for it.
+    private var hasEnteredCredential: Bool {
+        switch authMethod {
+        case .password:
+            return !password.isEmpty
+        case .publicKey:
+            return !privateKeyPath.isEmpty
+        case .accessKey:
+            return !s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty
+        case .agent, .anonymous:
+            return true
+        case .oauth:
+            return usesBundledOAuthFlow && hasConnectedOAuthAccount
+        }
     }
 
     // MARK: - Actions
@@ -719,11 +756,13 @@ struct ConnectionEditorSheet: View {
             credential = try await credentialProvider.credential(for: existingID)
         } catch {
             // Saving replaces the stored credential outright, so a load this sheet
-            // silently swallowed would let an empty field wipe a working secret. Say so
-            // instead — Save stays available, but the user knows what it will write.
+            // silently swallowed would let an empty field wipe a working secret. Said
+            // instead, and Save is held until the fields carry a credential of their own —
+            // there is nothing here to keep the stored one with.
+            didFailToLoadStoredCredential = true
             testResult = AppL10n.string(
                 "editor.error.loadStoredCredential",
-                fallback: "Could not read the saved credential: %@. Saving will replace it with what is entered here.",
+                fallback: "Could not read the saved credential: %@. Enter it again to save; what is entered here replaces it.",
                 error.localizedDescription
             )
             testSuccess = false

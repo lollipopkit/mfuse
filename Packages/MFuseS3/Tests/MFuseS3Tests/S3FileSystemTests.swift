@@ -226,6 +226,85 @@ import SotoCore
     try await fileSystem.disconnect()
 }
 
+/// A caller cancelled between the attempt publishing its client and its own resumption was
+/// answered with success, which leaves a live `AWSClient` nobody is obliged to take down:
+/// the caller withdrew, and the actor keeps the only reference until it is released — the
+/// release Soto asserts on.
+@Test func cancellingTheLastInterestedCallerTakesTheConnectionWithIt() async throws {
+    let held = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    // Holds without observing cancellation, so the attempt goes on to publish rather than
+    // unwinding — which is what puts the cancellation in the window this covers.
+    await fileSystem.setConnectivityProbe {
+        await held.probeStarted()
+        await held.waitForRelease()
+    }
+
+    let starter = Task { try await fileSystem.connect() }
+    await held.waitForProbes(count: 1)
+    await held.release()
+    starter.cancel()
+
+    switch await starter.result {
+    case .success:
+        Issue.record("a cancelled caller was handed the connection it withdrew from")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+    #expect(await fileSystem.isConnected == false)
+}
+
+/// The starter's withdrawal cancels the shared attempt only when nobody else is waiting on
+/// it, and a joiner arriving just after that check is answered with a cancellation it never
+/// asked for. It asked for a connection and never withdrew, so it gets one.
+@Test func aJoinerIsNotAnsweredWithTheStartersCancellation() async throws {
+    let held = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await held.probeStarted()
+        await held.waitForRelease()
+    }
+
+    let starter = Task { try await fileSystem.connect() }
+    await held.waitForProbes(count: 1)
+    // Withdrawn before the joiner below exists, so the relinquish that follows finds no
+    // waiters and cancels the attempt both of them would otherwise have shared.
+    starter.cancel()
+
+    let joiner = Task { try await fileSystem.connect() }
+    while await fileSystem.pendingConnectWaiterCount == 0 {
+        await Task.yield()
+    }
+    await held.release()
+
+    switch await joiner.result {
+    case .success:
+        break
+    case .failure(let error):
+        Issue.record("the joiner was answered with the starter's withdrawal: \(error)")
+    }
+    #expect(await fileSystem.isConnected)
+
+    _ = await starter.result
+    try await fileSystem.disconnect()
+}
+
 /// The interrupted attempt shuts down the client it built as it unwinds. `disconnect()`
 /// returning before that lets a replacement attempt allocate a second client while the
 /// first one is still open — and Soto asserts on a client released without a shutdown.

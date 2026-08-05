@@ -95,9 +95,20 @@ public actor S3FileSystem: RemoteFileSystem {
                 return
             }
             if let inFlight = connectTask {
-                // Retries when the attempt ended before this caller could join it: there
-                // is then nothing left to wait for, and the loop re-decides what to do.
-                guard try await waitForConnectAttempt(inFlight) else { continue }
+                do {
+                    // Retries when the attempt ended before this caller could join it:
+                    // there is then nothing left to wait for, and the loop re-decides what
+                    // to do.
+                    guard try await waitForConnectAttempt(inFlight) else { continue }
+                } catch is CancellationError where !Task.isCancelled {
+                    // Someone else's cancellation: the caller that started this attempt
+                    // withdrew in the window before this one had registered as a joiner,
+                    // so `relinquishConnectAttempt` found nobody waiting and cancelled the
+                    // shared task. This caller never withdrew, and answering it with a
+                    // cancellation reports the connection it asked for as deliberately
+                    // stopped. The loop starts one of its own instead.
+                    continue
+                }
                 return
             }
 
@@ -148,16 +159,19 @@ public actor S3FileSystem: RemoteFileSystem {
             // while the probe was still running left the probe to them, so the connection
             // is established and published and only this caller no longer wants it —
             // reporting the cancellation is what stops it acting on one it never took.
-            //
-            // Only when a joiner is actually taking it: a cancelled caller that is the last
-            // one interested returns success instead, because throwing would have it drop
-            // the only reference to a live `AWSClient` without shutting it down. Its own
-            // cancellation handling then disconnects it properly.
             let resumedJoiners = resumeConnectWaiters(of: task, with: .success(()))
-            if resumedJoiners {
-                try Task.checkCancellation()
+            guard Task.isCancelled else { return }
+            // With no joiner to take it, the connection goes down with the caller that
+            // withdrew rather than being handed back as a success. Reporting one relies on
+            // that caller noticing its own cancellation and disconnecting anyway — nothing
+            // makes it, and a client left open here stays open until the actor is released,
+            // which is the release Soto asserts on.
+            if !resumedJoiners, awsClient === published {
+                awsClient = nil
+                s3 = nil
+                await Self.shutdown(published)
             }
-            return
+            throw CancellationError()
         }
     }
 

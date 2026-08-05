@@ -223,11 +223,18 @@ struct ContentView: View {
                 throw SaveFailure(primary: error, rollbackFailure: rollbackFailure)
             }
             await MainActor.run {
-                // Tied to the sheet that started this save: the user can cancel it and
-                // open another one meanwhile, and dismissing *that* one — and selecting
-                // a mount they navigated away from — is not what this save is for.
+                // The detail pane shows a copy, so whoever is looking at this row has to be
+                // handed the revision that was just committed — including a save queued
+                // behind another one, which commits after that one already dismissed the
+                // sheet. Gating this on the sheet left the pane showing the revision the
+                // second save replaced.
+                if selectedConnection?.id == config.id || editorPresentation?.id == presentationID {
+                    selectedConnection = config
+                }
+                // Dismissal stays tied to the sheet that started this save: the user can
+                // cancel it and open another one meanwhile, and closing *that* one is not
+                // what this save is for.
                 guard editorPresentation?.id == presentationID else { return }
-                selectedConnection = config
                 editorPresentation = nil
             }
             do {

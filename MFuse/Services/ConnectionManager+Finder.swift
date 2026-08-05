@@ -27,8 +27,32 @@ extension ConnectionManager {
             baseDir: symlinkBaseURL
         )
 
+        // Told apart from a lookup that failed: the provider answers `nil` when there is no
+        // domain registered for this connection any more — removed in System Settings, or
+        // behind the app's back — and the fallbacks below would then hand Finder a stale
+        // convenience link or a cached path and open storage that is no longer connected.
+        // A lookup that *threw* says nothing either way, so it keeps them.
+        var resolvedMountURL: URL?
+        var didResolveMountURL = false
+        if let mountProvider {
+            do {
+                resolvedMountURL = try await mountProvider.mountURL(for: config)
+                didResolveMountURL = true
+            } catch {
+                Self.finderLogger.warning(
+                    "Falling back to the convenience link for \(config.id.uuidString, privacy: .public): the mount URL could not be resolved: \(error.localizedDescription, privacy: .private)"
+                )
+            }
+        }
+        if didResolveMountURL, resolvedMountURL == nil {
+            Self.finderLogger.error(
+                "No Finder location for connection \(config.id.uuidString, privacy: .public): its File Provider domain is no longer registered"
+            )
+            return nil
+        }
+
         if let mountProvider,
-           let mountURL = try? await mountProvider.mountURL(for: config) {
+           let mountURL = resolvedMountURL {
             // The provider calls suspend, and disconnect is not tracked or cancelled by
             // this task, so re-check before acting on anything observed before them —
             // otherwise a reveal racing an unmount recreates a link to, and opens, a
