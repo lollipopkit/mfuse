@@ -20,6 +20,7 @@ public final class DomainManager: ObservableObject {
             case register = "register"
             case disconnect = "disconnect"
             case removeStaleDomain = "remove stale domain"
+            case removeOrphanedSymlink = "remove orphaned shortcut"
             case listDomains = "list domains"
             case cleanup = "cleanup"
             case removeAllDomains = "remove all domains"
@@ -209,7 +210,18 @@ public final class DomainManager: ObservableObject {
                 guard FileProviderMountProvider.shouldRemoveManagedSymlink(at: candidateURL, fileManager: fm) else {
                     continue
                 }
-                try? fm.removeItem(at: candidateURL)
+                do {
+                    try fm.removeItem(at: candidateURL)
+                } catch {
+                    // Reported, not swallowed: a shortcut left in the user-visible directory
+                    // points at a CloudStorage location nothing serves, and this pass is the
+                    // one that answers for the reconciliation. Discarding the failure let
+                    // startup report a clean sweep with the orphan still there and nothing
+                    // scheduled to try again.
+                    errors.append(
+                        .init(id: name, operation: .removeOrphanedSymlink, error: error)
+                    )
+                }
             }
         }
 

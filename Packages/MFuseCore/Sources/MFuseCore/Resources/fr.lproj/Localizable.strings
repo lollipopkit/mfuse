@@ -40,6 +40,7 @@
 "icloud.sync.stateChangedDuringSync" = "L’état des connexions locales ou cloud a changé pendant la synchronisation iCloud. Réessayez.";
 "credential.error.unsupportedPrimaryProvider" = "Le fournisseur d’identifiants actuel ne prend pas en charge la migration iCloud Keychain.";
 "credential.error.modeTransitionFailed" = "Échec de la transition du mode d’identifiants : %1$@. Échec du retour arrière : %2$@";
+"credential.error.modeTransitionCleanupFailed" = "Les identifiants ont été déplacés, mais les anciennes copies n’ont pas pu être supprimées : %@";
 "connectionManager.error.cleanupFailed" = "Impossible de nettoyer la connexion %@ avant sa suppression";
 "connectionManager.error.removalInProgress" = "La connexion %@ est en cours de suppression ; enregistrez-la de nouveau une fois l’opération terminée";
 "connectionManager.error.connectionNotFound" = "La connexion %@ n’existe plus";

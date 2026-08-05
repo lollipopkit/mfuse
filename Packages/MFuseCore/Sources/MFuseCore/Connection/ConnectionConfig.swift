@@ -245,7 +245,7 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// `https://host`. Comparing them as written called one a move to another server and
     /// left a working mount down. Any other port is the address and is kept, as is an
     /// endpoint too malformed to parse.
-    static func comparableS3Endpoint(_ endpoint: String?) -> String? {
+    public static func comparableS3Endpoint(_ endpoint: String?) -> String? {
         guard let endpoint else { return nil }
         guard var components = URLComponents(string: endpoint),
               let port = components.port,
@@ -269,7 +269,7 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     }
 
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.
-    static func trimmedParameter(_ value: String?) -> String? {
+    public static func trimmedParameter(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty else {
             return nil

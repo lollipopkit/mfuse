@@ -40,6 +40,7 @@
 "icloud.sync.stateChangedDuringSync" = "El estado local o en la nube cambió durante la sincronización con iCloud. Inténtalo de nuevo.";
 "credential.error.unsupportedPrimaryProvider" = "El proveedor de credenciales actual no admite la migración a iCloud Keychain.";
 "credential.error.modeTransitionFailed" = "La transición del modo de credenciales falló: %1$@. La reversión falló: %2$@";
+"credential.error.modeTransitionCleanupFailed" = "Las credenciales se movieron, pero no se pudieron eliminar las copias anteriores: %@";
 "connectionManager.error.cleanupFailed" = "No se pudo limpiar la conexión %@ antes de eliminarla";
 "connectionManager.error.removalInProgress" = "La conexión %@ se está eliminando; vuelve a guardarla cuando termine";
 "connectionManager.error.connectionNotFound" = "La conexión %@ ya no existe";

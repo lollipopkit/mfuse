@@ -271,6 +271,40 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
+    /// A legacy file that cannot be deleted must at least be emptied.
+    ///
+    /// Deleting needs the containing directory to be writable; emptying needs only the
+    /// file. A read-only directory is exactly the case the fallback exists for, and the
+    /// cleartext secret must not survive it.
+    func testSharedCredentialStoreEmptiesLegacyCredentialFileItCannotDelete() throws {
+        let store = makeSharedCredentialStore()
+        let connectionID = UUID()
+        let legacyURL = try store.credentialURL(for: connectionID)
+        let legacyDirectory = legacyURL.deletingLastPathComponent()
+        let fileManager = FileManager.default
+
+        try fileManager.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try JSONEncoder().encode(Credential(password: "legacy-secret"))
+            .write(to: legacyURL, options: .atomic)
+
+        try fileManager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: legacyDirectory.path)
+        defer {
+            try? fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: legacyDirectory.path
+            )
+        }
+
+        try store.store(Credential(password: "current-secret"), for: connectionID)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: legacyURL.path))
+        XCTAssertEqual(try Data(contentsOf: legacyURL), Data())
+    }
+
     func testMirroredCredentialProviderBackfillsMirrorFromPrimary() async throws {
         let primary = InMemoryCredentialProvider()
         let sharedStore = makeSharedCredentialStore()

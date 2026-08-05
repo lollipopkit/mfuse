@@ -1,6 +1,19 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "fileprovider.invalidated" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This mount was shut down. Try again." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "该挂载已关闭，请重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此掛載已關閉，請重試。" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Este montaje se cerró. Vuelve a intentarlo." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "このマウントは終了しました。もう一度お試しください。" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이 마운트가 종료되었습니다. 다시 시도해 주세요." } },
+        "it" : { "stringUnit" : { "state" : "translated", "value" : "Questo montaggio è stato chiuso. Riprova." } },
+        "id" : { "stringUnit" : { "state" : "translated", "value" : "Pemasangan ini telah dihentikan. Coba lagi." } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ce montage a été arrêté. Réessayez." } }
+      }
+    },
     "fileprovider.timeout" : {
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Timed out while %@" } },

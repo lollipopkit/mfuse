@@ -40,6 +40,7 @@
 "icloud.sync.stateChangedDuringSync" = "Status koneksi lokal atau cloud berubah saat sinkronisasi iCloud. Coba lagi.";
 "credential.error.unsupportedPrimaryProvider" = "Penyedia kredensial saat ini tidak mendukung migrasi iCloud Keychain.";
 "credential.error.modeTransitionFailed" = "Transisi mode kredensial gagal: %1$@. Rollback juga gagal: %2$@";
+"credential.error.modeTransitionCleanupFailed" = "Kredensial telah dipindahkan, tetapi salinan lama tidak dapat dihapus: %@";
 "connectionManager.error.cleanupFailed" = "Gagal membersihkan koneksi %@ sebelum dihapus";
 "connectionManager.error.removalInProgress" = "Koneksi %@ sedang dihapus; simpan lagi setelah proses itu selesai";
 "connectionManager.error.connectionNotFound" = "Koneksi %@ sudah tidak ada";

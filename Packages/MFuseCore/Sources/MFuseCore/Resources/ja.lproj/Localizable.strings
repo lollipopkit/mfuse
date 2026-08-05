@@ -40,6 +40,7 @@
 "icloud.sync.stateChangedDuringSync" = "iCloud 同期中にローカルまたはクラウドの接続状態が変更されました。再試行してください。";
 "credential.error.unsupportedPrimaryProvider" = "現在の認証情報プロバイダは iCloud キーチェーン移行をサポートしていません。";
 "credential.error.modeTransitionFailed" = "認証情報モードの切り替えに失敗しました: %1$@。ロールバックにも失敗しました: %2$@";
+"credential.error.modeTransitionCleanupFailed" = "認証情報は移行されましたが、移行元のコピーを削除できませんでした: %@";
 "connectionManager.error.cleanupFailed" = "削除前の接続 %@ のクリーンアップに失敗しました";
 "connectionManager.error.removalInProgress" = "接続 %@ は削除中です。完了してから保存し直してください";
 "connectionManager.error.connectionNotFound" = "接続 %@ は存在しません";

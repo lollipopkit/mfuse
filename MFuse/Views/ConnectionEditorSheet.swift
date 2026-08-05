@@ -1,6 +1,7 @@
 import SwiftUI
 import MFuseCore
 import MFuseDropbox
+import MFuseGoogleDrive
 import MFuseOneDrive
 import AppKit
 
@@ -363,46 +364,44 @@ struct ConnectionEditorSheet: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     case .oauth:
-                        if usesBundledOAuthFlow {
-                            VStack(alignment: .leading, spacing: 10) {
-                                if hasConnectedOAuthAccount {
-                                    Label(
-                                        oauthAccountSummary,
-                                        systemImage: "person.crop.circle.badge.checkmark"
-                                    )
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                } else {
-                                    Text(
-                                        AppL10n.string(
-                                            "editor.message.connectAccountBeforeSaving",
-                                            fallback: "Connect your account before testing or saving this mount."
-                                        )
-                                    )
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                }
-
-                                HStack(spacing: 12) {
-                                    Button(
-                                        hasConnectedOAuthAccount
-                                            ? AppL10n.string("editor.action.reauthenticate", fallback: "Re-authenticate")
-                                            : AppL10n.string("editor.action.connectAccount", fallback: "Connect Account")
-                                    ) {
-                                        connectOAuthAccount()
-                                    }
-                                    .disabled(isAuthorizingOAuth)
-
-                                    if isAuthorizingOAuth {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                    }
-                                }
-                            }
-                        } else {
-                            Text(AppL10n.string("editor.message.googleSignInAfterSaving", fallback: "You will be prompted to sign in with Google after saving."))
+                        // Google Drive signs in here too, from the sheet's own OAuth client
+                        // fields. It used to promise a prompt "after saving" that nothing in
+                        // the app ever issued, so a new mount was saved with no token and
+                        // could never connect.
+                        VStack(alignment: .leading, spacing: 10) {
+                            if hasConnectedOAuthAccount {
+                                Label(
+                                    oauthAccountSummary,
+                                    systemImage: "person.crop.circle.badge.checkmark"
+                                )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            } else {
+                                Text(
+                                    AppL10n.string(
+                                        "editor.message.connectAccountBeforeSaving",
+                                        fallback: "Connect your account before testing or saving this mount."
+                                    )
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+
+                            HStack(spacing: 12) {
+                                Button(
+                                    hasConnectedOAuthAccount
+                                        ? AppL10n.string("editor.action.reauthenticate", fallback: "Re-authenticate")
+                                        : AppL10n.string("editor.action.connectAccount", fallback: "Connect Account")
+                                ) {
+                                    connectOAuthAccount()
+                                }
+                                .disabled(isAuthorizingOAuth || !canAuthorizeOAuthAccount)
+
+                                if isAuthorizingOAuth {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                            }
                         }
                     }
                 }
@@ -475,6 +474,11 @@ struct ConnectionEditorSheet: View {
             // Restored when the fields name the saved server again, so correcting a typo
             // does not cost the credential this sheet cannot load a second time.
             clearEnteredSecrets()
+            // The token a sign-in in this sheet produced goes with them: Google Drive's
+            // OAuth client is one of the fields above, so a token authorized against the
+            // client that was there before would otherwise be saved for the one there now,
+            // and an authorization still running would deliver one to it.
+            clearOAuthAuthorizationState()
             restoreSavedSecretsForCurrentTarget()
         }
         .onChange(of: authMethod) { _, newMethod in
@@ -522,7 +526,16 @@ struct ConnectionEditorSheet: View {
         // fields hold over it. See `loadStoredCredentialIfNeeded`.
         guard !didFailToLoadStoredCredential || hasEnteredCredential else { return false }
         if backendType == .googleDrive {
-            return !gdClientID.isEmpty && !gdRedirectURI.isEmpty
+            // Trimmed, because `buildParameters` stores the trimmed value and the backend
+            // refuses a blank one: a whitespace-only client id saved as configured, and
+            // every token refresh then failed on it.
+            //
+            // The account counts as much as the fields do. Saving without one produced a
+            // mount whose every connect fails on a missing token, and nothing in the app
+            // asked for the sign-in it was waiting for.
+            return !Self.isBlank(gdClientID)
+                && !Self.isBlank(gdRedirectURI)
+                && hasConnectedOAuthAccount
         }
         if usesBundledOAuthFlow {
             return hasConnectedOAuthAccount
@@ -580,8 +593,8 @@ struct ConnectionEditorSheet: View {
     ///
     /// Only consulted when that stored one could not be read: every method here is filled
     /// from it on open, so an empty field then means the save would write emptiness over a
-    /// working secret. Google Drive has no field to fill — its refresh token is only ever
-    /// written by the sign-in that follows a save — so nothing can stand in for it.
+    /// working secret. The OAuth backends have no field to fill, so only a sign-in run in
+    /// this sheet can stand in for the credential it could not read.
     private var hasEnteredCredential: Bool {
         switch authMethod {
         case .password:
@@ -593,7 +606,7 @@ struct ConnectionEditorSheet: View {
         case .agent, .anonymous:
             return true
         case .oauth:
-            return usesBundledOAuthFlow && hasConnectedOAuthAccount
+            return hasConnectedOAuthAccount
         }
     }
 
@@ -702,7 +715,7 @@ struct ConnectionEditorSheet: View {
             privateKeyBookmark: privateKeyBookmark,
             accessKeyID: s3AccessKeyID,
             secretAccessKey: s3SecretAccessKey,
-            oauthToken: (usesBundledOAuthFlow ? oauthCredential : savedCredentialForCurrentTarget)?.token
+            oauthToken: (oauthCredential ?? savedCredentialForCurrentTarget)?.token
         )
     }
 
@@ -760,11 +773,21 @@ struct ConnectionEditorSheet: View {
                 }
                 return oauthCredential
             }
-            // Google Drive has no token field in this sheet — sign-in happens after
-            // saving, and the refresh token lives in `password`. Reconstructing the
-            // credential from what the editor shows would drop it, leaving a mount that
-            // can never refresh; the stored one is passed through untouched instead.
-            return savedCredentialForCurrentTarget ?? Credential()
+            // Google Drive keeps its refresh token in `password` and has no field for
+            // either half, so a credential rebuilt from what the editor shows would drop
+            // both. A sign-in run in this sheet wins; otherwise the stored one is passed
+            // through untouched.
+            guard let oauthCredential else {
+                return savedCredentialForCurrentTarget ?? Credential()
+            }
+            // Google issues a refresh token on the first consent and may withhold it on a
+            // later one. Dropping the stored one then would leave a mount that works until
+            // the access token expires and can never renew it.
+            guard oauthCredential.password == nil,
+                  let savedRefreshToken = savedCredentialForCurrentTarget?.password else {
+                return oauthCredential
+            }
+            return Credential(password: savedRefreshToken, token: oauthCredential.token)
         }
     }
 
@@ -899,15 +922,34 @@ struct ConnectionEditorSheet: View {
                 ? String(UInt16(values.port) ?? backendType.defaultPort)
                 : "",
             username: usesUsername ? values.username : "",
+            // Resolved the way `addressesSameServer` resolves them, not as typed: a port
+            // that only repeats the scheme's default reaches the same endpoint, and a
+            // bucket or region differs from itself by the whitespace `ConnectionConfig`
+            // trims off before the backend ever sees it. Comparing the raw strings cleared
+            // the loaded access keys for an address that never moved, and left Save to
+            // write the emptiness over them.
             s3Endpoint: backendType == .s3
-                ? values.s3Endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+                ? ConnectionConfig.comparableS3Endpoint(
+                    ConnectionConfig.trimmedParameter(values.s3Endpoint)
+                ) ?? ""
                 : "",
-            s3Bucket: backendType == .s3 ? values.s3Bucket : "",
-            s3Region: backendType == .s3 ? values.s3Region : "",
+            s3Bucket: backendType == .s3
+                ? ConnectionConfig.trimmedParameter(values.s3Bucket) ?? ""
+                : "",
+            s3Region: backendType == .s3
+                ? ConnectionConfig.trimmedParameter(values.s3Region) ?? ConnectionConfig.defaultS3Region
+                : "",
             smbShare: backendType == .smb ? values.smbShare : "",
             smbDomain: backendType == .smb ? values.smbDomain : "",
-            gdClientID: backendType == .googleDrive ? values.gdClientID : "",
-            gdRedirectURI: backendType == .googleDrive ? values.gdRedirectURI : "",
+            // Trimmed for the same reason the S3 fields above are: `buildParameters` stores
+            // the trimmed value, so whitespace around either of them names the same OAuth
+            // client the mount was saved against.
+            gdClientID: backendType == .googleDrive
+                ? values.gdClientID.trimmingCharacters(in: .whitespacesAndNewlines)
+                : "",
+            gdRedirectURI: backendType == .googleDrive
+                ? values.gdRedirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
+                : "",
             transport: transportIdentity(backendType: backendType, values: values)
         )
     }
@@ -1056,7 +1098,12 @@ struct ConnectionEditorSheet: View {
             if ftpTLS { params["tls"] = "true" }
             if !ftpPassive { params["passive"] = "false" }
         case .googleDrive:
-            guard !gdClientID.isEmpty, !gdRedirectURI.isEmpty else {
+            // Trimmed, and rejected when nothing is left: the backend tests these for
+            // emptiness before it refreshes a token, so a whitespace-only value was saved
+            // as a configured client and failed every refresh afterwards.
+            let trimmedClientID = gdClientID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedRedirectURI = gdRedirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedClientID.isEmpty, !trimmedRedirectURI.isEmpty else {
                 throw RemoteFileSystemError.operationFailed(
                     AppL10n.string(
                         "editor.error.googleDriveOAuthFieldsRequired",
@@ -1064,8 +1111,8 @@ struct ConnectionEditorSheet: View {
                     )
                 )
             }
-            params["clientID"] = gdClientID
-            params["redirectURI"] = gdRedirectURI
+            params["clientID"] = trimmedClientID
+            params["redirectURI"] = trimmedRedirectURI
         case .dropbox, .oneDrive:
             if !oauthAccountName.isEmpty { params["oauthAccountName"] = oauthAccountName }
             if !oauthAccountEmail.isEmpty { params["oauthAccountEmail"] = oauthAccountEmail }
@@ -1177,7 +1224,19 @@ struct ConnectionEditorSheet: View {
         if usesBundledOAuthFlow {
             return oauthCredential?.token?.isEmpty == false
         }
-        return savedCredentialForCurrentTarget?.token?.isEmpty == false
+        // Google Drive: the sign-in this sheet just ran, or the token the mount was already
+        // saved with — reopening a working mount must not demand a new authorization.
+        return (oauthCredential ?? savedCredentialForCurrentTarget)?.token?.isEmpty == false
+    }
+
+    /// Whether the sheet holds what the sign-in needs.
+    ///
+    /// The bundled flows carry their own client; Google Drive is authorized against the
+    /// client the user types into this sheet, so there is nothing to authorize against
+    /// until both fields are filled.
+    private var canAuthorizeOAuthAccount: Bool {
+        guard backendType == .googleDrive else { return true }
+        return !Self.isBlank(gdClientID) && !Self.isBlank(gdRedirectURI)
     }
 
     private var oauthAccountSummary: String {
@@ -1251,6 +1310,25 @@ struct ConnectionEditorSheet: View {
                 credential: account.credential,
                 displayName: account.displayName,
                 email: account.email
+            )
+        case .googleDrive:
+            // Authorized against the client the sheet holds, trimmed the way
+            // `buildParameters` stores it, so the token belongs to the client that is saved.
+            let provider = GoogleOAuthProvider(
+                clientID: gdClientID.trimmingCharacters(in: .whitespacesAndNewlines),
+                redirectURI: gdRedirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            let token = try await provider.authorize()
+            // Split the way the backend reads them: `token` is the access token it presents,
+            // `password` the refresh token it renews with. Google returns no profile with
+            // either, so the account has no name to show.
+            return OAuthAuthorizationResult(
+                credential: Credential(
+                    password: token.refreshToken,
+                    token: token.accessToken
+                ),
+                displayName: "",
+                email: nil
             )
         default:
             throw RemoteFileSystemError.unsupported(

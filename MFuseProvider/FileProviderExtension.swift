@@ -23,8 +23,18 @@ struct FileProviderRuntimeContext: Sendable {
 
 actor BootstrapTaskStore {
     private var bootstrapTask: Task<FileProviderRuntimeContext, Error>?
+    /// Set by `takeForInvalidation()` and never cleared: the extension instance is being
+    /// torn down, so a context created after that point is one nothing closes.
+    private var isInvalidated = false
 
-    func take() -> Task<FileProviderRuntimeContext, Error>? {
+    /// Hand the current task to the teardown and refuse to build another.
+    ///
+    /// Taking the task without closing the door let an operation that arrived while
+    /// cleanup was still disconnecting create a second context: the teardown owns only the
+    /// task it took, so that one was left connected, with its caches and state store open,
+    /// for an instance the system has already given up on.
+    func takeForInvalidation() -> Task<FileProviderRuntimeContext, Error>? {
+        isInvalidated = true
         let task = bootstrapTask
         bootstrapTask = nil
         return task
@@ -41,7 +51,10 @@ actor BootstrapTaskStore {
 
     func currentOrCreate(
         _ create: @Sendable () -> Task<FileProviderRuntimeContext, Error>
-    ) -> Task<FileProviderRuntimeContext, Error> {
+    ) throws -> Task<FileProviderRuntimeContext, Error> {
+        guard !isInvalidated else {
+            throw FileProviderExtensionInvalidated()
+        }
         if let bootstrapTask {
             return bootstrapTask
         }
@@ -49,6 +62,19 @@ actor BootstrapTaskStore {
         let task = create()
         bootstrapTask = task
         return task
+    }
+}
+
+/// Raised for work that arrives after the extension instance has been invalidated.
+struct FileProviderExtensionInvalidated: LocalizedError {
+    var errorDescription: String? {
+        NSLocalizedString(
+            "fileprovider.invalidated",
+            tableName: nil,
+            bundle: .main,
+            value: "This mount was shut down. Try again.",
+            comment: ""
+        )
     }
 }
 
@@ -141,24 +167,89 @@ final class SharedCredentialStoreProvider: @unchecked Sendable {
     }
 }
 
+/// Resumes its caller once, for whichever of the work, the deadline and the caller's own
+/// cancellation gets there first.
+private final class OperationTimeoutResumer<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var pendingResult: Result<T, Error>?
+    private var isFinished = false
+
+    /// Installed before anything can race for it, and answered straight away when the
+    /// first outcome arrived while the caller was still suspending.
+    func install(_ continuation: CheckedContinuation<T, Error>) {
+        let readyResult: Result<T, Error>? = lock.withLock {
+            guard let pendingResult else {
+                self.continuation = continuation
+                return nil
+            }
+            self.pendingResult = nil
+            return pendingResult
+        }
+        if let readyResult {
+            continuation.resume(with: readyResult)
+        }
+    }
+
+    func resume(with result: Result<T, Error>) {
+        let continuation: CheckedContinuation<T, Error>? = lock.withLock {
+            guard !isFinished else { return nil }
+            isFinished = true
+            guard let continuation = self.continuation else {
+                pendingResult = result
+                return nil
+            }
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(with: result)
+    }
+}
+
+/// Run `work` under a deadline, and stop waiting for it once that deadline passes.
+///
+/// Not a task group: a throwing group waits for every child task before its scope ends, so
+/// an operation that never observes cancellation held the caller well past the timeout the
+/// group had already decided on — `runtimeContext()` sat there indefinitely on a wedged
+/// backend, and `invalidate()`, which cancels the bootstrap and awaits it, sat behind it
+/// with the filesystem and caches still open. The work is cancelled and then left to
+/// unwind on its own; the caller is answered on time.
 @Sendable
 func withOperationTimeout<T: Sendable>(
     seconds: Double,
     operation: String,
     _ work: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask {
-            try await work()
+    let resumer = OperationTimeoutResumer<T>()
+    let workTask = Task {
+        do {
+            resumer.resume(with: .success(try await work()))
+        } catch {
+            resumer.resume(with: .failure(error))
         }
-        group.addTask {
+    }
+    let timeoutTask = Task {
+        do {
             try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw FileProviderOperationTimeout.timedOut(operation)
+        } catch {
+            // Cancelled because the work already answered.
+            return
         }
+        workTask.cancel()
+        resumer.resume(with: .failure(FileProviderOperationTimeout.timedOut(operation)))
+    }
+    defer { timeoutTask.cancel() }
 
-        let result = try await group.next()!
-        group.cancelAll()
-        return result
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            resumer.install(continuation)
+        }
+    } onCancel: {
+        workTask.cancel()
+        timeoutTask.cancel()
+        // Answered here rather than left to the work: cancellation is only prompt if it
+        // does not wait for an operation that may be ignoring it.
+        resumer.resume(with: .failure(CancellationError()))
     }
 }
 
@@ -249,7 +340,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 }
             }
 
-            let bootstrapTask = await self.bootstrapTaskStore.take()
+            let bootstrapTask = await self.bootstrapTaskStore.takeForInvalidation()
             bootstrapTask?.cancel()
             guard let bootstrapTask, let context = try? await bootstrapTask.value else { return }
 
@@ -716,7 +807,20 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func requireCredential(for config: ConnectionConfig) async throws -> Credential {
-        let credential = try Self.sharedCredentialStoreProvider.credential(for: config.id) ?? Credential()
+        let stored: Credential?
+        do {
+            stored = try Self.sharedCredentialStoreProvider.credential(for: config.id)
+        } catch is DecodingError {
+            // A credential item that cannot be decoded is not a server the extension failed
+            // to reach: no retry recovers it, and reporting it as unreachable left the
+            // domain with no way out. `notAuthenticated` is what asks the user to supply
+            // the credential again, which is the only thing that fixes it.
+            logger.error(
+                "Undecodable credential for domain \(config.domainIdentifier, privacy: .public); reporting it as an authentication failure"
+            )
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        let credential = stored ?? Credential()
 
         switch config.authMethod {
         case .password:
@@ -744,7 +848,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func runtimeContext() async throws -> FileProviderRuntimeContext {
-        let task = await currentOrCreateBootstrapTask()
+        let task = try await currentOrCreateBootstrapTask()
 
         do {
             return try await task.value
@@ -913,8 +1017,8 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         }
     }
 
-    private func currentOrCreateBootstrapTask() async -> Task<FileProviderRuntimeContext, Error> {
-        await bootstrapTaskStore.currentOrCreate {
+    private func currentOrCreateBootstrapTask() async throws -> Task<FileProviderRuntimeContext, Error> {
+        try await bootstrapTaskStore.currentOrCreate {
             let task = Task { [weak self, domain] in
                 guard let self else {
                     throw CancellationError()
@@ -962,6 +1066,13 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                                code: NSFileProviderError.serverUnreachable.rawValue,
                                userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
             }
+        }
+        if error is FileProviderExtensionInvalidated {
+            return NSError(
+                domain: NSFileProviderErrorDomain,
+                code: NSFileProviderError.serverUnreachable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
+            )
         }
         if let mountError = error as? MountError {
             return NSError(

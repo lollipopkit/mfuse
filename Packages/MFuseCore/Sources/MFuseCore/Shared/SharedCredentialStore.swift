@@ -134,8 +134,15 @@ public final class SharedCredentialStore: @unchecked Sendable {
             // survive is the cleartext copy: deleting needs the directory to be writable
             // and emptying only the file, so this is a second chance at the part that
             // matters even when the first one is refused.
+            //
+            // Truncated in place rather than replaced atomically: an atomic write creates a
+            // temporary file and renames it over this one, which needs exactly the
+            // directory permission the removal above was just refused — so it would fail
+            // for the same reason and leave the secret readable.
             do {
-                try Data().write(to: url, options: .atomic)
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                try handle.truncate(atOffset: 0)
             } catch {
                 Self.logger.fault(
                     "Left a readable legacy credential file at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"

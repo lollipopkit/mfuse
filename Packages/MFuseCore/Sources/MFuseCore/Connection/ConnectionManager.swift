@@ -2202,7 +2202,17 @@ public final class ConnectionManager: ObservableObject {
             guard FileProviderMountProvider.shouldRemoveManagedSymlink(at: candidateURL, fileManager: fm) else {
                 continue
             }
-            try? fm.removeItem(at: candidateURL)
+            do {
+                try fm.removeItem(at: candidateURL)
+            } catch {
+                // Same as the stale-domain removal above: this pass answers no caller, but
+                // a shortcut left in the user's directory points at a location nothing
+                // serves. Startup reconciliation retries it and does report, so what was
+                // missing here is only the record of why it is still there.
+                logger.error(
+                    "Failed to remove orphaned symlink \(name, privacy: .private) during mount sync; startup reconciliation will retry it: \(self.describe(error), privacy: .private)"
+                )
+            }
         }
     }
 }
