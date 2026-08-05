@@ -341,16 +341,16 @@ final class FileProviderMountProviderTests: XCTestCase {
         let key = "domain"
         let order = InvocationRecorder()
 
-        await coordinator.acquire(key)
+        try await coordinator.acquire(key)
 
         let first = Task {
-            await coordinator.acquire(key)
+            try await coordinator.acquire(key)
             order.record("first")
             await coordinator.release(key)
         }
         try await waitForWaiters(1, on: coordinator, key: key)
         let second = Task {
-            await coordinator.acquire(key)
+            try await coordinator.acquire(key)
             order.record("second")
             await coordinator.release(key)
         }
@@ -363,9 +363,40 @@ final class FileProviderMountProviderTests: XCTestCase {
         let stillQueued = await coordinator.waitingCount(for: key)
         XCTAssertEqual(stillQueued, 1, "release resumed more than the caller it handed the lock to")
 
-        await first.value
-        await second.value
+        try await first.value
+        try await second.value
         XCTAssertEqual(order.invocations, ["first", "second"])
+    }
+
+    /// A teardown cancels mount resolution and repair and then *awaits* them before it
+    /// removes the link and disconnects the domain. A cancelled pass that is only queued
+    /// has not started its section, so it has to give up its place: waiting it out made an
+    /// ordinary Unmount or Remove wait for an unrelated registration or link operation to
+    /// return from the File Provider first.
+    func testCancellingAQueuedMountOperationStopsItWaiting() async throws {
+        let coordinator = MountOperationCoordinator()
+        let key = "domain"
+
+        try await coordinator.acquire(key)
+
+        let queued = Task { try await coordinator.acquire(key) }
+        try await waitForWaiters(1, on: coordinator, key: key)
+
+        queued.cancel()
+        switch await queued.result {
+        case .success:
+            XCTFail("the cancelled caller waited for the lock instead of giving up its place")
+        case .failure(let error):
+            XCTAssertTrue(error is CancellationError, "expected cancellation, got \(error)")
+        }
+        let remainingWaiters = await coordinator.waitingCount(for: key)
+        XCTAssertEqual(remainingWaiters, 0, "the withdrawn caller was left in the queue")
+
+        // Nothing was left half-held: the lock is free once its holder releases it, and the
+        // caller that withdrew never took it.
+        await coordinator.release(key)
+        try await coordinator.acquire(key)
+        await coordinator.release(key)
     }
 
     private func waitForWaiters(

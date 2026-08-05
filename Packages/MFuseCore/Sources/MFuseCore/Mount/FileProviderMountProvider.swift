@@ -18,21 +18,49 @@ import os.log
 ///
 /// Not reentrant: nothing inside a held section takes the lock again.
 actor MountOperationCoordinator {
-    private var busyKeys: Set<String> = []
-    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
 
-    /// Waits regardless of the caller's cancellation — every section it guards is bounded
-    /// and short, and abandoning one halfway is what this exists to prevent.
-    func acquire(_ key: String) async {
+    private var busyKeys: Set<String> = []
+    private var waiters: [String: [Waiter]] = [:]
+
+    /// Takes the lock, or throws if the caller is cancelled before it gets there.
+    ///
+    /// Only the *wait* answers cancellation: a caller parked here has not begun its
+    /// section, so withdrawing abandons nothing, while a holder that stopped halfway is
+    /// what this exists to prevent and is untouched. Waiting regardless made a teardown
+    /// depend on work it had nothing to do with — `ConnectionManager` cancels mount
+    /// resolution and repair and then *awaits* them, so a cancelled pass queued behind an
+    /// unrelated registration or link operation had to sit that operation out before it
+    /// could unwind, and an Unmount or a Remove waited with it.
+    ///
+    /// A caller that is handed the lock and only then cancelled still runs its section, as
+    /// an uncontended one does: the lock is held by then, and dropping it there is the
+    /// half-finished section this serializes to avoid.
+    func acquire(_ key: String) async throws {
         guard busyKeys.contains(key) else {
             busyKeys.insert(key)
             return
         }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            waiters[key, default: []].append(continuation)
+        let waiterID = UUID()
+        let acquired = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                // The handler below has nothing to withdraw until the waiter is registered,
+                // so a cancellation that lands first is answered here.
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    waiters[key, default: []].append(Waiter(id: waiterID, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.withdraw(waiterID, from: key) }
         }
         // Resumed holding the lock, handed over by `release`. Re-checking `busyKeys` here
         // instead is what would let a newcomer overtake this caller.
+        guard acquired else { throw CancellationError() }
     }
 
     func release(_ key: String) {
@@ -49,7 +77,26 @@ actor MountOperationCoordinator {
         }
         // `busyKeys` stays set: ownership passes straight to the caller that has waited
         // longest, so an operation arriving now queues behind it rather than racing it.
-        next.resume()
+        next.continuation.resume(returning: true)
+    }
+
+    /// Give up a place in the queue for a caller that was cancelled before its turn came.
+    ///
+    /// A waiter `release` has already taken is simply gone from the queue: ownership was
+    /// handed over, and the caller keeps it — resuming it a second time would trap, and
+    /// dropping the lock on its behalf would hand the same section to two callers.
+    private func withdraw(_ waiterID: UUID, from key: String) {
+        guard var queue = waiters[key],
+              let index = queue.firstIndex(where: { $0.id == waiterID }) else {
+            return
+        }
+        let waiter = queue.remove(at: index)
+        if queue.isEmpty {
+            waiters.removeValue(forKey: key)
+        } else {
+            waiters[key] = queue
+        }
+        waiter.continuation.resume(returning: false)
     }
 
     /// Test seam: how many callers are parked behind the operation holding this key.
@@ -562,7 +609,7 @@ public final class FileProviderMountProvider: MountProvider {
         _ work: () async throws -> T
     ) async throws -> T {
         let key = config.domainIdentifier
-        await operationCoordinator.acquire(key)
+        try await operationCoordinator.acquire(key)
         do {
             let result = try await work()
             await operationCoordinator.release(key)

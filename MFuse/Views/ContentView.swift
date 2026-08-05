@@ -11,7 +11,9 @@ struct ContentView: View {
     @State private var saveAlert: SaveAlertState?
     /// The save in flight for each connection, so a later one queues behind it instead
     /// of racing it or being dropped.
-    @State private var saveTasks: [UUID: Task<Void, Never>] = [:]
+    /// The save running for each connection, carrying the config it committed so the save
+    /// queued behind it knows what the row holds by the time it runs. See `saveConnection`.
+    @State private var saveTasks: [UUID: Task<ConnectionConfig?, Never>] = [:]
 
     var body: some View {
         NavigationSplitView {
@@ -144,29 +146,39 @@ struct ContentView: View {
         // new mount from both seeing no previous config and appending the same UUID twice.
         let precedingSave = saveTasks[config.id]
         let save = Task { @MainActor in
-            await precedingSave?.value
-            await performSave(
+            // What the save ahead of this one committed becomes what this one expects to
+            // find. `openedConfig` is the row as the sheet opened it, and a queued save is
+            // by definition running after another one changed it — expecting that stale
+            // revision would have every second Save fail as a conflict and roll back the
+            // credential it just stored, which is exactly the edit this queue is here to
+            // keep. A preceding save that committed nothing leaves the row as it was, so
+            // the sheet's own revision still stands.
+            let precedingConfig = await precedingSave?.value
+            return await performSave(
                 config,
                 credential: credential,
                 presentationID: presentationID,
-                openedConfig: openedConfig
+                openedConfig: precedingConfig ?? openedConfig
             )
         }
         saveTasks[config.id] = save
         Task { @MainActor in
-            await save.value
+            _ = await save.value
             guard saveTasks[config.id] == save else { return }
             saveTasks.removeValue(forKey: config.id)
         }
     }
 
+    /// Returns the config it wrote to the connection list, or `nil` when it wrote none —
+    /// which is what the next save in the queue expects to find. See `saveConnection`.
     @MainActor
+    @discardableResult
     private func performSave(
         _ config: ConnectionConfig,
         credential: Credential,
         presentationID: UUID,
         openedConfig: ConnectionConfig?
-    ) async {
+    ) async -> ConnectionConfig? {
         do {
             let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
             let previousCredential = try await credentialProvider.credential(for: config.id)
@@ -227,6 +239,10 @@ struct ContentView: View {
                     )
                 }
             }
+            // Reported only once the write itself went through: a failed domain sync leaves
+            // the connection list holding this config, which is what the next save has to
+            // expect. A failed write below leaves the row untouched, so it reports nothing.
+            return config
         } catch {
             await MainActor.run {
                 saveAlert = SaveAlertState(
@@ -237,6 +253,7 @@ struct ContentView: View {
                     message: error.localizedDescription
                 )
             }
+            return nil
         }
     }
 
