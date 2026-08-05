@@ -722,6 +722,64 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         XCTAssertFalse(normalizedDropbox.addressesSameServer(as: otherAccount))
     }
 
+    /// A port that only repeats the scheme's default is not part of the endpoint, so
+    /// writing it out either way addresses one server.
+    func testS3AddressesSameServerAcrossADefaultPortInTheEndpoint() {
+        let httpBare = config(.s3, parameters: ["endpoint": "http://minio.internal", "bucket": "b"])
+        let httpSpelledOut = config(.s3, parameters: ["endpoint": "http://minio.internal:80", "bucket": "b"])
+        XCTAssertTrue(httpBare.addressesSameServer(as: httpSpelledOut))
+        XCTAssertTrue(httpSpelledOut.addressesSameServer(as: httpBare))
+
+        let httpsBare = config(.s3, parameters: ["endpoint": "https://s3.example.com", "bucket": "b"])
+        let httpsSpelledOut = config(.s3, parameters: ["endpoint": "https://s3.example.com:443", "bucket": "b"])
+        XCTAssertTrue(httpsBare.addressesSameServer(as: httpsSpelledOut))
+        XCTAssertTrue(httpsSpelledOut.addressesSameServer(as: httpsBare))
+
+        // A port that is not the scheme's default is the address, and so is the scheme.
+        let otherPort = config(.s3, parameters: ["endpoint": "https://s3.example.com:8443", "bucket": "b"])
+        XCTAssertFalse(httpsBare.addressesSameServer(as: otherPort))
+        let plaintext = config(.s3, parameters: ["endpoint": "http://s3.example.com", "bucket": "b"])
+        XCTAssertFalse(httpsBare.addressesSameServer(as: plaintext))
+        // 443 is http's address just as much as 8443 is.
+        XCTAssertFalse(plaintext.addressesSameServer(as: httpsSpelledOut))
+    }
+
+    /// Regression: an anonymous login sends no username — FTP sends a fixed
+    /// `USER anonymous` and WebDAV omits the Authorization header — and the editor saves
+    /// the field empty. Comparing a legacy value left in it read as a move to another
+    /// server, which took a working mount down and then withheld the remount.
+    func testAnonymousUsernameIsNotAnIdentityChange() {
+        func config(_ type: BackendType, username: String, authMethod: AuthMethod) -> ConnectionConfig {
+            ConnectionConfig(
+                name: "Test",
+                backendType: type,
+                host: "example.com",
+                port: type.defaultPort,
+                username: username,
+                authMethod: authMethod,
+                remotePath: "/"
+            )
+        }
+
+        for type in [BackendType.ftp, .webdav] {
+            let legacy = config(type, username: "old", authMethod: .anonymous)
+            let normalized = config(type, username: "", authMethod: .anonymous)
+            XCTAssertTrue(legacy.addressesSameServer(as: normalized), "\(type)")
+            XCTAssertTrue(normalized.addressesSameServer(as: legacy), "\(type)")
+
+            // The username is still the identity wherever the backend sends it.
+            let named = config(type, username: "alice", authMethod: .password)
+            XCTAssertFalse(named.addressesSameServer(as: config(type, username: "bob", authMethod: .password)), "\(type)")
+            // Dropping the password for anonymous access is a different identity too.
+            XCTAssertFalse(named.addressesSameServer(as: normalized), "\(type)")
+        }
+
+        // A method the backend never offers is not an anonymous login: SFTP sends the
+        // username whatever the stored method says.
+        let sftp = config(.sftp, username: "alice", authMethod: .anonymous)
+        XCTAssertFalse(sftp.addressesSameServer(as: config(.sftp, username: "bob", authMethod: .anonymous)))
+    }
+
     /// Everything that is not S3 is addressed by host and port, so those still count.
     func testHostBasedAddressesSameServerComparesPort() {
         let base = config(.sftp, host: "example.com", port: 22)

@@ -189,7 +189,13 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         if backendType.usesHostBasedAddressing, host != other.host || port != other.port {
             return false
         }
-        if backendType.usesUsername, username != other.username {
+        // The username names the target only where the backend sends it. An anonymous
+        // login does not: FTP sends a fixed `USER anonymous` and WebDAV omits the
+        // Authorization header entirely, so neither runtime reads `config.username`, and
+        // the editor saves the field empty. Comparing it anyway made the save that clears
+        // a legacy value read as a move to another server, which took a working mount
+        // down and then refused to bring it back up.
+        if backendType.usesUsername, !authenticatesAnonymously, username != other.username {
             return false
         }
 
@@ -206,7 +212,7 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             // and no `pathStyle` are one addressing style, and a bucket differs from itself
             // by the whitespace around it. Reading the raw dictionary called each of those
             // pairs a different server and left a working mount down for nothing.
-            guard s3Endpoint == other.s3Endpoint,
+            guard Self.comparableS3Endpoint(s3Endpoint) == Self.comparableS3Endpoint(other.s3Endpoint),
                   s3Bucket == other.s3Bucket,
                   s3Region == other.s3Region,
                   s3UsesPathStyle == other.s3UsesPathStyle else {
@@ -217,6 +223,44 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         }
 
         return parameters == other.parameters
+    }
+
+    /// Whether this config logs in without a name the backend would send.
+    ///
+    /// Checked against the backend's own list rather than the stored method alone, so a
+    /// config pairing a backend with a method it never offered is still compared in full.
+    private var authenticatesAnonymously: Bool {
+        authMethod == .anonymous && backendType.supportedAuthMethods.contains(.anonymous)
+    }
+
+    /// An endpoint reduced to the address it reaches, for comparing two of them.
+    ///
+    /// A port that only repeats the scheme's default is not part of that address:
+    /// `http://host:80` and `http://host` reach one server, as do `https://host:443` and
+    /// `https://host`. Comparing them as written called one a move to another server and
+    /// left a working mount down. Any other port is the address and is kept, as is an
+    /// endpoint too malformed to parse.
+    static func comparableS3Endpoint(_ endpoint: String?) -> String? {
+        guard let endpoint else { return nil }
+        guard var components = URLComponents(string: endpoint),
+              let port = components.port,
+              port == schemeDefaultPort(for: components.scheme).map(Int.init) else {
+            return endpoint
+        }
+        components.port = nil
+        return components.string ?? endpoint
+    }
+
+    /// The port a scheme reaches when the endpoint does not spell one out.
+    private static func schemeDefaultPort(for scheme: String?) -> UInt16? {
+        switch scheme?.lowercased() {
+        case "http":
+            return 80
+        case "https":
+            return 443
+        default:
+            return nil
+        }
     }
 
     /// A parameter with surrounding whitespace removed, or nil when it holds nothing.
@@ -245,15 +289,7 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             return endpoint
         }
 
-        let schemeDefaultPort: UInt16?
-        switch components.scheme?.lowercased() {
-        case "http":
-            schemeDefaultPort = 80
-        case "https":
-            schemeDefaultPort = 443
-        default:
-            schemeDefaultPort = nil
-        }
+        let schemeDefaultPort = schemeDefaultPort(for: components.scheme)
 
         // Port 0 is unset, a port matching the scheme default adds nothing, and a port
         // still at the backend default was never chosen by anyone — the editor no longer
