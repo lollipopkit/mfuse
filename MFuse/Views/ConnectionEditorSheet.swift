@@ -172,8 +172,11 @@ struct ConnectionEditorSheet: View {
                 s3Endpoint: initialS3Endpoint,
                 s3Bucket: params["bucket"] ?? "",
                 s3Region: params["region"] ?? "us-east-1",
+                s3PathStyle: params["pathStyle"] == "true",
                 smbShare: params["share"] ?? "",
                 smbDomain: params["domain"] ?? "",
+                webdavTLS: params["tls"] != "false",
+                ftpTLS: params["tls"] == "true",
                 gdClientID: params["clientID"] ?? "",
                 gdRedirectURI: params["redirectURI"] ?? ""
             )
@@ -787,8 +790,11 @@ struct ConnectionEditorSheet: View {
                 s3Endpoint: s3Endpoint,
                 s3Bucket: s3Bucket,
                 s3Region: s3Region,
+                s3PathStyle: s3PathStyle,
                 smbShare: smbShare,
                 smbDomain: smbDomain,
+                webdavTLS: webdavTLS,
+                ftpTLS: ftpTLS,
                 gdClientID: gdClientID,
                 gdRedirectURI: gdRedirectURI
             )
@@ -828,8 +834,39 @@ struct ConnectionEditorSheet: View {
             smbShare: backendType == .smb ? values.smbShare : "",
             smbDomain: backendType == .smb ? values.smbDomain : "",
             gdClientID: backendType == .googleDrive ? values.gdClientID : "",
-            gdRedirectURI: backendType == .googleDrive ? values.gdRedirectURI : ""
+            gdRedirectURI: backendType == .googleDrive ? values.gdRedirectURI : "",
+            transport: transportIdentity(backendType: backendType, values: values)
         )
+    }
+
+    /// The transport the secret would travel over, for the backends whose editor exposes a
+    /// choice about it.
+    ///
+    /// Turning WebDAV's or FTP's TLS off does not move the mount to another host, but it
+    /// hands the password to a cleartext channel to the same one — and S3's addressing
+    /// style decides whether the request is signed for `bucket.endpoint` or for
+    /// `endpoint/bucket`. A saved credential belongs to none of those by default, so each
+    /// counts as naming a different party.
+    private static func transportIdentity(
+        backendType: BackendType,
+        values: ServerIdentityValues
+    ) -> String {
+        switch backendType {
+        case .webdav:
+            return values.webdavTLS ? "https" : "http"
+        case .ftp:
+            return values.ftpTLS ? "ftps" : "ftp"
+        case .s3:
+            // Read the way `buildParameters` writes it: path style is persisted only
+            // alongside a custom endpoint, so counting the toggle without one would clear
+            // the access keys for a change that never reaches the config.
+            let hasCustomEndpoint = !values.s3Endpoint
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+            return values.s3PathStyle && hasCustomEndpoint ? "path-style" : "virtual-host"
+        default:
+            return ""
+        }
     }
 
     /// Everything that decides *which server* a secret would be sent to, the backend and
@@ -1162,8 +1199,11 @@ private struct ServerIdentityValues {
     let s3Endpoint: String
     let s3Bucket: String
     let s3Region: String
+    let s3PathStyle: Bool
     let smbShare: String
     let smbDomain: String
+    let webdavTLS: Bool
+    let ftpTLS: Bool
     let gdClientID: String
     let gdRedirectURI: String
 }
@@ -1180,6 +1220,9 @@ private struct ServerIdentity: Equatable {
     let smbDomain: String
     let gdClientID: String
     let gdRedirectURI: String
+    /// How the selected backend reaches that server, where the choice decides what the
+    /// secret is handed to: WebDAV's and FTP's transports, and S3's request addressing.
+    let transport: String
 }
 
 /// That server plus how the mount authenticates to it — what a stored credential belongs
