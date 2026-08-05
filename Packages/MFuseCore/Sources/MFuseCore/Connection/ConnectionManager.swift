@@ -306,7 +306,10 @@ public final class ConnectionManager: ObservableObject {
         do {
             try storage.saveConnections(connections)
         } catch {
-            let registrationFailure = await restoreDomainRegistration(for: config)
+            // Restored before the domain is, the way the credential path below does it:
+            // `restoreDomainRegistration` decides whether to disconnect the domain from the
+            // published mount state, and reading it while this removal still has it cleared
+            // would answer for a connection that is momentarily not there at all.
             restoreRemovedConnectionState(
                 for: config.id,
                 connections: previousConnections,
@@ -314,6 +317,7 @@ public final class ConnectionManager: ObservableObject {
                 mountState: previousMountState,
                 fileSystem: previousFileSystem
             )
+            let registrationFailure = await restoreDomainRegistration(for: config)
             throw removalError(
                 primary: error,
                 restoreFailures: registrationFailure.map { [$0] } ?? [],
@@ -1646,6 +1650,12 @@ public final class ConnectionManager: ObservableObject {
             }
         }
 
+        // Re-fenced here rather than only on entry: the teardown above suspends, and a
+        // newer edit can be saved — and registered — inside it. Registering now would write
+        // this pass's older config over the snapshot that edit just made authoritative,
+        // leaving the extension serving a revision neither the UI nor storage shows.
+        guard isCurrentRevision(config) else { return }
+
         try await mountProvider.ensureRegistered(config: config)
         // Registration suspends too, so the same removal can land inside it. What it
         // created is taken straight back out rather than left behind.
@@ -1653,6 +1663,11 @@ public final class ConnectionManager: ObservableObject {
             try? await mountProvider.unregister(config: config)
             throw ConnectionManagerError.connectionNotFound(config.id)
         }
+        // A newer edit can also land inside that registration. Its own pass registers after
+        // this one, so the domain is left alone — it belongs to that config now — and so is
+        // the mount work below, which would otherwise disconnect or remount from a config
+        // that has already been superseded.
+        guard isCurrentRevision(config) else { return }
 
         // Read *after* the suspensions above rather than on entry: the user can unmount
         // while `ensureRegistered` is in flight, and a remount decided from the earlier
