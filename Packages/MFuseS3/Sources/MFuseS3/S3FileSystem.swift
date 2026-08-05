@@ -22,14 +22,17 @@ public actor S3FileSystem: RemoteFileSystem {
     /// Deduplicates overlapping `connect()` calls. This is an actor, but `connect`
     /// suspends on the connectivity probe, so a second caller could otherwise enter and
     /// build a second client that overwrites — and leaks — the first.
-    private var connectTask: Task<Void, Error>?
+    ///
+    /// Carries the client the attempt published, so the caller that started it can tell its
+    /// own connection from whatever happens to be published when it resumes.
+    private var connectTask: Task<AWSClient, Error>?
     /// Callers waiting on someone else's `connectTask`, keyed so each can be resumed —
     /// or cancelled — on its own, and tagged with the attempt they joined.
     ///
     /// `disconnect()` clears `connectTask` while its attempt is still unwinding, so a
     /// replacement attempt can be registered before the old one finishes: without the
     /// tag, the old attempt's failure would be handed to callers waiting on the new one.
-    private var connectWaiters: [UUID: (task: Task<Void, Error>, continuation: CheckedContinuation<Void, Error>)] = [:]
+    private var connectWaiters: [UUID: (task: Task<AWSClient, Error>, continuation: CheckedContinuation<Void, Error>)] = [:]
 
     /// Test seam: replaces the connectivity probe so a connection attempt can be held at
     /// the exact suspension point where `disconnect()` interleaves. Never set in production.
@@ -99,6 +102,7 @@ public actor S3FileSystem: RemoteFileSystem {
                     connectTask = nil
                 }
             }
+            let published: AWSClient
             do {
                 // Cancellation does not reach into an unstructured task, so without this a
                 // cancelled caller would keep waiting for a probe that then publishes a
@@ -106,7 +110,7 @@ public actor S3FileSystem: RemoteFileSystem {
                 // `relinquishConnectAttempt` rather than applied directly: this caller
                 // started the probe, but callers that joined it since are waiting on the
                 // same task and were never cancelled themselves.
-                try await withTaskCancellationHandler {
+                published = try await withTaskCancellationHandler {
                     try await task.value
                 } onCancel: {
                     Task { await self.relinquishConnectAttempt(task) }
@@ -121,7 +125,12 @@ public actor S3FileSystem: RemoteFileSystem {
             // caller resuming here. Reporting success then hands every caller a session
             // that has already been shut down, and each of them goes on to fail on its
             // first request instead of retrying the connection.
-            guard awsClient != nil, s3 != nil else {
+            //
+            // Compared by identity, not merely for presence: a connection that replaced the
+            // torn-down one belongs to the caller that asked for it, and claiming it here
+            // would answer this attempt — and everyone who joined it — with a success it
+            // never achieved, leaving them to shut down a session someone else is using.
+            guard awsClient === published, s3 != nil else {
                 let interrupted = CancellationError()
                 resumeConnectWaiters(of: task, with: .failure(interrupted))
                 throw interrupted
@@ -148,7 +157,7 @@ public actor S3FileSystem: RemoteFileSystem {
     /// Cancelling the shared task outright would take the connection down for callers that
     /// joined it and were never cancelled; the starter stays on `task.value` either way, so
     /// they are still resumed when it finishes.
-    private func relinquishConnectAttempt(_ task: Task<Void, Error>) {
+    private func relinquishConnectAttempt(_ task: Task<AWSClient, Error>) {
         let hasJoiners = connectWaiters.values.contains { $0.task == task }
         guard !hasJoiners else { return }
         task.cancel()
@@ -164,7 +173,7 @@ public actor S3FileSystem: RemoteFileSystem {
     /// continuation and resumed individually.
     ///
     /// Returns `false` when the attempt ended before this caller could join it.
-    private func waitForConnectAttempt(_ task: Task<Void, Error>) async throws -> Bool {
+    private func waitForConnectAttempt(_ task: Task<AWSClient, Error>) async throws -> Bool {
         let waiterID = UUID()
         var joined = true
         try await withTaskCancellationHandler {
@@ -198,7 +207,7 @@ public actor S3FileSystem: RemoteFileSystem {
     /// Returns whether anyone was waiting.
     @discardableResult
     private func resumeConnectWaiters(
-        of task: Task<Void, Error>,
+        of task: Task<AWSClient, Error>,
         with result: Result<Void, Error>
     ) -> Bool {
         let waiters = connectWaiters.filter { $0.value.task == task }
@@ -211,7 +220,9 @@ public actor S3FileSystem: RemoteFileSystem {
         return !waiters.isEmpty
     }
 
-    private func performConnect() async throws {
+    /// Returns the client it published, which is what tells the caller that started this
+    /// attempt whether the connection it is about to report is still its own.
+    private func performConnect() async throws -> AWSClient {
         // A previous attempt can leave a client behind — the File Provider extension
         // times out and retries `connect()`, and Soto asserts in `AWSClient.deinit` if a
         // client is released without being shut down.
@@ -285,6 +296,7 @@ public actor S3FileSystem: RemoteFileSystem {
 
         self.awsClient = client
         self.s3 = serviceConfig
+        return client
     }
 
     /// Every path that drops an `AWSClient` must go through here: Soto asserts in
