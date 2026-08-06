@@ -20,11 +20,24 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
     private let clientID: String
     private let redirectURI: String
     private let scopes: [String]
+    private let session: URLSession
     @MainActor private var isAuthorizing = false
     @MainActor private var authSession: ASWebAuthenticationSession?
 
     private static let authURL = "https://accounts.google.com/o/oauth2/v2/auth"
     private static let tokenURL = "https://oauth2.googleapis.com/token"
+    private static let aboutURL = "https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)"
+
+    /// The Google account an access token was issued for.
+    public struct Account: Sendable {
+        public let displayName: String
+        public let email: String?
+
+        public init(displayName: String, email: String?) {
+            self.displayName = displayName
+            self.email = email
+        }
+    }
 
     public struct TokenResponse: Codable, Sendable {
         public let accessToken: String
@@ -40,10 +53,16 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
         }
     }
 
-    public init(clientID: String, redirectURI: String, scopes: [String] = ["https://www.googleapis.com/auth/drive"]) {
+    public init(
+        clientID: String,
+        redirectURI: String,
+        scopes: [String] = ["https://www.googleapis.com/auth/drive"],
+        session: URLSession = .shared
+    ) {
         self.clientID = clientID
         self.redirectURI = redirectURI
         self.scopes = scopes
+        self.session = session
     }
 
     /// Perform the OAuth authorization code flow.
@@ -119,6 +138,40 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
         return try await exchangeCode(code, codeVerifier: codeVerifier)
     }
 
+    /// The account an access token belongs to.
+    ///
+    /// Google returns no profile with the token, so nothing in a token response says
+    /// *whose* it is — and the same client can authorize a different account on a later
+    /// sign-in. A refresh token is issued per account, so a caller that keeps one across
+    /// sign-ins has to be told which account the new token names before it may carry the
+    /// old one over. Answered by the Drive API under the scope already granted, so this
+    /// asks for no additional consent.
+    public func currentAccount(accessToken: String) async throws -> Account {
+        guard let url = URL(string: Self.aboutURL) else {
+            throw GoogleDriveError.oauthFailed("Invalid Google Drive account lookup URL")
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw GoogleDriveError.oauthFailed("Google Drive account lookup failed: invalid HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let bodyDescription = body?.isEmpty == false ? body! : "<empty response body>"
+            throw GoogleDriveError.oauthFailed(
+                "Google Drive account lookup failed with HTTP \(http.statusCode): \(bodyDescription)"
+            )
+        }
+        let about = try JSONDecoder().decode(AboutResponse.self, from: data)
+        return Account(
+            displayName: about.user?.displayName ?? "",
+            email: about.user?.emailAddress
+        )
+    }
+
     /// Refresh an access token using a refresh token.
     public func refresh(refreshToken: String) async throws -> TokenResponse {
         var request = URLRequest(url: URL(string: Self.tokenURL)!)
@@ -131,7 +184,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             URLQueryItem(name: "grant_type", value: "refresh_token")
         ])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw GoogleDriveError.oauthFailed("Token refresh failed: invalid HTTP response")
         }
@@ -161,7 +214,7 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             URLQueryItem(name: "redirect_uri", value: redirectURI)
         ])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw GoogleDriveError.oauthFailed("Token exchange failed")
         }
@@ -198,6 +251,16 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
     private func generateState() -> String {
         UUID().uuidString
     }
+}
+
+/// `drive.about` reduced to the account fields the lookup asks for.
+private struct AboutResponse: Decodable {
+    struct User: Decodable {
+        let displayName: String?
+        let emailAddress: String?
+    }
+
+    let user: User?
 }
 
 extension GoogleOAuthProvider: ASWebAuthenticationPresentationContextProviding {

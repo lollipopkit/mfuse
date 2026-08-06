@@ -1016,21 +1016,28 @@ public final class ConnectionManager: ObservableObject {
     /// mount, a symlink or a bootstrap snapshot after it returns. A backend or credential
     /// call that never returns from a cancelled operation would therefore hold the app
     /// open forever — `applicationShouldTerminate` replies `.terminateLater` and waits on
-    /// exactly this. An abandoned pass keeps running in a process that is about to exit.
+    /// exactly this.
+    ///
+    /// The pass the deadline gives up on is cancelled rather than merely left: quit stops
+    /// waiting for it, but everything it is still holding — a teardown, an unregister, a
+    /// symlink removal — checks cancellation, so cancelling is what keeps it from going on
+    /// to write state and touch the user's directory in a process that is already reporting
+    /// itself torn down. What it cannot interrupt runs on until the process exits.
     private func withShutdownDeadline(_ work: @escaping @MainActor () async -> Void) async {
         let resumer = ShutdownDeadlineResumer()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             // Both tasks can only run at a suspension point, so the continuation is
             // installed before either of them can reach for it.
             resumer.continuation = continuation
-            Task { @MainActor in
+            let workTask = Task { @MainActor in
                 await work()
                 resumer.resume()
             }
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: Self.shutdownDeadlineNanoseconds)
                 if resumer.resume() {
-                    Self.shutdownLogger.error("Quit cleanup timed out; abandoning it")
+                    workTask.cancel()
+                    Self.shutdownLogger.error("Quit cleanup timed out; cancelling and abandoning it")
                 }
             }
         }

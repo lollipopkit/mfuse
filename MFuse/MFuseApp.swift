@@ -21,6 +21,8 @@ struct MFuseApp: App {
     @StateObject private var connectionManager: ConnectionManager
     @StateObject private var appSettings: AppSettingsStore
     @State private var didPerformInitialSetup = false
+    /// What launch reconciliation left unresolved, for the user to see and retry.
+    @State private var startupDomainSyncFailure: String?
     private let domainManager: DomainManager
     private let mountProvider: FileProviderMountProvider
     private let storage: SharedStorage
@@ -100,6 +102,23 @@ struct MFuseApp: App {
                 .task {
                     await performInitialSetupIfNeeded()
                 }
+                // Reported, not only logged: reconciliation is what registers the domains
+                // and clears the stale ones, so a failure leaves the window showing mounts
+                // the system does not have — or missing ones it does — and nothing else
+                // retries before the next launch.
+                .alert(
+                    AppL10n.string("app.warning.startupDomainSyncIssue", fallback: "Domain Sync Issue"),
+                    isPresented: startupDomainSyncFailureIsPresented
+                ) {
+                    Button(AppL10n.string("common.action.retry", fallback: "Retry")) {
+                        Task { await retryDomainSync() }
+                    }
+                    Button(AppL10n.string("common.action.ok", fallback: "OK"), role: .cancel) {
+                        startupDomainSyncFailure = nil
+                    }
+                } message: {
+                    Text(startupDomainSyncFailure ?? "")
+                }
                 .onChange(of: scenePhase) { _, newPhase in
                     guard newPhase == .active else { return }
                     Task {
@@ -157,6 +176,11 @@ struct MFuseApp: App {
                 try await domainManager.syncDomains()
             } catch {
                 NSLog("MFuse domain sync failed during launch: %@", String(describing: error))
+                startupDomainSyncFailure = AppL10n.string(
+                    "app.error.startupDomainSyncFailed",
+                    fallback: "MFuse could not reconcile its File Provider domains at launch: %@. Mounts may be missing or show the wrong state until this succeeds.",
+                    error.localizedDescription
+                )
             }
             await connectionManager.syncMounts()
             await connectionManager.autoMountConfiguredConnections()
@@ -172,6 +196,37 @@ struct MFuseApp: App {
 
         AppDelegate.allowsTermination = true
         NSApp.terminate(nil)
+    }
+
+    private var startupDomainSyncFailureIsPresented: Binding<Bool> {
+        Binding(
+            get: { startupDomainSyncFailure != nil },
+            set: { isPresented in
+                if !isPresented {
+                    startupDomainSyncFailure = nil
+                }
+            }
+        )
+    }
+
+    /// Run reconciliation again, and put the mount sync that depends on it back in line.
+    ///
+    /// `syncMounts` reads the domains reconciliation registers, so a retry that stopped at
+    /// the registration would leave the rows reporting the state the failed pass produced.
+    @MainActor
+    private func retryDomainSync() async {
+        do {
+            try await domainManager.syncDomains()
+            startupDomainSyncFailure = nil
+            await connectionManager.syncMounts()
+        } catch {
+            NSLog("MFuse domain sync retry failed: %@", String(describing: error))
+            startupDomainSyncFailure = AppL10n.string(
+                "app.error.startupDomainSyncFailed",
+                fallback: "MFuse could not reconcile its File Provider domains at launch: %@. Mounts may be missing or show the wrong state until this succeeds.",
+                error.localizedDescription
+            )
+        }
     }
 }
 

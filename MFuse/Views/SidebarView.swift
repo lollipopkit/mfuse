@@ -39,6 +39,11 @@ struct SidebarView: View {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderless)
+                // An icon carries no name of its own: VoiceOver reads the symbol, and a
+                // pointer gets no tooltip. Both are supplied here the way the mount and
+                // refresh controls elsewhere supply them.
+                .help(AppL10n.string("content.action.addMount", fallback: "Add Mount"))
+                .accessibilityLabel(AppL10n.string("content.action.addMount", fallback: "Add Mount"))
                 Spacer()
                 Menu {
                     Button(AppL10n.string("common.action.mountAll", fallback: "Mount All")) {
@@ -80,6 +85,8 @@ struct SidebarView: View {
                     Image(systemName: "ellipsis.circle")
                 }
                 .buttonStyle(.borderless)
+                .help(AppL10n.string("sidebar.action.mountActions", fallback: "Mount Actions"))
+                .accessibilityLabel(AppL10n.string("sidebar.action.mountActions", fallback: "Mount Actions"))
             }
             .padding(8)
         }

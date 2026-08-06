@@ -2,6 +2,32 @@ import Foundation
 import os.log
 import Security
 
+/// A legacy cleartext credential file that could neither be removed nor emptied.
+///
+/// Both attempts are reported: the removal needs the directory to be writable and the
+/// truncation needs the file to be, so which one was refused is what says where to look.
+public struct LegacyCredentialFileError: LocalizedError {
+    public let path: String
+    public let removalError: Error
+    public let truncationError: Error
+
+    public init(path: String, removalError: Error, truncationError: Error) {
+        self.path = path
+        self.removalError = removalError
+        self.truncationError = truncationError
+    }
+
+    public var errorDescription: String? {
+        MFuseCoreL10n.string(
+            "credential.error.legacyFileNotRemoved",
+            fallback: "A legacy credential file at %1$@ is still readable: it could not be removed (%2$@) or emptied (%3$@). Delete it to keep the secret from staying on disk in cleartext.",
+            path,
+            removalError.localizedDescription,
+            truncationError.localizedDescription
+        )
+    }
+}
+
 /// Stores provider-readable credential snapshots in the shared Keychain.
 /// Legacy cleartext credential files in the App Group container are only used
 /// as a read-once migration source and are deleted after successful migration.
@@ -70,15 +96,27 @@ public final class SharedCredentialStore: @unchecked Sendable {
         return try migrateLegacyCredentialIfNeeded(for: connectionID)
     }
 
+    /// Stores the credential in the Keychain, then disposes of any legacy cleartext copy.
+    ///
+    /// Throws `LegacyCredentialFileError` when that copy is still readable afterwards. The
+    /// Keychain write has already happened by then and is not undone — putting the secret
+    /// back on disk is the one thing that cannot help — so a caller that retries writes the
+    /// same item again and gets the same answer until the file is gone. Reporting success
+    /// with a cleartext secret left behind is what this refuses to do.
     public func store(_ credential: Credential, for connectionID: UUID) throws {
         let data = try JSONEncoder().encode(credential)
         try writeKeychainData(data, account: connectionID.uuidString)
-        removeLegacyCredentialFileIfPresent(for: connectionID)
+        try removeLegacyCredentialFileIfPresent(for: connectionID)
     }
 
+    /// Deletes the credential, the legacy cleartext copy included.
+    ///
+    /// Throws `LegacyCredentialFileError` when that copy survives: a delete that answers
+    /// "gone" while the secret is still readable on disk is the failure that matters most
+    /// here, and only the caller can tell the user about it.
     public func delete(for connectionID: UUID) throws {
         try deleteKeychainData(account: connectionID.uuidString)
-        removeLegacyCredentialFileIfPresent(for: connectionID)
+        try removeLegacyCredentialFileIfPresent(for: connectionID)
     }
 
     public func credentialURL(for connectionID: UUID) throws -> URL {
@@ -107,7 +145,12 @@ public final class SharedCredentialStore: @unchecked Sendable {
             let credential = try JSONDecoder().decode(Credential.self, from: data)
             let encoded = try JSONEncoder().encode(credential)
             try writeKeychainData(encoded, account: connectionID.uuidString)
-            removeLegacyCredentialFileIfPresent(for: connectionID)
+            // Best-effort here alone, unlike `store` and `delete`: this is a read, and the
+            // caller asking for the credential is the extension about to mount with it.
+            // Failing it would take the mount down over a file this call did not create,
+            // while the next write reports the leftover and can be retried. The attempt
+            // logs a fault of its own either way.
+            try? removeLegacyCredentialFileIfPresent(for: connectionID)
             return credential
         } catch {
             Self.logger.error(
@@ -117,7 +160,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
         }
     }
 
-    private func removeLegacyCredentialFileIfPresent(for connectionID: UUID) {
+    private func removeLegacyCredentialFileIfPresent(for connectionID: UUID) throws {
         let url = credentialFileURL(for: connectionID)
         guard FileManager.default.fileExists(atPath: url.path) else {
             return
@@ -143,9 +186,18 @@ public final class SharedCredentialStore: @unchecked Sendable {
                 let handle = try FileHandle(forWritingTo: url)
                 defer { try? handle.close() }
                 try handle.truncate(atOffset: 0)
-            } catch {
+            } catch let truncationError {
                 Self.logger.fault(
-                    "Left a readable legacy credential file at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
+                    "Left a readable legacy credential file at \(url.path, privacy: .public): \(String(describing: truncationError), privacy: .public)"
+                )
+                // Raised rather than logged alone: the caller has just been told the
+                // credential was stored or deleted, and it is the only one that can put a
+                // readable secret on disk in front of the user. A log entry nobody reads is
+                // how it stayed there.
+                throw LegacyCredentialFileError(
+                    path: url.path,
+                    removalError: error,
+                    truncationError: truncationError
                 )
             }
         }

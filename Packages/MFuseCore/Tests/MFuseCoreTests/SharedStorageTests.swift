@@ -305,6 +305,55 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: legacyURL), Data())
     }
 
+    /// A legacy file that survives both attempts fails the operation that left it there.
+    ///
+    /// The store answers for what it was asked to do with the secret, and a readable
+    /// cleartext copy on disk is not "stored" or "deleted". Logging it and reporting
+    /// success is how it stayed there with nobody told.
+    func testSharedCredentialStoreReportsLegacyCredentialFileItCanNeitherDeleteNorEmpty() throws {
+        let store = makeSharedCredentialStore()
+        let connectionID = UUID()
+        let legacyURL = try store.credentialURL(for: connectionID)
+        let legacyDirectory = legacyURL.deletingLastPathComponent()
+        let fileManager = FileManager.default
+
+        try fileManager.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        let legacyContents = try JSONEncoder().encode(Credential(password: "legacy-secret"))
+        try legacyContents.write(to: legacyURL, options: .atomic)
+
+        try fileManager.setAttributes([.posixPermissions: 0o400], ofItemAtPath: legacyURL.path)
+        try fileManager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: legacyDirectory.path)
+        defer {
+            try? fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: legacyDirectory.path
+            )
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: legacyURL.path)
+        }
+
+        XCTAssertThrowsError(try store.store(Credential(password: "current-secret"), for: connectionID)) { error in
+            guard let error = error as? LegacyCredentialFileError else {
+                return XCTFail("Expected LegacyCredentialFileError, got \(error)")
+            }
+            XCTAssertEqual(error.path, legacyURL.path)
+        }
+        // The Keychain write happened before the cleanup and is not undone: the failure is
+        // about the copy on disk, and putting the secret back there cannot help.
+        XCTAssertEqual(
+            try store.credential(for: connectionID),
+            Credential(password: "current-secret")
+        )
+        XCTAssertEqual(try Data(contentsOf: legacyURL), legacyContents)
+
+        XCTAssertThrowsError(try store.delete(for: connectionID)) { error in
+            XCTAssertTrue(error is LegacyCredentialFileError, "Expected LegacyCredentialFileError, got \(error)")
+        }
+    }
+
     func testMirroredCredentialProviderBackfillsMirrorFromPrimary() async throws {
         let primary = InMemoryCredentialProvider()
         let sharedStore = makeSharedCredentialStore()

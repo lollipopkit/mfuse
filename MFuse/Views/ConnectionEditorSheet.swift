@@ -783,7 +783,15 @@ struct ConnectionEditorSheet: View {
             // Google issues a refresh token on the first consent and may withhold it on a
             // later one. Dropping the stored one then would leave a mount that works until
             // the access token expires and can never renew it.
+            //
+            // Only for the account it was issued for. A refresh token belongs to an
+            // account, not to the OAuth client, and the same client and redirect URI
+            // authorize whichever account the user picks — so carrying it over on a
+            // sign-in that named a different one would renew this mount as the previous
+            // account. An account the sign-in could not name, or one no saved config
+            // records, cannot be shown to match, so nothing is carried over there either.
             guard oauthCredential.password == nil,
+                  authorizedAccountMatchesSavedAccount,
                   let savedRefreshToken = savedCredentialForCurrentTarget?.password else {
                 return oauthCredential
             }
@@ -1017,16 +1025,19 @@ struct ConnectionEditorSheet: View {
             s3AccessKeyID = credential.accessKeyID ?? ""
             s3SecretAccessKey = credential.secretAccessKey ?? ""
         case .oauth:
+            // The account labels come back whichever flow this is, or a save after a round
+            // trip through the picker would drop them from the config — and they are what
+            // the next sign-in is compared against before a stored refresh token may be
+            // carried over to it.
+            oauthAccountName = savedOAuthAccountName
+            oauthAccountEmail = savedOAuthAccountEmail
             // `clearOAuthAuthorizationState()` drops the token on the way out, and the
             // bundled flows read *only* `oauthCredential` to decide whether an account is
             // connected — so without this a round trip through the picker left Save and
             // Test disabled on a mount whose stored token is right here, demanding a
-            // re-authorization for nothing. The account labels come back with it, or a
-            // save would drop them from the config.
+            // re-authorization for nothing.
             guard usesBundledOAuthFlow, oauthCredential == nil else { return }
             oauthCredential = credential
-            oauthAccountName = savedOAuthAccountName
-            oauthAccountEmail = savedOAuthAccountEmail
         case .agent, .anonymous:
             break
         }
@@ -1054,6 +1065,20 @@ struct ConnectionEditorSheet: View {
         return storedCredential
     }
 
+    /// Whether the account the sheet has just authorized is the one the mount was saved
+    /// against.
+    ///
+    /// Compared by email, the one identifier every provider here returns and the saved
+    /// config records. Either side missing means the accounts cannot be shown to be the
+    /// same — a config from before the account was recorded, or a sign-in whose provider
+    /// named no account — and an unproven match is treated as a different account.
+    private var authorizedAccountMatchesSavedAccount: Bool {
+        let authorized = oauthAccountEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let saved = savedOAuthAccountEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !authorized.isEmpty, !saved.isEmpty else { return false }
+        return authorized.caseInsensitiveCompare(saved) == .orderedSame
+    }
+
     /// Drop the credential state an explicit change of method leaves behind.
     ///
     /// `password` goes with the rest, and that is the point: the account password and the
@@ -1075,12 +1100,33 @@ struct ConnectionEditorSheet: View {
         }
     }
 
+    /// Store the authorized account, trimmed and dropped when it holds nothing, so a blank
+    /// value never reads as an account the next sign-in can be compared against.
+    private func addOAuthAccountParameters(to params: inout [String: String]) {
+        if let name = ConnectionConfig.trimmedParameter(oauthAccountName) {
+            params["oauthAccountName"] = name
+        }
+        if let email = ConnectionConfig.trimmedParameter(oauthAccountEmail) {
+            params["oauthAccountEmail"] = email
+        }
+    }
+
     private func buildParameters() throws -> [String: String] {
         var params: [String: String] = [:]
         switch backendType {
         case .s3:
             if !s3Bucket.isEmpty { params["bucket"] = s3Bucket }
-            if s3Region != "us-east-1" { params["region"] = s3Region }
+            // Compared and stored as the backend resolves it, not as it happens to be
+            // typed: `ConnectionConfig.s3Region` trims the value and falls back to the
+            // default when nothing is left, so an emptied or padded field was written
+            // verbatim — `region: ""` or `region: " us-east-1 "` — and then signed with
+            // after a trim that the stored config did not record. A region that resolves
+            // to the default is left out entirely, which is how one was always stored.
+            let resolvedS3Region = ConnectionConfig.trimmedParameter(s3Region)
+                ?? ConnectionConfig.defaultS3Region
+            if resolvedS3Region != ConnectionConfig.defaultS3Region {
+                params["region"] = resolvedS3Region
+            }
             // Trimmed, and dropped when nothing is left: `hasCustomS3Endpoint` reads a
             // whitespace-only field as "no endpoint" and so does `ConnectionConfig`, so
             // storing one raw left a config claiming a custom endpoint it does not have.
@@ -1113,9 +1159,14 @@ struct ConnectionEditorSheet: View {
             }
             params["clientID"] = trimmedClientID
             params["redirectURI"] = trimmedRedirectURI
+            // Recorded for the same reason as the bundled flows below: the client and
+            // redirect URI say which OAuth app was used, not which account authorized it,
+            // and the token is device-local. Without the account written down, a later
+            // sign-in has nothing to compare against and `buildCredential()` cannot tell a
+            // re-authorization of this mount's account from one of somebody else's.
+            addOAuthAccountParameters(to: &params)
         case .dropbox, .oneDrive:
-            if !oauthAccountName.isEmpty { params["oauthAccountName"] = oauthAccountName }
-            if !oauthAccountEmail.isEmpty { params["oauthAccountEmail"] = oauthAccountEmail }
+            addOAuthAccountParameters(to: &params)
         default:
             break
         }
@@ -1319,16 +1370,21 @@ struct ConnectionEditorSheet: View {
                 redirectURI: gdRedirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             let token = try await provider.authorize()
+            // Read because the token itself does not say whose it is. The same client can
+            // authorize a different account, and `buildCredential()` decides from this
+            // whether the refresh token stored for the previous one may be carried over —
+            // pairing that one with this account's access token would renew as the wrong
+            // account. It is also what the row shows and what the saved config records.
+            let account = try await provider.currentAccount(accessToken: token.accessToken)
             // Split the way the backend reads them: `token` is the access token it presents,
-            // `password` the refresh token it renews with. Google returns no profile with
-            // either, so the account has no name to show.
+            // `password` the refresh token it renews with.
             return OAuthAuthorizationResult(
                 credential: Credential(
                     password: token.refreshToken,
                     token: token.accessToken
                 ),
-                displayName: "",
-                email: nil
+                displayName: account.displayName,
+                email: account.email
             )
         default:
             throw RemoteFileSystemError.unsupported(

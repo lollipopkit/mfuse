@@ -41,6 +41,7 @@
 "credential.error.unsupportedPrimaryProvider" = "目前的憑證提供者不支援 iCloud Keychain 遷移。";
 "credential.error.modeTransitionFailed" = "憑證模式切換失敗：%1$@。回復失敗：%2$@";
 "credential.error.modeTransitionCleanupFailed" = "憑證已遷移，但舊副本未能刪除：%@";
+"credential.error.legacyFileNotRemoved" = "%1$@ 的舊憑證檔案仍可讀取：既無法刪除（%2$@），也無法清空（%3$@）。請刪除該檔案，避免密鑰以明文形式留在磁碟上。";
 "connectionManager.error.cleanupFailed" = "移除前清理連線 %@ 失敗";
 "connectionManager.error.removalInProgress" = "連線 %@ 正在移除中，請於完成後重新儲存";
 "connectionManager.error.connectionNotFound" = "連線 %@ 已不存在";
