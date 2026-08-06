@@ -1,6 +1,7 @@
 import Foundation
 import AuthenticationServices
 import CryptoKit
+import MFuseCore
 import OSLog
 import Security
 #if canImport(AppKit)
@@ -192,6 +193,21 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
             let body = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let bodyDescription = body?.isEmpty == false ? body! : "<empty response body>"
+            // A grant Google has stopped honouring — access revoked, password changed,
+            // `invalid_grant` — is refused with 400 or 401, and nothing but a new sign-in
+            // brings it back. Reported as an authentication failure so the caller that
+            // cannot ask the user itself says so too: `connect()` rethrows this untouched,
+            // and the File Provider extension maps it to `notAuthenticated`, which is what
+            // prompts for the sign-in. A `GoogleDriveError` reaches that mapping unmatched
+            // and reports the mount as unreachable instead, sending the user to look at a
+            // network that is fine. Anything else the token endpoint answers is Google
+            // failing to serve the request, not the grant being gone, and stays as it was.
+            Self.logger.error(
+                "Google Drive token refresh failed with HTTP \(http.statusCode, privacy: .public)"
+            )
+            if http.statusCode == 400 || http.statusCode == 401 {
+                throw RemoteFileSystemError.authenticationFailed
+            }
             throw GoogleDriveError.oauthFailed(
                 "Token refresh failed with HTTP \(http.statusCode): \(bodyDescription)"
             )

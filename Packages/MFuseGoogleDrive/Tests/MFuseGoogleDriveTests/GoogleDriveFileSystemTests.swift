@@ -1,4 +1,5 @@
 import Foundation
+import MFuseCore
 import Testing
 
 @testable import MFuseGoogleDrive
@@ -47,6 +48,50 @@ import MFuseTestSupport
 
     await #expect(throws: GoogleDriveError.self) {
         _ = try await provider.currentAccount(accessToken: "expired-token")
+    }
+}
+
+/// A refresh token Google no longer honours has to read as an authentication failure: the
+/// File Provider extension maps that one to `notAuthenticated`, which is what asks the user
+/// to sign in again. Anything else leaves the mount reporting an unreachable server for a
+/// grant that only a new sign-in can replace.
+@Test func googleOAuthProviderReportsRevokedRefreshTokenAsAuthenticationFailure() async throws {
+    let session = try makeMockSession { request in
+        #expect(request.url?.absoluteString == "https://oauth2.googleapis.com/token")
+        return .http(status: 400, body: Data("{\"error\":\"invalid_grant\"}".utf8))
+    }
+
+    let provider = GoogleOAuthProvider(
+        clientID: "client-id",
+        redirectURI: "com.example.mfuse:/oauth",
+        session: session
+    )
+
+    do {
+        _ = try await provider.refresh(refreshToken: "revoked-refresh-token")
+        Issue.record("Expected RemoteFileSystemError.authenticationFailed")
+    } catch RemoteFileSystemError.authenticationFailed {
+        // Expected.
+    } catch {
+        Issue.record("Expected RemoteFileSystemError.authenticationFailed, got \(error)")
+    }
+}
+
+/// Google failing to answer is not the grant being gone: reporting it as an authentication
+/// failure would send the user through a sign-in that changes nothing.
+@Test func googleOAuthProviderKeepsServerSideRefreshFailureDistinct() async throws {
+    let session = try makeMockSession { _ in
+        .http(status: 503, body: Data("{\"error\":\"backend_error\"}".utf8))
+    }
+
+    let provider = GoogleOAuthProvider(
+        clientID: "client-id",
+        redirectURI: "com.example.mfuse:/oauth",
+        session: session
+    )
+
+    await #expect(throws: GoogleDriveError.self) {
+        _ = try await provider.refresh(refreshToken: "refresh-token")
     }
 }
 
