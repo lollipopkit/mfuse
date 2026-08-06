@@ -88,6 +88,17 @@ public final class DomainManager: ObservableObject {
         let existingStatesByID = Dictionary(
             uniqueKeysWithValues: existingDomainStates.map { ($0.identifier, $0) }
         )
+        // Captured with the domain states above, because the disconnect below is decided
+        // from that same snapshot and everything between the two suspends —
+        // `ensureRegistered` alone re-adds the domain and can spend seconds doing it. A
+        // mount the user starts inside that window is invisible to the snapshot, so the
+        // domain would be classified as one to leave disconnected and torn down again
+        // right after it came up. Comparing against what was already active when the
+        // snapshot was taken is what tells that mount apart from one this pass simply has
+        // not observed yet.
+        let activeMountIDsAtSnapshot = Set(
+            connectionManager.connections.map(\.id).filter(isActiveMount)
+        )
 
         for id in connectionManager.connections.map(\.id) {
             let config: ConnectionConfig
@@ -116,6 +127,12 @@ public final class DomainManager: ObservableObject {
             }
 
             if shouldRemainDisconnected {
+                guard !isActiveMount(config.id) || activeMountIDsAtSnapshot.contains(config.id) else {
+                    Self.logger.notice(
+                        "Leaving \(config.domainIdentifier, privacy: .public) connected: it was mounted during reconciliation"
+                    )
+                    continue
+                }
                 do {
                     try await mountProvider.disconnect(config: config)
                 } catch {
@@ -166,6 +183,16 @@ public final class DomainManager: ObservableObject {
             "Leaving \(id.uuidString, privacy: .public) to the save that keeps editing it during reconciliation"
         )
         return nil
+    }
+
+    /// Whether the app is currently driving a mount for this connection.
+    ///
+    /// `.mounting` counts as much as `.mounted`: a connect still in its handshake has
+    /// already re-registered the domain, so disconnecting it would take down a mount that
+    /// is on its way up.
+    private func isActiveMount(_ id: UUID) -> Bool {
+        let state = connectionManager.effectiveMountState(for: id)
+        return state.isMounted || state == .mounting
     }
 
     private func removeStaleDomainsAndSymlinks() async throws {

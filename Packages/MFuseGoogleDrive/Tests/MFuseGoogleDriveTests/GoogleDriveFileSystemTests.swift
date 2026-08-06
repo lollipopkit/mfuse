@@ -55,10 +55,14 @@ import MFuseTestSupport
 /// File Provider extension maps that one to `notAuthenticated`, which is what asks the user
 /// to sign in again. Anything else leaves the mount reporting an unreachable server for a
 /// grant that only a new sign-in can replace.
-@Test func googleOAuthProviderReportsRevokedRefreshTokenAsAuthenticationFailure() async throws {
+///
+/// Both statuses are exercised because Google refuses `invalid_grant` with either one, and
+/// the caller cannot tell which it will get.
+@Test(arguments: [400, 401])
+func googleOAuthProviderReportsRevokedRefreshTokenAsAuthenticationFailure(status: Int) async throws {
     let session = try makeMockSession { request in
         #expect(request.url?.absoluteString == "https://oauth2.googleapis.com/token")
-        return .http(status: 400, body: Data("{\"error\":\"invalid_grant\"}".utf8))
+        return .http(status: status, body: Data("{\"error\":\"invalid_grant\"}".utf8))
     }
 
     let provider = GoogleOAuthProvider(
