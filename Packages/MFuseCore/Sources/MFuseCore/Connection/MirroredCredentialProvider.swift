@@ -41,13 +41,14 @@ private struct ModeTransitionRollbackError: Error, LocalizedError {
     }
 }
 
-/// The credentials were written to the mode the user asked for, but the copies they were
-/// moved from could not be removed.
+/// The mode transition did not complete: the copies in the mode being left could not be
+/// removed, so the transition was rolled back.
 ///
-/// Reported rather than logged: what that leaves is a credential in both Keychain
-/// partitions — a secret still synchronized to iCloud after the user turned that off, and
-/// a mixed state `credentialSyncState(for:)` cannot resolve on its own. The transition is
-/// rolled back before this is thrown, so the provider is back on the mode it started from.
+/// Reported rather than logged: what an unremoved copy leaves is a credential in both
+/// Keychain partitions — a secret still synchronized to iCloud after the user turned that
+/// off, and a mixed state `credentialSyncState(for:)` cannot resolve on its own. The
+/// rollback runs before this is thrown, so the provider is back on the mode it started
+/// from and the user can retry the switch.
 public struct ModeTransitionCleanupError: Error, LocalizedError {
     public let failures: [String]
 
@@ -58,7 +59,7 @@ public struct ModeTransitionCleanupError: Error, LocalizedError {
     public var errorDescription: String? {
         MFuseCoreL10n.string(
             "credential.error.modeTransitionCleanupFailed",
-            fallback: "Credentials were moved, but the old copies could not be removed: %@",
+            fallback: "The credential mode change was rolled back because the old copies could not be removed: %@",
             failures.joined(separator: " ")
         )
     }

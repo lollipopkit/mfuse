@@ -40,7 +40,7 @@
 "icloud.sync.stateChangedDuringSync" = "iCloud 同步期间本地或云端连接状态发生变化，请重试。";
 "credential.error.unsupportedPrimaryProvider" = "当前凭证提供器不支持 iCloud Keychain 迁移。";
 "credential.error.modeTransitionFailed" = "凭证模式切换失败：%1$@。回滚失败：%2$@";
-"credential.error.modeTransitionCleanupFailed" = "凭证已迁移，但旧副本未能删除：%@";
+"credential.error.modeTransitionCleanupFailed" = "旧副本未能删除，凭证模式变更已回滚：%@";
 "credential.error.legacyFileNotRemoved" = "%1$@ 处的旧凭证文件仍可读取：既无法删除（%2$@），也无法清空（%3$@）。请删除该文件，避免密钥以明文形式留在磁盘上。";
 "connectionManager.error.cleanupFailed" = "移除前清理连接 %@ 失败";
 "connectionManager.error.removalInProgress" = "连接 %@ 正在被移除，请在完成后重新保存";

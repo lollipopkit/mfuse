@@ -40,7 +40,7 @@
 "icloud.sync.stateChangedDuringSync" = "iCloud 동기화 중 로컬 또는 클라우드 연결 상태가 변경되었습니다. 다시 시도하세요.";
 "credential.error.unsupportedPrimaryProvider" = "현재 자격 증명 공급자는 iCloud 키체인 마이그레이션을 지원하지 않습니다.";
 "credential.error.modeTransitionFailed" = "자격 증명 모드 전환에 실패했습니다: %1$@. 롤백에도 실패했습니다: %2$@";
-"credential.error.modeTransitionCleanupFailed" = "자격 증명은 이동했지만 이전 복사본을 삭제하지 못했습니다: %@";
+"credential.error.modeTransitionCleanupFailed" = "이전 복사본을 삭제하지 못해 자격 증명 모드 변경이 롤백되었습니다: %@";
 "credential.error.legacyFileNotRemoved" = "%1$@의 이전 자격 증명 파일을 아직 읽을 수 있습니다. 삭제(%2$@)와 비우기(%3$@) 모두 실패했습니다. 비밀 정보가 평문으로 디스크에 남지 않도록 이 파일을 삭제하세요.";
 "connectionManager.error.cleanupFailed" = "삭제 전에 연결 %@ 정리에 실패했습니다";
 "connectionManager.error.removalInProgress" = "연결 %@을(를) 제거하는 중입니다. 완료된 후 다시 저장하세요";

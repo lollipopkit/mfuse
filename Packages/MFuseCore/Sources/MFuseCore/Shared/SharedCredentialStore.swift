@@ -300,16 +300,34 @@ public final class SharedCredentialStore: @unchecked Sendable {
         }
     }
 
+    /// Deletes the account from every legacy partition, reporting afterwards.
+    ///
+    /// A refusal in one combination does not stop the others: returning at the first one
+    /// left the remaining partitions holding a credential the caller was just told is
+    /// deleted, and nothing else sweeps them. The first failure is what is thrown, so a
+    /// delete that could not finish still fails; the rest are logged.
     private func deleteLegacyKeychainData(account: String) throws {
+        var failures: [Error] = []
         for legacyAccessGroup in legacyAccessGroups {
             for legacySyncMode in legacySyncModes {
-                try deleteKeychainData(
-                    account: account,
-                    accessGroup: legacyAccessGroup,
-                    useDataProtectionKeychain: true,
-                    syncMode: legacySyncMode
-                )
+                do {
+                    try deleteKeychainData(
+                        account: account,
+                        accessGroup: legacyAccessGroup,
+                        useDataProtectionKeychain: true,
+                        syncMode: legacySyncMode
+                    )
+                } catch {
+                    Self.logger.error(
+                        "Failed to delete legacy shared credential for \(account, privacy: .public) in \(legacyAccessGroup, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                    failures.append(error)
+                }
             }
+        }
+
+        if let firstFailure = failures.first {
+            throw firstFailure
         }
     }
 

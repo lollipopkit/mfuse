@@ -148,7 +148,15 @@ struct MFuseApp: App {
         // Menu bar extra. Filled, because the menu bar is where it sits next to other
         // apps' icons — the outline variant reads as lighter than everything around it.
         MenuBarExtra("MFuse", systemImage: "externaldrive.connected.to.line.below.fill") {
-            MenuBarView()
+            // The same failure the window alerts on, repeated here because the window is
+            // not always there: closing it leaves MFuse in the menu bar, and a retry that
+            // failed after that had nowhere left to report and nowhere to be retried from
+            // until a window was opened again.
+            MenuBarView(
+                domainSyncFailure: startupDomainSyncFailure,
+                onRetryDomainSync: { await retryDomainSync() },
+                onDismissDomainSyncFailure: { startupDomainSyncFailure = nil }
+            )
                 .environmentObject(connectionManager)
                 .environmentObject(appSettings)
                 .environment(\.credentialProvider, credentialProvider)
@@ -176,11 +184,7 @@ struct MFuseApp: App {
                 try await domainManager.syncDomains()
             } catch {
                 NSLog("MFuse domain sync failed during launch: %@", String(describing: error))
-                startupDomainSyncFailure = AppL10n.string(
-                    "app.error.startupDomainSyncFailed",
-                    fallback: "MFuse could not reconcile its File Provider domains at launch: %@. Mounts may be missing or show the wrong state until this succeeds.",
-                    error.localizedDescription
-                )
+                startupDomainSyncFailure = Self.startupDomainSyncFailureMessage(error)
             }
             await connectionManager.syncMounts()
             await connectionManager.autoMountConfiguredConnections()
@@ -196,6 +200,14 @@ struct MFuseApp: App {
 
         AppDelegate.allowsTermination = true
         NSApp.terminate(nil)
+    }
+
+    private static func startupDomainSyncFailureMessage(_ error: Error) -> String {
+        AppL10n.string(
+            "app.error.startupDomainSyncFailed",
+            fallback: "MFuse could not reconcile its File Provider domains at launch: %@. Mounts may be missing or show the wrong state until this succeeds.",
+            error.localizedDescription
+        )
     }
 
     private var startupDomainSyncFailureIsPresented: Binding<Bool> {
@@ -221,11 +233,7 @@ struct MFuseApp: App {
             await connectionManager.syncMounts()
         } catch {
             NSLog("MFuse domain sync retry failed: %@", String(describing: error))
-            startupDomainSyncFailure = AppL10n.string(
-                "app.error.startupDomainSyncFailed",
-                fallback: "MFuse could not reconcile its File Provider domains at launch: %@. Mounts may be missing or show the wrong state until this succeeds.",
-                error.localizedDescription
-            )
+            startupDomainSyncFailure = Self.startupDomainSyncFailureMessage(error)
         }
     }
 }

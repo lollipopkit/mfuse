@@ -9,15 +9,25 @@ struct MenuBarView: View {
     private static let rowsBeforeScrolling = 7
     private static let scrollingListHeight: CGFloat = 320
 
+    /// What launch reconciliation left unresolved, or `nil` once it is resolved or dismissed.
+    let domainSyncFailure: String?
+    let onRetryDomainSync: () async -> Void
+    let onDismissDomainSyncFailure: () -> Void
+
     @EnvironmentObject var connectionManager: ConnectionManager
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var isQuitting = false
+    @State private var isRetryingDomainSync = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             header
+
+            if let domainSyncFailure {
+                domainSyncFailureBanner(domainSyncFailure)
+            }
 
             // Content
             if connectionManager.connections.isEmpty {
@@ -56,6 +66,53 @@ struct MenuBarView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    // MARK: - Domain Sync Failure
+
+    /// Reconciliation registers the domains and clears the stale ones, so a failure leaves
+    /// the rows reporting mounts the system does not have — or missing ones it does. It
+    /// stays here until it is retried successfully or dismissed, because nothing else runs
+    /// reconciliation before the next launch.
+    private func domainSyncFailureBanner(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                Spacer()
+                Button(AppL10n.string("common.action.dismiss", fallback: "Dismiss")) {
+                    onDismissDomainSyncFailure()
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11))
+                .disabled(isRetryingDomainSync)
+
+                if isRetryingDomainSync {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(AppL10n.string("common.action.retry", fallback: "Retry"))
+                } else {
+                    Button(AppL10n.string("common.action.retry", fallback: "Retry")) {
+                        isRetryingDomainSync = true
+                        Task {
+                            await onRetryDomainSync()
+                            isRetryingDomainSync = false
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
     }
 
     // MARK: - Empty State

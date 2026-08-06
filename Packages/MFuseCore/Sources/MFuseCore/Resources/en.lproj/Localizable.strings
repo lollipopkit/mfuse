@@ -40,7 +40,7 @@
 "icloud.sync.stateChangedDuringSync" = "Local or cloud connection state changed during iCloud synchronization. Please retry.";
 "credential.error.unsupportedPrimaryProvider" = "The current credential provider does not support iCloud Keychain migration.";
 "credential.error.modeTransitionFailed" = "Credential mode transition failed: %1$@. Rollback failed: %2$@";
-"credential.error.modeTransitionCleanupFailed" = "Credentials were moved, but the old copies could not be removed: %@";
+"credential.error.modeTransitionCleanupFailed" = "The credential mode change was rolled back because the old copies could not be removed: %@";
 "credential.error.legacyFileNotRemoved" = "A legacy credential file at %1$@ is still readable: it could not be removed (%2$@) or emptied (%3$@). Delete it to keep the secret from staying on disk in cleartext.";
 "connectionManager.error.cleanupFailed" = "Failed to clean up connection %@ before removal";
 "connectionManager.error.removalInProgress" = "Connection %@ is being removed; save it again once that finishes";
