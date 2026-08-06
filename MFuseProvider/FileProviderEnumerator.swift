@@ -8,7 +8,10 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     private static let enumerationTimeoutSeconds = 15.0
     private let containerID: NSFileProviderItemIdentifier
     private let domainIdentifier: String
-    private let contextProvider: @Sendable () async throws -> FileProviderRuntimeContext
+    /// Hands out the runtime context as a lease, so an enumeration in progress is counted:
+    /// extension teardown waits for the leases it has given out before it closes the
+    /// connection, the caches and the anchor store this enumeration reads and writes.
+    private let contextProvider: @Sendable () async throws -> FileProviderRuntimeContextLease
     private let errorMapper: @Sendable (Error) -> NSError
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse.provider", category: "Enumerator")
     private let taskLock = NSLock()
@@ -20,7 +23,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     init(
         containerID: NSFileProviderItemIdentifier,
         domainIdentifier: String,
-        contextProvider: @escaping @Sendable () async throws -> FileProviderRuntimeContext,
+        contextProvider: @escaping @Sendable () async throws -> FileProviderRuntimeContextLease,
         errorMapper: @escaping @Sendable (Error) -> NSError
     ) {
         self.containerID = containerID
@@ -89,7 +92,9 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 logger.info(
                     "Starting enumerateItems for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public)"
                 )
-                let context = try await contextProvider()
+                let lease = try await contextProvider()
+                defer { lease.finish() }
+                let context = lease.context
 
                 // Check cache first
                 if let cached = await context.cache.children(of: path) {
@@ -182,7 +187,9 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 logger.info(
                     "Starting enumerateChanges for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public)"
                 )
-                let context = try await contextProvider()
+                let lease = try await contextProvider()
+                defer { lease.finish() }
+                let context = lease.context
                 let requestedAnchor = try Self.decodeSyncAnchor(anchor)
                 let currentAnchor = await context.anchorStore.currentAnchor(for: domainIdentifier)
 
@@ -274,8 +281,9 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     public func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
         Task {
             do {
-                let context = try await contextProvider()
-                let anchor = await context.anchorStore.currentAnchor(for: domainIdentifier)
+                let lease = try await contextProvider()
+                defer { lease.finish() }
+                let anchor = await lease.context.anchorStore.currentAnchor(for: domainIdentifier)
                 guard anchor != 0 else {
                     completionHandler(nil)
                     return

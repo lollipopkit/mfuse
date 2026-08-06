@@ -65,6 +65,83 @@ actor BootstrapTaskStore {
     }
 }
 
+/// Counts the operations holding the runtime context, so teardown can wait for them
+/// instead of closing what they are using.
+///
+/// The count is raised *before* the context is asked for and lowered when the operation
+/// leaves, whichever way it leaves. Teardown shuts the door first and drains second, so an
+/// operation that arrives in between is refused a context rather than missed by the drain.
+final class RuntimeContextActivity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeCount = 0
+    /// Single-consumer: `invalidate()` is the only waiter, and waits once per instance.
+    private var idleWaiter: CheckedContinuation<Void, Never>?
+    private var isWaitCancelled = false
+
+    func begin() {
+        lock.withLock { activeCount += 1 }
+    }
+
+    func end() {
+        let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
+            activeCount -= 1
+            guard activeCount == 0 else { return nil }
+            return takeIdleWaiterLocked()
+        }
+        waiter?.resume()
+    }
+
+    /// Wait until nothing holds the context any more.
+    ///
+    /// Cancellation resumes the waiter here rather than leaving it to the last operation:
+    /// the caller bounds this wait, and a backend that never returns from a cancelled read
+    /// would otherwise strand the continuation for the life of the process.
+    func waitUntilIdle() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let isIdle: Bool = lock.withLock {
+                    guard activeCount > 0, !isWaitCancelled else { return true }
+                    idleWaiter = continuation
+                    return false
+                }
+                if isIdle {
+                    continuation.resume()
+                }
+            }
+        } onCancel: {
+            let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
+                isWaitCancelled = true
+                return takeIdleWaiterLocked()
+            }
+            waiter?.resume()
+        }
+    }
+
+    private func takeIdleWaiterLocked() -> CheckedContinuation<Void, Never>? {
+        let waiter = idleWaiter
+        idleWaiter = nil
+        return waiter
+    }
+}
+
+/// One operation's hold on the runtime context, counted for the duration of that operation.
+///
+/// `finish()` is called exactly once, from a `defer` at the point the lease is taken, so the
+/// hold ends whether the operation returned, threw or was cancelled.
+struct FileProviderRuntimeContextLease: Sendable {
+    let context: FileProviderRuntimeContext
+    private let activity: RuntimeContextActivity
+
+    init(context: FileProviderRuntimeContext, activity: RuntimeContextActivity) {
+        self.context = context
+        self.activity = activity
+    }
+
+    func finish() {
+        activity.end()
+    }
+}
+
 /// Raised for work that arrives after the extension instance has been invalidated.
 struct FileProviderExtensionInvalidated: LocalizedError {
     var errorDescription: String? {
@@ -258,6 +335,7 @@ func withOperationTimeout<T: Sendable>(
 public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, NSFileProviderDomainState {
 
     private static let bootstrapTimeoutSeconds = 15.0
+    private static let invalidationDrainTimeoutSeconds = 5.0
     private static let bootstrapTransientRetryCount = 2
     private static let bootstrapTransientRetryDelayNanoseconds: UInt64 = 750_000_000
     private static let contentCacheStoreRetryCount = 2
@@ -315,6 +393,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse.provider", category: "Extension")
     private let bootstrapTaskStore = BootstrapTaskStore()
     private let cleanupTaskStore = CleanupTaskStore()
+    private let runtimeContextActivity = RuntimeContextActivity()
 
     public required init(domain: NSFileProviderDomain) {
         self.domain = domain
@@ -343,6 +422,14 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             let bootstrapTask = await self.bootstrapTaskStore.takeForInvalidation()
             bootstrapTask?.cancel()
             guard let bootstrapTask, let context = try? await bootstrapTask.value else { return }
+
+            // Drained after the door is shut, and before anything is closed. An operation
+            // that is already running holds the same connection, caches and anchor store
+            // this is about to close: closing underneath it dropped the cache invalidation
+            // a delete or a move makes on its way out — `close()` leaves every later write
+            // a no-op — so the next extension instance opened the same database and served
+            // the entry for an item that is no longer there.
+            await self.awaitInFlightOperations()
 
             try? await context.fileSystem.disconnect()
             await context.cache.close()
@@ -396,7 +483,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     return
                 }
 
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let path = identifier.remotePath
                 let remoteItem = try await context.fileSystem.itemInfo(at: path)
                 let parentID = parentIdentifier(for: path)
@@ -422,7 +511,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 100 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let path = itemIdentifier.remotePath
                 let cachedItem = await context.cache.get(path: path)
                 if let cachedItem,
@@ -481,7 +572,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 1 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let parentPath = itemTemplate.parentItemIdentifier.remotePath
                 let newPath = parentPath.appending(itemTemplate.filename)
                 let createdFileURL: URL?
@@ -551,7 +644,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 1 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 var currentPath = item.itemIdentifier.remotePath
                 var updatedFileURL: URL?
                 let originalPath = currentPath
@@ -619,7 +714,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 1 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let path = identifier.remotePath
                 let deletedItem = await cachedOrRemoteItem(at: path, using: context)
                 let descendantItems = await descendantItemsForDeletion(
@@ -661,7 +758,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             guard let self else {
                 throw CancellationError()
             }
-            return try await self.runtimeContext()
+            return try await self.runtimeContextLease()
         } errorMapper: { [weak self] error in
             guard let self else {
                 return error as NSError
@@ -855,6 +952,45 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         } catch {
             await bootstrapTaskStore.clearIfCurrent(task)
             throw error
+        }
+    }
+
+    /// Take the runtime context for one operation, and count that operation while it runs.
+    ///
+    /// Counted before the context is asked for: raising it afterwards leaves a window in
+    /// which teardown sees nothing in flight and starts closing, while this operation is
+    /// about to be handed the context it is closing. `BootstrapTaskStore` refuses a context
+    /// from the moment teardown takes over, so an operation that lands inside the drain is
+    /// turned away instead.
+    private func runtimeContextLease() async throws -> FileProviderRuntimeContextLease {
+        runtimeContextActivity.begin()
+        do {
+            let context = try await runtimeContext()
+            return FileProviderRuntimeContextLease(context: context, activity: runtimeContextActivity)
+        } catch {
+            runtimeContextActivity.end()
+            throw error
+        }
+    }
+
+    /// Wait for the operations still holding the runtime context, but not indefinitely.
+    ///
+    /// The system releases this instance shortly after `invalidate()`; a backend that never
+    /// returns from a cancelled read must not keep the metadata cache and the anchor store
+    /// open for the rest of the process's life, so the wait is bounded and what it gave up
+    /// on is logged.
+    private func awaitInFlightOperations() async {
+        do {
+            try await withOperationTimeout(
+                seconds: Self.invalidationDrainTimeoutSeconds,
+                operation: "waiting for in-flight operations on domain \(domain.identifier.rawValue)"
+            ) { [runtimeContextActivity] in
+                await runtimeContextActivity.waitUntilIdle()
+            }
+        } catch {
+            logger.error(
+                "Closing the runtime context for domain \(self.domain.identifier.rawValue, privacy: .public) with operations still in flight: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 
