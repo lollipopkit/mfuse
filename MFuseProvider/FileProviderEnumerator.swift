@@ -35,6 +35,17 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 
     private static let pageSize = 100
 
+    /// The anchor is this container's, not the whole domain's.
+    ///
+    /// One anchor per domain was advanced by whichever container enumerated changes first,
+    /// while the baseline it snapshotted was only that container's. Every other container
+    /// then arrived holding the anchor it had been given, found it no longer current, and
+    /// was rejected as expired — a full re-enumeration for a directory nothing had changed.
+    /// A container's anchor now moves only when that container's own changes are reported.
+    private var anchorKey: String {
+        "\(domainIdentifier)|\(containerID.rawValue)"
+    }
+
     public func invalidate() {
         let itemTask: Task<Void, Never>?
         let changesTask: Task<Void, Never>?
@@ -80,10 +91,15 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         let task = Task { [weak self] in
             var didFinish = false
             defer {
+                // Only the pass that still owns this request answers it. A cancelled pass
+                // resuming after its replacement had taken over used to complete the
+                // observer with a cancellation for an enumeration the replacement was still
+                // running, racing its results with an error for a request it did not own.
+                let isCurrent = self?.isCurrentItemEnumerationTask(id: taskID) ?? false
                 if let self {
                     self.clearItemEnumerationTask(id: taskID)
                 }
-                if !didFinish {
+                if !didFinish, isCurrent {
                     observer.finishEnumeratingWithError(Self.cancellationError())
                 }
             }
@@ -128,6 +144,11 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 logger.info(
                     "Fetched enumerateItems for domain \(self.domainIdentifier, privacy: .public) at \(path.absoluteString, privacy: .public) count=\(remoteItems.count)"
                 )
+                // `putAll` replaces the directory's cached children, so a pass that has been
+                // replaced must not write its own: the list it fetched is older than
+                // whatever replaced it, and the next enumeration would serve items that had
+                // already been deleted or moved.
+                guard !Task.isCancelled, self.isCurrentItemEnumerationTask(id: taskID) else { return }
                 try await context.cache.putAll(items: remoteItems, parent: path)
 
                 let items = remoteItems.map { item in
@@ -175,10 +196,13 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         let task = Task { [weak self] in
             var didFinish = false
             defer {
+                // Owned the same way the full enumeration owns its completion: a pass that
+                // has been replaced answers for nothing.
+                let isCurrent = self?.isCurrentChangesEnumerationTask(id: taskID) ?? false
                 if let self {
                     self.clearChangesEnumerationTask(id: taskID)
                 }
-                if !didFinish {
+                if !didFinish, isCurrent {
                     observer.finishEnumeratingWithError(Self.cancellationError())
                 }
             }
@@ -191,7 +215,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 defer { lease.finish() }
                 let context = lease.context
                 let requestedAnchor = try Self.decodeSyncAnchor(anchor)
-                let currentAnchor = await context.anchorStore.currentAnchor(for: domainIdentifier)
+                let currentAnchor = await context.anchorStore.currentAnchor(for: anchorKey)
 
                 guard requestedAnchor == currentAnchor else {
                     logger.error(
@@ -231,12 +255,18 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                     observer.didDeleteItems(withIdentifiers: changeSet.deletedIdentifiers)
                 }
 
+                // Checked before the shared state is written, not only before the observer is
+                // told. A replaced or cancelled pass that wrote here anyway replaced this
+                // directory's baseline and moved its anchor for a result nobody was ever
+                // given: the pass that took over then compared against a snapshot that was
+                // never reported and called the difference "no changes".
+                guard !Task.isCancelled, self.isCurrentChangesEnumerationTask(id: taskID) else { return }
                 let shouldAdvanceAnchor = currentAnchor == 0 || changeSet.hasChanges
                 try await context.cache.putAll(items: remoteItems, parent: path)
 
                 let resultingAnchor: UInt64
                 if shouldAdvanceAnchor {
-                    resultingAnchor = try await context.anchorStore.incrementAnchor(for: domainIdentifier)
+                    resultingAnchor = try await context.anchorStore.incrementAnchor(for: anchorKey)
                 } else {
                     resultingAnchor = currentAnchor
                 }
@@ -283,7 +313,7 @@ public final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             do {
                 let lease = try await contextProvider()
                 defer { lease.finish() }
-                let anchor = await lease.context.anchorStore.currentAnchor(for: domainIdentifier)
+                let anchor = await lease.context.anchorStore.currentAnchor(for: anchorKey)
                 guard anchor != 0 else {
                     completionHandler(nil)
                     return

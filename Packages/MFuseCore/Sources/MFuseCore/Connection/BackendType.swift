@@ -109,7 +109,10 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
     /// Auth methods applicable to this backend type.
     public var supportedAuthMethods: [AuthMethod] {
         switch self {
-        case .sftp:        return [.password, .publicKey, .agent]
+        // No `.agent`: `SFTPFileSystem` refuses it outright, so offering it in the editor
+        // let a user save and auto-mount a connection that can only ever fail to connect.
+        // TODO: put it back once the SFTP runtime speaks to an SSH agent.
+        case .sftp:        return [.password, .publicKey]
         case .s3:          return [.accessKey]
         case .webdav:      return [.password, .anonymous]
         case .smb:         return [.password]

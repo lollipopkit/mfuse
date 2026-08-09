@@ -83,6 +83,14 @@ public final class SharedCredentialStore: @unchecked Sendable {
 
     public func credential(for connectionID: UUID) throws -> Credential? {
         if let data = try readKeychainData(account: connectionID.uuidString) {
+            // Tried again on every read, not only on the read that migrated the file. A
+            // cleanup that failed during migration was never retried: the Keychain item
+            // exists from then on, so this method answers from it and the cleartext copy
+            // stayed on disk for as long as nobody happened to save that connection again.
+            // Still best-effort — the caller is the extension about to mount, and a file
+            // this cannot remove is not a reason to take the mount down — but it is a
+            // standing attempt rather than a single one, and each failure logs a fault.
+            try? removeLegacyCredentialFileIfPresent(for: connectionID)
             do {
                 return try JSONDecoder().decode(Credential.self, from: data)
             } catch {

@@ -225,16 +225,57 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
             // pairs a different server and left a working mount down for nothing.
             guard Self.comparableS3Endpoint(s3Endpoint) == Self.comparableS3Endpoint(other.s3Endpoint),
                   s3Bucket == other.s3Bucket,
-                  s3Region == other.s3Region,
-                  s3UsesPathStyle == other.s3UsesPathStyle else {
+                  s3Region == other.s3Region else {
                 return false
             }
-            return parameters.filter { !Self.s3AddressingParameterKeys.contains($0.key) }
-                == other.parameters.filter { !Self.s3AddressingParameterKeys.contains($0.key) }
+            // Only where it reaches the wire. Soto is handed the addressing style with a
+            // custom endpoint and nowhere else — against AWS itself the flag is dropped —
+            // so a legacy row carrying `pathStyle=true` with no endpoint builds the same
+            // client as one without the key, and calling the two different servers tore
+            // down and rebuilt a mount that had not moved.
+            if s3Endpoint != nil || other.s3Endpoint != nil,
+               s3UsesPathStyle != other.s3UsesPathStyle {
+                return false
+            }
+            return Self.comparableParameters(parameters, excluding: Self.s3AddressingParameterKeys)
+                == Self.comparableParameters(other.parameters, excluding: Self.s3AddressingParameterKeys)
         }
 
-        return parameters == other.parameters
+        return Self.comparableParameters(parameters) == Self.comparableParameters(other.parameters)
     }
+
+    /// Parameters as the editor would write them back.
+    ///
+    /// The account labels are stored as typed and read back trimmed — `displaySubtitle` and
+    /// every other reader go through `trimmedParameter` — so a legacy or synced row holding
+    /// `" user@example.com "` names the same account as the normalized one beside it.
+    /// Comparing the dictionaries raw called that a move to another account, which for the
+    /// OAuth backends is what leaves a mount down and its token unusable.
+    private static func comparableParameters(
+        _ parameters: [String: String],
+        excluding excludedKeys: Set<String> = []
+    ) -> [String: String] {
+        parameters.reduce(into: [String: String]()) { result, entry in
+            guard !excludedKeys.contains(entry.key) else { return }
+            guard normalizedParameterKeys.contains(entry.key) else {
+                result[entry.key] = entry.value
+                return
+            }
+            // A key whose value is only whitespace reads as absent everywhere else, so it
+            // is dropped rather than compared against a row that never had it.
+            if let trimmed = trimmedParameter(entry.value) {
+                result[entry.key] = trimmed
+            }
+        }
+    }
+
+    /// Parameters every reader takes through `trimmedParameter`.
+    private static let normalizedParameterKeys: Set<String> = [
+        "oauthAccountName",
+        "oauthAccountEmail",
+        "clientID",
+        "redirectURI"
+    ]
 
     /// Whether this config logs in without a name the backend would send.
     ///
@@ -244,13 +285,6 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         authMethod == .anonymous && backendType.supportedAuthMethods.contains(.anonymous)
     }
 
-    /// An endpoint reduced to the address it reaches, for comparing two of them.
-    ///
-    /// A port that only repeats the scheme's default is not part of that address:
-    /// `http://host:80` and `http://host` reach one server, as do `https://host:443` and
-    /// `https://host`. Comparing them as written called one a move to another server and
-    /// left a working mount down. Any other port is the address and is kept, as is an
-    /// endpoint too malformed to parse.
     /// A stored field as the editor would write it back.
     ///
     /// Only whitespace, and only where the editor itself trims: the username is saved as
@@ -260,6 +294,13 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// An endpoint reduced to the address it reaches, for comparing two of them.
+    ///
+    /// A port that only repeats the scheme's default is not part of that address:
+    /// `http://host:80` and `http://host` reach one server, as do `https://host:443` and
+    /// `https://host`. Comparing them as written called one a move to another server and
+    /// left a working mount down. Any other port is the address and is kept, as is an
+    /// endpoint too malformed to parse.
     public static func comparableS3Endpoint(_ endpoint: String?) -> String? {
         guard let endpoint else { return nil }
         guard var components = URLComponents(string: endpoint),

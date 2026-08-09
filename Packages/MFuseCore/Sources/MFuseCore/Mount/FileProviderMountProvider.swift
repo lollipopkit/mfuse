@@ -323,7 +323,13 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func mountURL(for config: ConnectionConfig) async throws -> URL? {
-        try await resolveMountURL(for: config)
+        // The same section the link operations resolve under: a rename moves the domain's
+        // CloudStorage path, so a lookup that landed inside one answered with a path that
+        // was already being replaced. The private `resolveMountURL` stays lock-free for the
+        // operations that call it while holding the lock themselves.
+        try await withMountOperationLock(for: config) {
+            try await self.resolveMountURL(for: config)
+        }
     }
 
     @discardableResult

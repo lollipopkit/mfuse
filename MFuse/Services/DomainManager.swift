@@ -236,6 +236,13 @@ public final class DomainManager: ObservableObject {
                 if let domain = domains.first(where: { $0.identifier.rawValue == domainState.identifier }) {
                     try await NSFileProviderManager.remove(domain)
                 }
+                // The snapshot the domain bootstrapped from goes with it, in that order —
+                // the same order `unregister` uses, and for the same reason: before
+                // macOS 15 it is the last thing an extension can read a config from. Left
+                // behind, it waits for the day that identifier comes back — a restore, a
+                // re-import of the same UUID — and hands the new domain the settings of the
+                // one that was removed.
+                try FileProviderDomainStateStore.removeBootstrapConfig(for: domainState.identifier)
             } catch {
                 errors.append(
                     .init(id: domainState.identifier, operation: .removeStaleDomain, error: error)
@@ -246,8 +253,25 @@ public final class DomainManager: ObservableObject {
         // Remove orphaned symlinks
         let fm = FileManager.default
         let baseDir = mountProvider.symlinkBaseURL
-        if fm.fileExists(atPath: baseDir.path),
-           let contents = try? fm.contentsOfDirectory(atPath: baseDir.path) {
+        if fm.fileExists(atPath: baseDir.path) {
+            let contents: [String]
+            do {
+                contents = try fm.contentsOfDirectory(atPath: baseDir.path)
+            } catch {
+                // Reported like the removals below: a directory this pass could not read is
+                // one it cannot say anything about, and answering "clean" for it left
+                // orphans in the user's shortcuts directory with nothing scheduled to look
+                // again.
+                throw SyncDomainsError(
+                    errors: errors + [
+                        .init(
+                            id: baseDir.lastPathComponent,
+                            operation: .removeOrphanedSymlink,
+                            error: error
+                        )
+                    ]
+                )
+            }
             let knownNames = Set(connectionManager.connections.map(FileProviderMountProvider.symlinkFilename(for:)))
             for name in contents where !knownNames.contains(name) {
                 let candidateURL = baseDir.appendingPathComponent(name)
@@ -312,10 +336,14 @@ public final class DomainManager: ObservableObject {
             }
         }
 
-        defaults.set(true, forKey: Self.replicatedDomainMigrationDefaultsKey)
-
+        // Recorded only once every connection has its domain back. The migration removes
+        // every domain before re-registering them, so marking it done while one of those
+        // re-registrations failed left that connection with no domain at all and nothing
+        // that would ever run this again.
         if !errors.isEmpty {
             throw SyncDomainsError(errors: errors)
         }
+
+        defaults.set(true, forKey: Self.replicatedDomainMigrationDefaultsKey)
     }
 }

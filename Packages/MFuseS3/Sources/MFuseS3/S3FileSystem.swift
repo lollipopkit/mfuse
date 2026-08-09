@@ -757,6 +757,12 @@ public actor S3FileSystem: RemoteFileSystem {
 
     public func createDirectory(at path: RemotePath) async throws {
         let s3 = try requireS3()
+        // The root is the mount, not an object: its key is empty, so this wrote a marker
+        // under a key nothing addresses — or was refused by the SDK — for a directory that
+        // already exists by definition.
+        guard !path.isRoot else {
+            throw RemoteFileSystemError.alreadyExists(path)
+        }
         let key = s3Key(for: path, isDirectory: true)
         let request = S3.PutObjectRequest(
             body: AWSHTTPBody(),
@@ -768,6 +774,16 @@ public actor S3FileSystem: RemoteFileSystem {
 
     public func delete(at path: RemotePath) async throws {
         let s3 = try requireS3()
+
+        // The root is the mount itself, and `itemInfo` answers for it without asking the
+        // bucket. Deleting it listed and bulk-deleted everything under the configured
+        // prefix — the whole bucket where no prefix is configured — for a request that can
+        // only have come from something that should never have been able to make it.
+        guard !path.isRoot else {
+            throw RemoteFileSystemError.operationFailed(
+                "The root of an S3 mount cannot be deleted"
+            )
+        }
 
         // The object at the exact key first, and on its own: a bucket can hold both `foo`
         // and `foo/bar`, and `itemInfo` resolves `/foo` to the object — that is the file the

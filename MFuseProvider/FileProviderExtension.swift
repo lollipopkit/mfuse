@@ -427,7 +427,24 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
             let bootstrapTask = await self.bootstrapTaskStore.takeForInvalidation()
             bootstrapTask?.cancel()
-            guard let bootstrapTask, let context = try? await bootstrapTask.value else { return }
+            guard let bootstrapTask else { return }
+            // Bounded like the drain below. The bootstrap unwinds through its own cleanup —
+            // `disconnect()` on a backend that may be exactly the one that stopped
+            // answering — and awaiting it outright parked the teardown for the life of the
+            // process, so nothing was ever drained or closed. What this gives up on is left
+            // to the process, which is on its way out.
+            let context = try? await withOperationTimeout(
+                seconds: Self.invalidationDrainTimeoutSeconds,
+                operation: "waiting for the bootstrap of domain \(self.domain.identifier.rawValue) to unwind"
+            ) {
+                try await bootstrapTask.value
+            }
+            guard let context else {
+                self.logger.error(
+                    "Left the runtime context for domain \(self.domain.identifier.rawValue, privacy: .public) to the process: its bootstrap did not unwind in time"
+                )
+                return
+            }
 
             // Drained after the door is shut, and before anything is closed. An operation
             // that is already running holds the same connection, caches and anchor store
@@ -1206,7 +1223,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 return NSError(
                     domain: NSFileProviderErrorDomain,
                     code: NSFileProviderError.noSuchItem.rawValue,
-                    userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"]
+                    userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription]
                 )
             case .alreadyExists:
                 return NSError(domain: NSFileProviderErrorDomain,
@@ -1214,7 +1231,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             case .notConnected, .connectionFailed:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.serverUnreachable.rawValue,
-                               userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
+                               userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription])
             case .permissionDenied:
                 // Not `serverUnreachable`: the server answered, and it answered "no". Told
                 // it is unreachable, Finder offers to retry a request that will be refused
@@ -1223,14 +1240,14 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 // can act on.
                 return NSError(domain: NSPOSIXErrorDomain,
                                code: Int(EACCES),
-                               userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
+                               userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription])
             case .authenticationFailed:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.notAuthenticated.rawValue)
             default:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.serverUnreachable.rawValue,
-                               userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
+                               userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription])
             }
         }
         if error is FileProviderExtensionInvalidated {
@@ -1246,6 +1263,23 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 code: NSFileProviderError.serverUnreachable.rawValue,
                 userInfo: [NSLocalizedDescriptionKey: mountError.localizedDescription]
             )
+        }
+        // A deadline this extension imposed is a server that did not answer in time, and
+        // Finder can act on that: it retries, and it says the mount is unreachable rather
+        // than showing a Swift error from a module it knows nothing about.
+        if let timeout = error as? FileProviderOperationTimeout {
+            return NSError(
+                domain: NSFileProviderErrorDomain,
+                code: NSFileProviderError.serverUnreachable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: timeout.localizedDescription]
+            )
+        }
+        // Answered the way the enumerator answers it. A bridged `CancellationError` carries
+        // this extension's own module in its domain, which nothing above it classifies —
+        // an operation stopped by an invalidation or a replaced request then reached Finder
+        // as an unexplained failure rather than as work that was called off.
+        if error is CancellationError {
+            return NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
         }
         // The HTTP backends hand their transport failures back as they come, and File
         // Provider has no reading of `NSURLErrorDomain`: a host that could not be resolved

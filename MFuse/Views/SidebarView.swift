@@ -188,9 +188,14 @@ struct SidebarView: View {
         }.count
     }
 
+    /// A row left in `.error` counts too: a teardown that failed part-way is exactly what
+    /// `disconnect` is the retry for — it still holds a filesystem, a domain or a
+    /// convenience link — and leaving it out disabled the only batch control that could
+    /// clear it.
     private var unmountableCount: Int {
         connectionManager.connections.filter {
             let state = connectionManager.effectiveMountState(for: $0.id)
+            if case .error = state { return true }
             return state.isMounted || state.isMounting
         }.count
     }

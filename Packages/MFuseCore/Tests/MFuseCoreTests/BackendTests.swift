@@ -782,6 +782,50 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
         XCTAssertFalse(normalizedDropbox.addressesSameServer(as: otherAccount))
     }
 
+    /// The addressing style is handed to Soto with a custom endpoint and nowhere else, so a
+    /// legacy row carrying the flag without one builds the same client as a row without it.
+    func testS3PathStyleWithoutACustomEndpointIsNotAnIdentityChange() {
+        let legacy = config(.s3, parameters: ["bucket": "b", "pathStyle": "true"])
+        let normalized = config(.s3, parameters: ["bucket": "b"])
+        XCTAssertTrue(legacy.addressesSameServer(as: normalized))
+        XCTAssertTrue(normalized.addressesSameServer(as: legacy))
+
+        // With a custom endpoint it decides how the bucket is addressed, so it is identity.
+        let endpointPathStyle = config(
+            .s3,
+            parameters: ["bucket": "b", "endpoint": "https://minio.internal", "pathStyle": "true"]
+        )
+        let endpointVirtualHost = config(
+            .s3,
+            parameters: ["bucket": "b", "endpoint": "https://minio.internal"]
+        )
+        XCTAssertFalse(endpointPathStyle.addressesSameServer(as: endpointVirtualHost))
+    }
+
+    /// The account labels are read back through `trimmedParameter` everywhere, so a legacy
+    /// or synced row that kept the whitespace names the same account as the normalized one.
+    /// Calling those two different servers is what leaves an OAuth mount down.
+    func testOAuthAccountWhitespaceIsNotAMoveToAnotherAccount() {
+        let padded = config(.dropbox, parameters: ["oauthAccountEmail": " user@example.com "])
+        let trimmed = config(.dropbox, parameters: ["oauthAccountEmail": "user@example.com"])
+        XCTAssertTrue(padded.addressesSameServer(as: trimmed))
+        XCTAssertTrue(trimmed.addressesSameServer(as: padded))
+
+        // A different account still is one.
+        XCTAssertFalse(
+            trimmed.addressesSameServer(
+                as: config(.dropbox, parameters: ["oauthAccountEmail": "someone.else@example.com"])
+            )
+        )
+    }
+
+    /// SFTP's runtime refuses agent authentication outright, so offering it in the editor
+    /// let a user save a connection that can only ever fail to connect.
+    func testSFTPDoesNotOfferAnAuthMethodItsRuntimeRefuses() {
+        XCTAssertFalse(BackendType.sftp.supportedAuthMethods.contains(.agent))
+        XCTAssertEqual(BackendType.sftp.supportedAuthMethods, [.password, .publicKey])
+    }
+
     /// The editor trims the host before it saves it, so a legacy row that kept the
     /// whitespace addresses exactly the server the save writes. Comparing the raw strings
     /// called that save a move to another server, which took a working mount down and left

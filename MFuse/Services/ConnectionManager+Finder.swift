@@ -17,20 +17,28 @@ extension ConnectionManager {
     /// convenience link and disconnected the domain — Finder was still sent to the
     /// location it had just taken away.
     func revealInFinder(_ requestedConfig: ConnectionConfig) async {
-        guard let targetURL = await resolveFinderURL(for: requestedConfig) else { return }
-        // Read as the row is now, the way the resolution reads it: a rename that landed
-        // meanwhile makes the caller's copy stale, and that is not a reason to refuse.
-        guard let config = connections.first(where: { $0.id == requestedConfig.id }),
-              canRevealMount(for: config) else {
+        guard let resolved = await resolveFinderURL(for: requestedConfig) else { return }
+        // Checked against the revision the location was resolved from, not merely against
+        // the row's id. The convenience link carries the connection's name, so a rename
+        // landing inside the resolution moves it — and a check that only asked whether
+        // *some* revision of this connection is mounted passed for the renamed one while
+        // the location in hand still named the old link.
+        guard canRevealMount(for: resolved.config) else {
             Self.finderLogger.notice(
-                "Not revealing \(requestedConfig.id.uuidString, privacy: .public): its mount was taken down while the location was being resolved"
+                "Not revealing \(requestedConfig.id.uuidString, privacy: .public): its mount was taken down or edited while the location was being resolved"
             )
             return
         }
-        NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+        NSWorkspace.shared.activateFileViewerSelecting([resolved.url])
     }
 
-    func resolveFinderURL(for requestedConfig: ConnectionConfig) async -> URL? {
+    /// A Finder location, and the revision of the connection it was resolved from.
+    struct ResolvedFinderLocation {
+        let url: URL
+        let config: ConnectionConfig
+    }
+
+    func resolveFinderURL(for requestedConfig: ConnectionConfig) async -> ResolvedFinderLocation? {
         // Acted on as the row is now, not as the caller holds it. Menus and the detail view
         // pass the copy they were built with, and the convenience link's filename carries
         // the connection's name: creating one from a stale copy writes a link under a name
@@ -110,13 +118,13 @@ extension ConnectionManager {
                     return nil
                 }
                 if hasReachableLink(at: recreatedSymlinkURL) {
-                    return recreatedSymlinkURL
+                    return ResolvedFinderLocation(url: recreatedSymlinkURL, config: config)
                 }
             }
             guard canRevealMount(for: config) else {
                 return nil
             }
-            return mountURL
+            return ResolvedFinderLocation(url: mountURL, config: config)
         }
 
         // Guarded like the branch above: a link left behind by a teardown whose
@@ -128,7 +136,7 @@ extension ConnectionManager {
         // can point anywhere. Reveal is not the place to follow it — the same test that
         // decides which links MFuse may remove decides which one it may open.
         if canRevealMount(for: config), isManagedReachableLink(at: symlinkURL) {
-            return symlinkURL
+            return ResolvedFinderLocation(url: symlinkURL, config: config)
         }
 
         // Gated like every branch above: the cached path outlives the mount it was
@@ -136,7 +144,7 @@ extension ConnectionManager {
         // hand Finder a location it is in the middle of taking away.
         if canRevealMount(for: config),
            let path = effectiveMountState(for: config.id).mountPath {
-            return URL(fileURLWithPath: path)
+            return ResolvedFinderLocation(url: URL(fileURLWithPath: path), config: config)
         }
 
         // Callers can only ignore a nil, so record why rather than failing silently.

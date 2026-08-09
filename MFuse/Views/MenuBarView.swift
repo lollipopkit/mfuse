@@ -207,7 +207,7 @@ struct MenuBarView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
-            .disabled(mountedCount + mountingCount == 0)
+            .disabled(unmountableCount == 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
@@ -358,6 +358,18 @@ struct MenuBarView: View {
 
     private var mountingCount: Int {
         connectionManager.connections.filter { connectionManager.effectiveMountState(for: $0.id).isMounting }.count
+    }
+
+    /// What Unmount All has something to do about. A row left in `.error` counts: a
+    /// teardown that failed part-way still holds a filesystem, a domain or a convenience
+    /// link, and `disconnect` is the retry for it — leaving it out disabled the only batch
+    /// control that could clear it.
+    private var unmountableCount: Int {
+        connectionManager.connections.filter {
+            let state = connectionManager.effectiveMountState(for: $0.id)
+            if case .error = state { return true }
+            return state.isMounted || state.isMounting
+        }.count
     }
 
     private func stateColor(_ state: MountState) -> Color {

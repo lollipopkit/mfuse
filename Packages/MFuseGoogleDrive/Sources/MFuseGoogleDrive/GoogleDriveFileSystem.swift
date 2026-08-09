@@ -623,9 +623,13 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
 
-        let clientID = config.parameters["clientID"] ?? ""
-        let redirectURI = config.parameters["redirectURI"] ?? ""
-        guard !clientID.isEmpty, !redirectURI.isEmpty else {
+        // Read the way every other reader of these parameters reads them. The editor writes
+        // them trimmed, but a legacy row or one synced from a build that did not sends
+        // `" client-id "` straight to Google's token endpoint, which answers
+        // `invalid_client` — a stored refresh token that is perfectly good then cannot
+        // renew, and the mount reports an authentication failure no sign-in fixes.
+        guard let clientID = ConnectionConfig.trimmedParameter(config.parameters["clientID"]),
+              let redirectURI = ConnectionConfig.trimmedParameter(config.parameters["redirectURI"]) else {
             throw RemoteFileSystemError.authenticationFailed
         }
 
@@ -670,7 +674,16 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             .appendingPathComponent(UUID().uuidString)
         FileManager.default.createFile(atPath: multipartURL.path, contents: nil)
 
-        let outputHandle = try FileHandle(forWritingTo: multipartURL)
+        // From the first thing that can fail after the file exists: the caller's `defer`
+        // is installed on what this returns, so nothing removes the file on a throwing
+        // path out of here.
+        let outputHandle: FileHandle
+        do {
+            outputHandle = try FileHandle(forWritingTo: multipartURL)
+        } catch {
+            try? FileManager.default.removeItem(at: multipartURL)
+            throw error
+        }
         // Its own cleanup: the caller's `defer` is installed on what this returns, so a
         // throw here answers before there is anything to remove — and the output handle and
         // the file it was opened on would both be left behind. A File Provider upload URL

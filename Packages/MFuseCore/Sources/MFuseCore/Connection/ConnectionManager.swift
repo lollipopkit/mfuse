@@ -272,6 +272,13 @@ public final class ConnectionManager: ObservableObject {
                 throw ConnectionManagerError.cleanupFailed(config.id)
             }
         }
+        // The one place this pass can stop of its own accord. Quit cancels a removal it has
+        // given up waiting for, and everything below is a write — the domain, the list,
+        // storage, the credential — each with a rollback of its own. Stopping here leaves
+        // all four as they were; stopping later would depend on whichever provider or
+        // Keychain call happens to observe cancellation, which is what the deadline could
+        // not rely on in the first place.
+        try Task.checkCancellation()
         if let mountProvider {
             do {
                 try await mountProvider.unregister(config: config)
@@ -830,6 +837,18 @@ public final class ConnectionManager: ObservableObject {
                 )
                 cleanupFailures.append(message)
             }
+        }
+
+        // Read after the provider and filesystem calls above, which is where quit's deadline
+        // can pass: it cancels the teardown it stopped waiting for, and a pass that resumes
+        // from one of those calls afterwards would publish a mount state — `.unmounted`, or
+        // an error — once quit had already reported the connections torn down. What was
+        // cleaned up stays cleaned up; only the publication is dropped.
+        if Task.isCancelled {
+            logger.notice(
+                "Leaving the teardown for \(id.uuidString, privacy: .public) unpublished: it was cancelled after quit gave up waiting for it"
+            )
+            return
         }
 
         if let config, !cleanupFailures.isEmpty {
@@ -1522,6 +1541,10 @@ public final class ConnectionManager: ObservableObject {
 
             // Remove stale domains
             for domainID in domainStatesByID.keys where !knownDomainIDs.contains(domainID) {
+                // Re-read every time round: each removal suspends, and quit can take its
+                // teardown snapshot and finish inside one of them. Removing a domain after
+                // that reaches a provider quit has already reported as done with.
+                guard !isShuttingDown else { return }
                 let remover = staleDomainRemover ?? _removeStaleProviderDomain
                 do {
                     try await remover(domainID)
@@ -1537,6 +1560,7 @@ public final class ConnectionManager: ObservableObject {
                 }
             }
 
+            guard !isShuttingDown else { return }
             try? await cleanupOrphanedSymlinks(for: connections)
 
             // Rebuild mount states and symlinks for existing mounted configs
@@ -1831,9 +1855,19 @@ public final class ConnectionManager: ObservableObject {
             try? await mountProvider.removeSymlink(for: previousConfig)
         }
 
-        try? await mountProvider.removeSymlink(for: config)
-        try await mountProvider.disconnect(config: config)
-        setMountState(.unmounted, for: config)
+        // Through the tracked teardown, not straight to the provider. The row is not mounted
+        // at this point, so nothing here was waiting for it — and a `connect` starting
+        // inside the symlink removal or the domain disconnect below saw no teardown to wait
+        // for either, registered the domain, and had it disconnected underneath it by the
+        // very calls it raced. `disconnect` is what makes the two take turns, and it
+        // publishes `.unmounted` on its way out.
+        await disconnect(config.id, using: config)
+        // The teardown reports by publishing rather than by returning, and this method's
+        // callers — a save, a reload that has already put the edited row on screen — decide
+        // from what it returns whether the connection now serves what it shows.
+        guard isCleanupComplete(for: config.id) else {
+            throw ConnectionManagerError.cleanupFailed(config.id)
+        }
     }
 
     private func _removeStaleProviderDomain(id: String) async throws {
