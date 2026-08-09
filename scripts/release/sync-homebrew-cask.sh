@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP_NAME="${APP_NAME:-MFuse}"
 CASK_NAME="${CASK_NAME:-mfuse}"
 APP_REPO_SLUG="${APP_REPO_SLUG:-lollipopkit/mfuse}"
-TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-taps}"
+TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-cask}"
 TAP_CASK_PATH="${TAP_CASK_PATH:-}"
 EXPLICIT_TAP_CASK_PATH="${TAP_CASK_PATH:-}"
 XCARCHIVE_PATH="${1:-${XCARCHIVE_PATH:-}}"
@@ -77,7 +77,16 @@ if [[ -z "${DMG_BASENAME:-}" ]]; then
 fi
 
 if [[ -z "$TAP_CASK_PATH" && -n "$TAP_REPO_PATH" ]]; then
-  TAP_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"
+  # homebrew-cask files its casks under the first character of their name —
+  # `Casks/m/mfuse.rb` — while a flat personal tap keeps them directly under `Casks`.
+  # Whichever the repo uses is what it reads: a cask written to the other layout is a file
+  # nothing installs from, and the release reports a tap update that never reached anyone.
+  CASK_SHARD_DIR="$TAP_REPO_PATH/Casks/${CASK_NAME:0:1}"
+  if [[ -d "$CASK_SHARD_DIR" ]]; then
+    TAP_CASK_PATH="$CASK_SHARD_DIR/${CASK_NAME}.rb"
+  else
+    TAP_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"
+  fi
 fi
 
 if [[ -z "$TAP_CASK_PATH" ]]; then

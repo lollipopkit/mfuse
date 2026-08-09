@@ -230,7 +230,7 @@ fi
 if [[ "${SYNC_HOMEBREW_CASK:-1}" == "1" ]]; then
   XCARCHIVE_PATH="$ARCHIVE_PATH" \
   DMG_PATH="$DMG_PATH" \
-  TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-taps}" \
+  TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-cask}" \
   bash "$SCRIPT_DIR/sync-homebrew-cask.sh"
 fi
 
