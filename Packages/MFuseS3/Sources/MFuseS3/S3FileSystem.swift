@@ -646,14 +646,75 @@ public actor S3FileSystem: RemoteFileSystem {
             range: "bytes=\(offset)-\(end)"
         )
         let response = try await s3.getObject(request)
-        // Collected with slack and then cut to the requested length: a server that ignores
-        // or overshoots the Range header answers with more than was asked for, and the
-        // caller assembles these reads at fixed offsets — the extra bytes would land inside
-        // the next chunk's interval and corrupt the file being downloaded.
-        let buffer = try await response.body.collect(upTo: Int(length) + 1024)
-        let data = Data(buffer: buffer)
-        guard data.count > Int(length) else { return data }
-        return Data(data.prefix(Int(length)))
+        // Where the bytes being delivered actually begin, which is not always where they
+        // were asked to. Collecting the response with a fixed allowance failed the read
+        // outright once a server answered with more than that allowance — a server that
+        // ignores the header answers the whole object — and taking the head of that answer
+        // instead would hand the caller the start of the file for every chunk of a
+        // download. The offset the response reports is what tells the two apart.
+        let deliveredStart = Self.rangeStart(fromContentRange: response.contentRange)
+        guard deliveredStart <= offset else {
+            throw RemoteFileSystemError.operationFailed(
+                "S3 answered a read of \(path.absoluteString) with bytes from \(deliveredStart), past the \(offset) that was requested"
+            )
+        }
+        return try await Self.collectRangedBody(
+            response.body.map { Data(buffer: $0) },
+            skipping: Int(offset - deliveredStart),
+            length: Int(length)
+        )
+    }
+
+    /// The offset a `Content-Range` header says its bytes start at.
+    ///
+    /// A server that honours the request answers `bytes 100-199/1000`. One that does not
+    /// answers the whole object with no range at all, and those bytes start at zero.
+    static func rangeStart(fromContentRange contentRange: String?) -> UInt64 {
+        guard let contentRange,
+              let unitRange = contentRange.split(separator: " ").last,
+              let start = unitRange.split(separator: "-").first,
+              let offset = UInt64(start.trimmingCharacters(in: .whitespaces)) else {
+            return 0
+        }
+        return offset
+    }
+
+    /// Read `length` bytes out of a response body, starting `skipCount` bytes into it.
+    ///
+    /// Streamed rather than collected whole: the caller asks for a chunk, and what the
+    /// server sends back is its own decision — an oversized answer must not fail the read
+    /// or be held in memory in full. Never more than the requested length plus the chunk
+    /// being read is retained, and the body is left as soon as that length is reached.
+    static func collectRangedBody<Body: AsyncSequence>(
+        _ body: Body,
+        skipping skipCount: Int,
+        length: Int
+    ) async throws -> Data where Body.Element == Data {
+        var remainingToSkip = skipCount
+        var collected = Data()
+
+        for try await chunk in body {
+            var chunk = chunk[...]
+            if remainingToSkip > 0 {
+                let dropped = min(remainingToSkip, chunk.count)
+                remainingToSkip -= dropped
+                chunk = chunk.dropFirst(dropped)
+                if chunk.isEmpty { continue }
+            }
+
+            let wanted = length - collected.count
+            // Left only once the answer is known to run past what was asked for. A body
+            // that ends exactly on the requested length is drained to its end instead, so
+            // the connection is not dropped mid-response for a server that answered
+            // correctly.
+            if chunk.count > wanted {
+                collected.append(contentsOf: chunk.prefix(wanted))
+                break
+            }
+            collected.append(contentsOf: chunk)
+        }
+
+        return collected
     }
 
     // MARK: - Write

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import MFuseCore
 import SotoCore
@@ -6,6 +7,72 @@ import SotoCore
 
 @Test func placeholder() async throws {
     // Integration tests require real S3 credentials
+}
+
+/// A ranged read has to answer with the interval it asked for, whatever the server sends.
+///
+/// Collecting the body with a fixed allowance failed the read outright once the answer ran
+/// past it, and a File Provider download of a large file is nothing but these reads.
+@Test func rangedReadKeepsTheRequestedLengthOutOfAnOversizedAnswer() async throws {
+    let payload = Data((0..<4096).map { UInt8($0 % 251) })
+
+    // Answered with far more than the 1 KiB that was asked for, in chunks, the way a
+    // streamed response arrives.
+    let oversized = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload, chunkSize: 512),
+        skipping: 0,
+        length: 1024
+    )
+    #expect(oversized == payload.prefix(1024))
+
+    // A body that ends exactly on the requested length is returned whole.
+    let exact = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload.prefix(1024), chunkSize: 512),
+        skipping: 0,
+        length: 1024
+    )
+    #expect(exact == payload.prefix(1024))
+
+    // A body shorter than the request is not padded out — the end of an object is short.
+    let short = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload.prefix(100), chunkSize: 512),
+        skipping: 0,
+        length: 1024
+    )
+    #expect(short == payload.prefix(100))
+}
+
+/// A server that ignores the Range header answers the whole object with no `Content-Range`.
+/// Taking the head of that answer would return the start of the file for every chunk of a
+/// download, so the bytes are counted from where the response says they begin.
+@Test func rangedReadCountsFromWhereTheServerSaysTheBytesBegin() async throws {
+    #expect(S3FileSystem.rangeStart(fromContentRange: "bytes 1024-2047/8192") == 1024)
+    #expect(S3FileSystem.rangeStart(fromContentRange: "bytes 0-99/100") == 0)
+    // Absent or unreadable: the whole object, which begins at zero.
+    #expect(S3FileSystem.rangeStart(fromContentRange: nil) == 0)
+    #expect(S3FileSystem.rangeStart(fromContentRange: "bytes */8192") == 0)
+
+    let payload = Data((0..<4096).map { UInt8($0 % 251) })
+    // The whole object for a read of bytes 1024..<2048: the skip is what makes the answer
+    // the interval that was asked for rather than the head of the file.
+    let ignoredRange = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload, chunkSize: 512),
+        skipping: 1024,
+        length: 1024
+    )
+    #expect(ignoredRange == payload[1024..<2048])
+}
+
+private func chunkedStream(of data: Data, chunkSize: Int) -> AsyncThrowingStream<Data, Error> {
+    AsyncThrowingStream { continuation in
+        var index = data.startIndex
+        while index < data.endIndex {
+            let end = data.index(index, offsetBy: chunkSize, limitedBy: data.endIndex) ?? data.endIndex
+            continuation.yield(Data(data[index..<end]))
+            index = end
+        }
+        continuation.finish()
+    }
 }
 
 /// Credential problems must not be reported as an unreachable server, or the UI asks the
