@@ -457,7 +457,13 @@ struct ConnectionEditorSheet: View {
                     // Saving replaces the stored credential outright, and the fields start
                     // empty: saving before the stored one has been read writes that
                     // emptiness over a working password.
-                    .disabled(!isValid || isLoadingStoredCredential)
+                    //
+                    // An authorization still running is the same case: a re-authentication
+                    // is a request to replace the saved account, and saving on top of it
+                    // stored the old token and dropped the sign-in the user was completing —
+                    // the sheet's dismissal cancels it — while the row went on showing the
+                    // account they had just replaced.
+                    .disabled(!isValid || isLoadingStoredCredential || isAuthorizingOAuth)
             }
             .padding()
         }
@@ -624,6 +630,11 @@ struct ConnectionEditorSheet: View {
     /// resolve it.
     private func makeConfig(id: UUID) throws -> ConnectionConfig {
         let usesHostBasedAddressing = backendType.usesHostBasedAddressing
+        // Trimmed like the host, and for the same reason: the field's prompt shows "/", so a
+        // value of spaces reads as the root, while the backends build their location from
+        // the raw string — S3 rooted every request at a prefix of spaces, and "/photos/ "
+        // addressed "photos/ " rather than the folder the user typed.
+        let trimmedRemotePath = remotePath.trimmingCharacters(in: .whitespacesAndNewlines)
         return ConnectionConfig(
             id: id,
             name: name,
@@ -634,7 +645,7 @@ struct ConnectionEditorSheet: View {
             port: UInt16(port) ?? backendType.defaultPort,
             username: usesUsernameField ? username : "",
             authMethod: authMethod,
-            remotePath: remotePath.isEmpty ? "/" : remotePath,
+            remotePath: trimmedRemotePath.isEmpty ? "/" : trimmedRemotePath,
             parameters: try buildParameters(),
             autoMountOnLaunch: autoMountOnLaunch
         )
@@ -1322,6 +1333,13 @@ struct ConnectionEditorSheet: View {
                 let authorized = try await authorizeOAuthAccount()
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    // Checked again inside the hop, not only before it: the check above and
+                    // this closure are separated by a suspension, and a target change lands
+                    // on the same actor — it cancels this task and clears the OAuth state,
+                    // after which writing the result here would show the account as
+                    // connected for the client, redirect or backend now on screen and save
+                    // a token authorized for the previous one.
+                    guard !Task.isCancelled else { return }
                     oauthCredential = authorized.credential
                     oauthAccountName = authorized.displayName
                     oauthAccountEmail = authorized.email ?? ""
@@ -1336,6 +1354,11 @@ struct ConnectionEditorSheet: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    // Same fence as the success path: a failure reported after the target
+                    // changed reads as a failure of the sign-in for the target now on
+                    // screen, and clearing `oauthAuthorizationTask` here would drop the
+                    // handle to the authorization that change started.
+                    guard !Task.isCancelled else { return }
                     isAuthorizingOAuth = false
                     oauthAuthorizationTask = nil
                     testResult = error.localizedDescription

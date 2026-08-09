@@ -122,6 +122,37 @@ final class BackendTypeTests: XCTestCase {
         )
     }
 
+    /// The package ships `zh-Hans` and `zh-Hant` and nothing else for Chinese, so every
+    /// regional identifier has to resolve to one of the two scripts. Listing the Simplified
+    /// regions left the ones nobody enumerated — `zh-MY` above all — on the English
+    /// fallback.
+    func testRegionalChineseResolvesToAShippedScript() {
+        let simplified = ["zh-MY", "zh-SG", "zh-CN", "zh_CN", "zh-Hans-SG", "zh"]
+        for identifier in simplified {
+            XCTAssertEqual(
+                MFuseCoreL10n.string(
+                    "backend.googleDrive",
+                    localeIdentifier: identifier,
+                    fallback: "unlocalized"
+                ),
+                "Google 云端硬盘",
+                "\(identifier) should read the Simplified Chinese resources"
+            )
+        }
+
+        for identifier in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant-MY"] {
+            XCTAssertEqual(
+                MFuseCoreL10n.string(
+                    "backend.googleDrive",
+                    localeIdentifier: identifier,
+                    fallback: "unlocalized"
+                ),
+                "Google 雲端硬碟",
+                "\(identifier) should read the Traditional Chinese resources"
+            )
+        }
+    }
+
     /// The fallbacks here deliberately differ from the expected values so a missing
     /// resource key fails the assertion instead of silently degrading to the fallback.
     ///

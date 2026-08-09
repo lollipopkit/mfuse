@@ -543,7 +543,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         do {
             try await refreshAccessToken()
         } catch {
-            throw RemoteFileSystemError.authenticationFailed
+            throw Self.refreshFailure(error)
         }
 
         var retriedRequest = request
@@ -572,7 +572,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         do {
             try await refreshAccessToken()
         } catch {
-            throw RemoteFileSystemError.authenticationFailed
+            throw Self.refreshFailure(error)
         }
 
         var retriedRequest = request
@@ -586,6 +586,22 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
         return retriedResult
+    }
+
+    /// What a failed token refresh means for the operation that needed it.
+    ///
+    /// The provider already tells a grant Google has stopped honouring — reported as
+    /// `authenticationFailed`, which the extension turns into the sign-in prompt — from the
+    /// token endpoint failing to answer. Calling every one of them an authentication failure
+    /// sent the user to sign in again over a network blip or a 503, and disagreed with
+    /// `connect()`, which passes the same failures through as they are.
+    private static func refreshFailure(_ error: Error) -> Error {
+        if let remoteError = error as? RemoteFileSystemError {
+            return remoteError
+        }
+        return RemoteFileSystemError.connectionFailed(
+            "Could not refresh the Google Drive access token: \(error.localizedDescription)"
+        )
     }
 
     private func refreshAccessToken() async throws {

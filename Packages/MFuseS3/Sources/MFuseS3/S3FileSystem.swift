@@ -568,6 +568,19 @@ public actor S3FileSystem: RemoteFileSystem {
     public func itemInfo(at path: RemotePath) async throws -> RemoteItem {
         let s3 = try requireS3()
 
+        // The root of the mount is the namespace everything else hangs off, whatever the
+        // bucket happens to hold at the key it maps to. A configured remote path of
+        // `tenant` alongside an object literally named `tenant` otherwise answered the HEAD
+        // below and reported the mount's own root as a file.
+        guard !path.isRoot else {
+            return RemoteItem(
+                path: path,
+                type: .directory,
+                size: 0,
+                modificationDate: Date()
+            )
+        }
+
         // Try as file first
         let fileKey = s3Key(for: path, isDirectory: false)
         do {
@@ -704,24 +717,39 @@ public actor S3FileSystem: RemoteFileSystem {
                     bucket: bucket,
                     delete: S3.Delete(objects: objects)
                 )
-                _ = try await s3.deleteObjects(deleteReq)
+                let deleteResp = try await s3.deleteObjects(deleteReq)
+                // A bulk delete answers 200 with a per-object error list, so an object a
+                // policy or a legal hold refused is reported in the body rather than by the
+                // request failing. Discarding it reported a directory as deleted with part
+                // of it still there — and let `move` go on to delete the source of a copy
+                // that had not been made.
+                if let failure = deleteResp.errors?.first {
+                    throw RemoteFileSystemError.operationFailed(
+                        "Failed to delete \(failure.key ?? path.absoluteString): \(failure.message ?? failure.code ?? "unknown S3 error")"
+                    )
+                }
                 deletedDirectoryObjects = true
             }
 
             continuationToken = listResp.nextContinuationToken
         } while continuationToken != nil
 
-        if !deletedDirectoryObjects {
-            // Single file
-            let key = s3Key(for: path, isDirectory: false)
-            let request = S3.DeleteObjectRequest(bucket: bucket, key: key)
-            _ = try await s3.deleteObject(request)
+        // The object at the exact key goes too, whether or not descendants were found: a
+        // bucket can hold both `foo` and `foo/bar`, and `itemInfo` calls `/foo` the file, so
+        // skipping this left the very object the caller asked to delete behind. Deleting a
+        // key that is not there is a no-op on S3, so a directory pays one request for it.
+        let key = s3Key(for: path, isDirectory: false)
+        if !key.isEmpty {
+            _ = try await s3.deleteObject(S3.DeleteObjectRequest(bucket: bucket, key: key))
+        } else if !deletedDirectoryObjects {
+            throw RemoteFileSystemError.notFound(path)
         }
     }
 
     public func move(from source: RemotePath, to destination: RemotePath) async throws {
         let s3 = try requireS3()
         let sourceItem = try await itemInfo(at: source)
+        try ensureDestinationIsOutside(sourceItem, source: source, destination: destination)
         try await ensureDestinationDoesNotExist(destination, using: s3)
         try await copyItem(sourceItem, from: source, to: destination, using: s3)
         try await delete(at: source)
@@ -730,6 +758,7 @@ public actor S3FileSystem: RemoteFileSystem {
     public func copy(from source: RemotePath, to destination: RemotePath) async throws {
         let s3 = try requireS3()
         let sourceItem = try await itemInfo(at: source)
+        try ensureDestinationIsOutside(sourceItem, source: source, destination: destination)
         try await ensureDestinationDoesNotExist(destination, using: s3)
         try await copyItem(sourceItem, from: source, to: destination, using: s3)
     }
@@ -765,6 +794,27 @@ public actor S3FileSystem: RemoteFileSystem {
             fromKey: s3Key(for: source, isDirectory: false),
             toKey: s3Key(for: destination, isDirectory: false),
             using: s3
+        )
+    }
+
+    /// Refuse a directory whose destination is itself or lies inside it.
+    ///
+    /// There is no rename on S3: a directory is copied object by object, and the listing it
+    /// walks has the source prefix while every object it writes lands under that same
+    /// prefix. Pagination therefore reaches what the copy has just written and copies it
+    /// again, deeper each time; `move` then deletes the source, which now contains the
+    /// destination it created.
+    private func ensureDestinationIsOutside(
+        _ sourceItem: RemoteItem,
+        source: RemotePath,
+        destination: RemotePath
+    ) throws {
+        guard sourceItem.isDirectory else { return }
+        let sourcePrefix = s3Key(for: source, isDirectory: true)
+        let destinationPrefix = s3Key(for: destination, isDirectory: true)
+        guard destinationPrefix.hasPrefix(sourcePrefix) else { return }
+        throw RemoteFileSystemError.operationFailed(
+            "Cannot copy or move \(source.absoluteString) into itself"
         )
     }
 
@@ -812,7 +862,12 @@ public actor S3FileSystem: RemoteFileSystem {
 
     /// Convert RemotePath to S3 key. Directory keys end with "/".
     private func s3Key(for path: RemotePath, isDirectory: Bool) -> String {
-        let base = config.remotePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        // Whitespace first: the editor writes the field as typed, so a path of spaces — or
+        // one padded around a real prefix — rooted every request at a prefix nothing is
+        // stored under. `ConnectionConfig.s3Bucket` reads a blank bucket the same way.
+        let base = config.remotePath
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let relative = path.components.joined(separator: "/")
 
         var key: String

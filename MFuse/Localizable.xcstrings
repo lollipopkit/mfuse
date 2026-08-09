@@ -2425,6 +2425,124 @@
         }
       }
     },
+    "editor.action.connectAccount" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect Account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectar cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecter le compte"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hubungkan akun"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connetti account"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アカウントを接続"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정 연결"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接账户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接帳戶"
+          }
+        }
+      }
+    },
+    "editor.action.reauthenticate" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Re-authenticate"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volver a autenticar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se réauthentifier"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentikasi ulang"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentica di nuovo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再認証"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다시 인증"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新认证"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新認證"
+          }
+        }
+      }
+    },
     "editor.action.testAccess" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2598,6 +2716,65 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法讀取已儲存的憑證：%@。儲存將以此處輸入的內容取代它。"
+          }
+        }
+      }
+    },
+    "editor.error.oauthProviderUnavailable" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This backend does not support built-in OAuth authorization."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este backend no admite la autorización OAuth integrada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce backend ne prend pas en charge l’autorisation OAuth intégrée."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backend ini tidak mendukung otorisasi OAuth bawaan."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo backend non supporta l’autorizzazione OAuth integrata."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このバックエンドは組み込みの OAuth 認可に対応していません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 백엔드는 내장 OAuth 인증을 지원하지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此后端不支持内置 OAuth 授权。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此後端不支援內建 OAuth 授權。"
           }
         }
       }
@@ -3899,6 +4076,124 @@
         }
       }
     },
+    "editor.message.accountConnected" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account connected"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta conectada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte connecté"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Akun terhubung"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account connesso"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アカウントを接続しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정이 연결되었습니다"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账户已连接"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帳戶已連接"
+          }
+        }
+      }
+    },
+    "editor.message.connectAccountBeforeSaving" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect your account before testing or saving this mount."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conecta tu cuenta antes de probar o guardar este montaje."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez votre compte avant de tester ou d’enregistrer ce montage."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hubungkan akun Anda sebelum menguji atau menyimpan kaitan ini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connetti il tuo account prima di testare o salvare questo montaggio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このマウントをテストまたは保存する前にアカウントを接続してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 마운트를 테스트하거나 저장하기 전에 계정을 연결하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先连接账户，然后再测试或保存此挂载。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請先連接帳戶，再測試或儲存此掛載。"
+          }
+        }
+      }
+    },
     "editor.message.noCredentialsRequired" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4855,49 +5150,49 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las credenciales se almacenarán en texto claro en el archivo de configuración compartido."
+            "value" : "Las credenciales se enviarán en texto claro. Activa TLS para cifrar este montaje."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les identifiants seront stockés en clair dans le fichier de configuration partagé."
+            "value" : "Les identifiants seront envoyés en clair. Activez TLS pour chiffrer ce montage."
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kredensial akan disimpan sebagai teks biasa di file konfigurasi bersama."
+            "value" : "Kredensial akan dikirim sebagai teks biasa. Aktifkan TLS untuk mengenkripsi kaitan ini."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le credenziali verranno archiviate in chiaro nel file di configurazione condiviso."
+            "value" : "Le credenziali verranno inviate in chiaro. Attiva TLS per cifrare questo montaggio."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "資格情報は共有設定ファイルに平文で保存されます。"
+            "value" : "資格情報は平文で送信されます。このマウントを暗号化するには TLS を有効にしてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자격 증명이 공유 구성 파일에 평문으로 저장됩니다."
+            "value" : "자격 증명이 평문으로 전송됩니다. 이 마운트를 암호화하려면 TLS를 활성화하십시오."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "凭证将以明文形式存储在共享配置文件中。"
+            "value" : "凭证将以明文发送。启用 TLS 以加密此挂载。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "憑證將以純文字形式儲存在共用設定檔中。"
+            "value" : "憑證將以純文字傳送。啟用 TLS 以加密此掛載。"
           }
         }
       }

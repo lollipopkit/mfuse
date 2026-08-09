@@ -1217,6 +1217,18 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 userInfo: [NSLocalizedDescriptionKey: mountError.localizedDescription]
             )
         }
+        // The HTTP backends hand their transport failures back as they come, and File
+        // Provider has no reading of `NSURLErrorDomain`: a host that could not be resolved
+        // or a connection that dropped reached Finder as an error it could not act on
+        // instead of a server it cannot reach. Cancellation is left alone — it is this
+        // extension stopping its own work, not the server.
+        if let urlError = error as? URLError, urlError.code != .cancelled {
+            return NSError(
+                domain: NSFileProviderErrorDomain,
+                code: NSFileProviderError.serverUnreachable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: urlError.localizedDescription]
+            )
+        }
         return error as NSError
     }
 }

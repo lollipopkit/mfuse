@@ -610,7 +610,20 @@ public final class ConnectionManager: ObservableObject {
                 onStateChange?(config, errorState)
                 return
             }
-            try await connectFileSystemWithRetry(fs, for: config)
+            do {
+                try await connectFileSystemWithRetry(fs, for: config)
+            } catch {
+                // A backend can establish a session and still answer with a failure: S3's
+                // shared connect attempt does exactly that when the caller that started it
+                // is cancelled after the probe published its client. This filesystem never
+                // reached `fileSystems`, so no teardown will ever see it — closing the
+                // session it reports holding is what keeps that one from outliving every
+                // reference to it. An attempt that never connected is left alone.
+                if await fs.isConnected {
+                    try? await fs.disconnect()
+                }
+                throw error
+            }
             // Cancellation is checked alongside the generation: a backend that ignores it
             // can hand back a live connection to an attempt nobody is waiting for.
             if !isCurrentConnectionAttempt(for: id, generation: localGeneration)

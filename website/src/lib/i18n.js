@@ -65,7 +65,16 @@ export function getInitialLocale() {
   const storedLocale = resolveLocale(localStorage.getItem(localeStorageKey))
   if (storedLocale) return storedLocale
 
-  return normalizeLocale(navigator.languages?.[0] || navigator.language)
+  // Every language the browser lists, in the order it lists them: reading only the first
+  // one answered `['fr-FR', 'zh-CN']` with the default, because an unsupported first entry
+  // stood in for the whole preference list.
+  const browserLocales = navigator.languages?.length ? navigator.languages : [navigator.language]
+  for (const browserLocale of browserLocales) {
+    const resolved = resolveLocale(browserLocale)
+    if (resolved) return resolved
+  }
+
+  return defaultLocale
 }
 
 /** @param {string | null | undefined} locale */

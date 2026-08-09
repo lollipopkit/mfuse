@@ -137,7 +137,22 @@ public final class SharedCredentialStore: @unchecked Sendable {
 
     private func migrateLegacyCredentialIfNeeded(for connectionID: UUID) throws -> Credential? {
         let url = credentialFileURL(for: connectionID)
-        guard let data = try? Data(contentsOf: url) else {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            // A file that is not there is the ordinary case and says nothing. One that is
+            // there and cannot be read is a cleartext secret this store cannot migrate:
+            // answering `nil` reported that as "no legacy copy" and left it on disk with
+            // nobody told. The disposal below needs the directory, not the file, so it can
+            // still succeed — and what it cannot do is raised the way `store` raises it.
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return nil
+            }
+            Self.logger.fault(
+                "Unreadable legacy shared credential at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            try removeLegacyCredentialFileIfPresent(for: connectionID)
             return nil
         }
 
@@ -284,18 +299,32 @@ public final class SharedCredentialStore: @unchecked Sendable {
         return nil
     }
 
+    /// Sweep the legacy partitions after a write, reporting what would not go.
+    ///
+    /// Best-effort by design — the credential the caller asked for is already in the
+    /// Keychain, and failing the write over a stale copy would only cost them that — but not
+    /// silent: an item that cannot be removed is an obsolete secret left readable in an
+    /// access group this app no longer writes to, and nothing else looks at those partitions
+    /// once the current one has an item. The record is what says the next write should be
+    /// retried, and where.
     private func cleanupLegacyKeychainData(account: String) {
         guard usesDataProtectionKeychain else {
             return
         }
         for legacyAccessGroup in legacyAccessGroups {
             for legacySyncMode in legacySyncModes {
-                try? deleteKeychainData(
-                    account: account,
-                    accessGroup: legacyAccessGroup,
-                    useDataProtectionKeychain: true,
-                    syncMode: legacySyncMode
-                )
+                do {
+                    try deleteKeychainData(
+                        account: account,
+                        accessGroup: legacyAccessGroup,
+                        useDataProtectionKeychain: true,
+                        syncMode: legacySyncMode
+                    )
+                } catch {
+                    Self.logger.error(
+                        "Left a legacy shared credential for \(account, privacy: .public) in \(legacyAccessGroup, privacy: .public) after storing the new one: \(String(describing: error), privacy: .public)"
+                    )
+                }
             }
         }
     }

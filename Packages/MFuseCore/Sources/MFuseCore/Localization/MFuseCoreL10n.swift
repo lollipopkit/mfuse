@@ -44,12 +44,13 @@ enum MFuseCoreL10n {
         // Neither script has a bundle under its regional identifiers, and the generic path
         // below would resolve every one of them to bare `zh` — which is not shipped either,
         // leaving Chinese users with the English fallback. Hong Kong and Macau are
-        // Traditional; Singapore is Simplified.
+        // Traditional; every other region is Simplified, which is also the script Chinese
+        // defaults to. Listing the Simplified regions instead left the ones nobody thought
+        // of — `zh-MY`, `zh-Hans-SG` — falling through to the English fallback.
         if lowercased.hasPrefix("zh-hant") || ["zh-tw", "zh-hk", "zh-mo"].contains(lowercased) {
             return ["zh-Hant", "zh_TW"]
         }
-        if lowercased == "zh" || lowercased.hasPrefix("zh-hans")
-            || ["zh-cn", "zh-sg"].contains(lowercased) {
+        if lowercased == "zh" || lowercased.hasPrefix("zh-") {
             return ["zh-Hans", "zh_CN", "zh"]
         }
 

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MFuseCore
 import os.log
@@ -7,6 +8,27 @@ extension ConnectionManager {
         subsystem: "com.lollipopkit.mfuse",
         category: "Finder"
     )
+
+    /// Open a connection's mount in Finder.
+    ///
+    /// The check that earns the activation happens in the same main-actor step as the
+    /// activation itself. Callers used to resolve the location and then hop back to the
+    /// main actor to open it, and an unmount landing in that hop had already removed the
+    /// convenience link and disconnected the domain — Finder was still sent to the
+    /// location it had just taken away.
+    func revealInFinder(_ requestedConfig: ConnectionConfig) async {
+        guard let targetURL = await resolveFinderURL(for: requestedConfig) else { return }
+        // Read as the row is now, the way the resolution reads it: a rename that landed
+        // meanwhile makes the caller's copy stale, and that is not a reason to refuse.
+        guard let config = connections.first(where: { $0.id == requestedConfig.id }),
+              canRevealMount(for: config) else {
+            Self.finderLogger.notice(
+                "Not revealing \(requestedConfig.id.uuidString, privacy: .public): its mount was taken down while the location was being resolved"
+            )
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([targetURL])
+    }
 
     func resolveFinderURL(for requestedConfig: ConnectionConfig) async -> URL? {
         // Acted on as the row is now, not as the caller holds it. Menus and the detail view

@@ -371,11 +371,7 @@ struct MenuBarView: View {
 
     private func revealInFinder(config: ConnectionConfig) {
         Task {
-            if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                await MainActor.run {
-                    NSWorkspace.shared.activateFileViewerSelecting([targetURL])
-                }
-            }
+            await connectionManager.revealInFinder(config)
         }
     }
 }

@@ -80,11 +80,7 @@ struct ConnectionDetailView: View {
                 if mount.isMounted {
                     Button {
                         Task {
-                            if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                                await MainActor.run {
-                                    NSWorkspace.shared.activateFileViewerSelecting([targetURL])
-                                }
-                            }
+                            await connectionManager.revealInFinder(config)
                         }
                     } label: {
                         Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
@@ -118,6 +114,11 @@ struct ConnectionDetailView: View {
             } else if case .mounting = mount {
                 ProgressView()
                     .controlSize(.small)
+                    // The control the header shows while a mount comes up carries no name of
+                    // its own, so VoiceOver read nothing where the Mount button had been.
+                    // Named the way the sidebar and the menu bar name the same indicator.
+                    .help(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…"))
+                    .accessibilityLabel(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…"))
             } else {
                 Button(AppL10n.string("common.action.mount", fallback: "Mount")) {
                     Task {

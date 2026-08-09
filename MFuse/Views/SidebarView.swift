@@ -132,11 +132,7 @@ struct SidebarView: View {
         if mount.isMounted {
             Button(AppL10n.string("common.action.revealInFinder", fallback: "Reveal in Finder")) {
                 Task {
-                    if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                        await MainActor.run {
-                            NSWorkspace.shared.activateFileViewerSelecting([targetURL])
-                        }
-                    }
+                    await connectionManager.revealInFinder(config)
                 }
             }
         }

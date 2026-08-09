@@ -179,6 +179,9 @@ struct ContentView: View {
         presentationID: UUID,
         openedConfig: ConnectionConfig?
     ) async -> ConnectionConfig? {
+        // Read by the failure path below, which has to put back a mount this save took down
+        // before it knew whether it could write anything.
+        var didTearDownForTargetChange = false
         do {
             let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
             let previousCredential = try await credentialProvider.credential(for: config.id)
@@ -190,6 +193,7 @@ struct ContentView: View {
             let shouldRemountAfterTargetChange: Bool
             if let previousConfig, !config.addressesSameServer(as: previousConfig) {
                 shouldRemountAfterTargetChange = try await connectionManager.prepareForTargetChange(config.id)
+                didTearDownForTargetChange = shouldRemountAfterTargetChange
             } else {
                 shouldRemountAfterTargetChange = false
             }
@@ -277,6 +281,13 @@ struct ContentView: View {
                     ),
                     message: error.localizedDescription
                 )
+            }
+            // The mount came down before the write so the extension could not authenticate
+            // the old server with the new secret. Nothing was written — the config and the
+            // credential are the ones that mount belongs to — so leaving it down would cost
+            // the user a working mount over an edit that never took effect.
+            if didTearDownForTargetChange {
+                await connectionManager.connect(config.id)
             }
             return nil
         }
