@@ -27,7 +27,9 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     private var pathToIDCache: [String: CachedPathEntry] = [
         "/": CachedPathEntry(fileID: "root", isFolder: true)
     ]
-    private let session = URLSession.shared
+    /// Injectable so a test can drive the token endpoint this talks to. Production builds
+    /// take the default.
+    private let session: URLSession
 
     private static let apiBase = "https://www.googleapis.com/drive/v3"
     private static let uploadBase = "https://www.googleapis.com/upload/drive/v3"
@@ -38,11 +40,31 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     public init(
         config: ConnectionConfig,
         credential: Credential,
+        session: URLSession = .shared,
         onCredentialUpdated: (@Sendable (Credential) async throws -> Void)? = nil
     ) {
         self.config = config
         self.credential = credential
+        self.session = session
         self.onCredentialUpdated = onCredentialUpdated
+    }
+
+    /// The OAuth client this connection renews its access token with.
+    ///
+    /// The one place both refresh paths read it — `connect()` renews on a 401 of its own,
+    /// and so does every operation afterwards — so neither can send what the other
+    /// normalizes away. The editor writes these trimmed, but a legacy row, or one synced
+    /// from a build that did not, carries the whitespace: `" client-id "` reaches Google's
+    /// token endpoint as a client that does not exist, and a stored refresh token that is
+    /// perfectly good stops renewing.
+    ///
+    /// `nil` when either half is missing, which each caller reports in its own terms.
+    private var oauthClient: (clientID: String, redirectURI: String)? {
+        guard let clientID = ConnectionConfig.trimmedParameter(config.parameters["clientID"]),
+              let redirectURI = ConnectionConfig.trimmedParameter(config.parameters["redirectURI"]) else {
+            return nil
+        }
+        return (clientID, redirectURI)
     }
 
     // MARK: - Lifecycle
@@ -64,14 +86,16 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             if http.statusCode == 401 {
                 // Try refresh
                 if let refreshToken = credential.password {
-                    let clientID = config.parameters["clientID"] ?? ""
-                    let redirectURI = config.parameters["redirectURI"] ?? ""
-                    guard !clientID.isEmpty, !redirectURI.isEmpty else {
+                    guard let oauthClient else {
                         throw RemoteFileSystemError.connectionFailed(
                             "Google Drive OAuth refresh requires non-empty clientID and redirectURI"
                         )
                     }
-                    let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
+                    let provider = GoogleOAuthProvider(
+                        clientID: oauthClient.clientID,
+                        redirectURI: oauthClient.redirectURI,
+                        session: session
+                    )
                     let newToken = try await provider.refresh(refreshToken: refreshToken)
                     let updatedCredential = Credential(
                         password: newToken.refreshToken ?? credential.password,
@@ -623,17 +647,15 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
 
-        // Read the way every other reader of these parameters reads them. The editor writes
-        // them trimmed, but a legacy row or one synced from a build that did not sends
-        // `" client-id "` straight to Google's token endpoint, which answers
-        // `invalid_client` — a stored refresh token that is perfectly good then cannot
-        // renew, and the mount reports an authentication failure no sign-in fixes.
-        guard let clientID = ConnectionConfig.trimmedParameter(config.parameters["clientID"]),
-              let redirectURI = ConnectionConfig.trimmedParameter(config.parameters["redirectURI"]) else {
+        guard let oauthClient else {
             throw RemoteFileSystemError.authenticationFailed
         }
 
-        let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
+        let provider = GoogleOAuthProvider(
+            clientID: oauthClient.clientID,
+            redirectURI: oauthClient.redirectURI,
+            session: session
+        )
         let newToken = try await provider.refresh(refreshToken: refreshToken)
         let updatedCredential = Credential(
             password: newToken.refreshToken ?? credential.password,

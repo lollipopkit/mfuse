@@ -126,6 +126,71 @@ func googleOAuthProviderReportsRevokedRefreshTokenAsAuthenticationFailure(status
     }
 }
 
+/// `connect()` renews on a 401 of its own, so it has to normalize the OAuth client the same
+/// way every later refresh does. Sending `" client-id "` as typed reaches Google as a client
+/// that does not exist, and a stored refresh token that is perfectly good stops renewing.
+@Test func connectRefreshesWithTheNormalizedOAuthClient() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasPrefix("https://www.googleapis.com/drive/v3/about") {
+            return .http(status: 401, body: Data("{\"error\":\"invalid_token\"}".utf8))
+        }
+
+        #expect(url == "https://oauth2.googleapis.com/token")
+        let body = String(bytes: readRequestBody(request), encoding: .utf8) ?? ""
+        // Sent as the editor would have written it, whatever the row happens to hold.
+        #expect(body.contains("client_id=client-id&") || body.hasSuffix("client_id=client-id"))
+        #expect(!body.contains("%20client-id"))
+        #expect(!body.contains("client-id%20"))
+        return .http(
+            status: 200,
+            body: Data("""
+            {"access_token":"renewed-token","expires_in":3599,"token_type":"Bearer"}
+            """.utf8)
+        )
+    }
+
+    let config = ConnectionConfig(
+        name: "Drive",
+        backendType: .googleDrive,
+        host: "",
+        authMethod: .oauth,
+        parameters: [
+            "clientID": "  client-id  ",
+            "redirectURI": "  com.example.mfuse:/oauth  "
+        ]
+    )
+    let fileSystem = GoogleDriveFileSystem(
+        config: config,
+        credential: Credential(password: "refresh-token", token: "expired-token"),
+        session: session
+    )
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+}
+
+/// URLSession hands `URLProtocol` the body as a stream, so a request built with `httpBody`
+/// arrives with that property empty.
+private func readRequestBody(_ request: URLRequest) -> Data {
+    if let body = request.httpBody {
+        return body
+    }
+    guard let stream = request.httpBodyStream else { return Data() }
+    stream.open()
+    defer { stream.close() }
+
+    var body = Data()
+    let bufferSize = 4096
+    var buffer = [UInt8](repeating: 0, count: bufferSize)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: bufferSize)
+        guard read > 0 else { break }
+        body.append(buffer, count: read)
+    }
+    return body
+}
+
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {
