@@ -5,15 +5,29 @@ import MFuseCore
 /// Menu bar extra window content showing mount status and quick actions.
 struct MenuBarView: View {
 
+    /// Beyond this many connections the list scrolls instead of growing the window.
+    private static let rowsBeforeScrolling = 7
+    private static let scrollingListHeight: CGFloat = 320
+
+    /// What launch reconciliation left unresolved, or `nil` once it is resolved or dismissed.
+    let domainSyncFailure: String?
+    let onRetryDomainSync: () async -> Void
+    let onDismissDomainSyncFailure: () -> Void
+
     @EnvironmentObject var connectionManager: ConnectionManager
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var isQuitting = false
+    @State private var isRetryingDomainSync = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             header
+
+            if let domainSyncFailure {
+                domainSyncFailureBanner(domainSyncFailure)
+            }
 
             // Content
             if connectionManager.connections.isEmpty {
@@ -54,6 +68,53 @@ struct MenuBarView: View {
         .padding(.vertical, 10)
     }
 
+    // MARK: - Domain Sync Failure
+
+    /// Reconciliation registers the domains and clears the stale ones, so a failure leaves
+    /// the rows reporting mounts the system does not have — or missing ones it does. It
+    /// stays here until it is retried successfully or dismissed, because nothing else runs
+    /// reconciliation before the next launch.
+    private func domainSyncFailureBanner(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                Spacer()
+                Button(AppL10n.string("common.action.dismiss", fallback: "Dismiss")) {
+                    onDismissDomainSyncFailure()
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11))
+                .disabled(isRetryingDomainSync)
+
+                if isRetryingDomainSync {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(AppL10n.string("common.action.retry", fallback: "Retry"))
+                } else {
+                    Button(AppL10n.string("common.action.retry", fallback: "Retry")) {
+                        isRetryingDomainSync = true
+                        Task {
+                            await onRetryDomainSync()
+                            isRetryingDomainSync = false
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+    }
+
     // MARK: - Empty State
 
     private var emptyState: some View {
@@ -73,15 +134,29 @@ struct MenuBarView: View {
 
     // MARK: - Connection List
 
+    /// Rows are shown directly until there are enough of them to be worth scrolling.
+    ///
+    /// A ScrollView derives its ideal height from the space its parent offers, not from
+    /// its content. A menu bar window sizes itself to its content, so the two wait on
+    /// each other and the ScrollView collapses to zero height — the rows disappear
+    /// entirely. Giving it an explicit height only once it is actually needed avoids
+    /// that, and a short list no longer scrolls for no reason.
+    @ViewBuilder
     private var connectionList: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ForEach(connectionManager.connections) { config in
-                    menuBarRow(config)
-                }
+        let rows = VStack(spacing: 0) {
+            ForEach(connectionManager.connections) { config in
+                menuBarRow(config)
             }
         }
-        .frame(maxHeight: 320)
+
+        if connectionManager.connections.count > Self.rowsBeforeScrolling {
+            ScrollView {
+                rows
+            }
+            .frame(height: Self.scrollingListHeight)
+        } else {
+            rows
+        }
     }
 
     // MARK: - Batch Actions
@@ -89,7 +164,6 @@ struct MenuBarView: View {
     private var batchActions: some View {
         HStack(spacing: 6) {
             Button {
-                dismissMenuBarPanel()
                 Task {
                     let configsToMount = connectionManager.connections.filter {
                         let state = connectionManager.effectiveMountState(for: $0.id)
@@ -106,18 +180,19 @@ struct MenuBarView: View {
             } label: {
                 Label(AppL10n.string("common.action.mountAll", fallback: "Mount All"), systemImage: "arrow.up.circle")
                     .font(.system(size: 11))
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
             .disabled(mountedCount + mountingCount == connectionManager.connections.count)
 
-            Spacer()
-
             Button {
-                dismissMenuBarPanel()
                 Task {
-                    let configsToUnmount = connectionManager.connections.filter {
-                        connectionManager.effectiveMountState(for: $0.id).isMounted
-                    }
+                    // Every connection, not just the ones that look mounted right now: a
+                    // Mount All started moments earlier may not have reached `.connecting`
+                    // for a given row yet, and filtering on the state observed here let
+                    // that row come up after the later Unmount All had finished.
+                    // `disconnect` is a no-op for anything already torn down.
+                    let configsToUnmount = connectionManager.connections
                     await withTaskGroup(of: Void.self) { group in
                         for config in configsToUnmount {
                             group.addTask {
@@ -129,9 +204,10 @@ struct MenuBarView: View {
             } label: {
                 Label(AppL10n.string("common.action.unmountAll", fallback: "Unmount All"), systemImage: "arrow.down.circle")
                     .font(.system(size: 11))
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
-            .disabled(mountedCount == 0)
+            .disabled(unmountableCount == 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
@@ -145,24 +221,22 @@ struct MenuBarView: View {
                 AppL10n.string("menuBar.action.openMFuse", fallback: "Open MFuse"),
                 systemImage: "app"
             ) {
-                dismissMenuBarPanel()
                 AppDelegate.activateMainInterface()
                 openWindow(id: MFuseApp.mainWindowID)
             }
-            Spacer()
             footerButton(
                 AppL10n.string("menuBar.action.settings", fallback: "Settings"),
                 systemImage: "gearshape"
             ) {
-                dismissMenuBarPanel()
+                // Without this the app stays an accessory and Settings opens behind
+                // whatever is frontmost, which reads as the button doing nothing.
+                AppDelegate.activateMainInterface()
                 openSettings()
             }
-            Spacer()
             footerButton(
                 AppL10n.string("menuBar.action.quit", fallback: "Quit"),
                 systemImage: "power"
             ) {
-                dismissMenuBarPanel()
                 isQuitting = true
                 AppDelegate.requestFullTermination()
             }
@@ -179,7 +253,13 @@ struct MenuBarView: View {
                     .font(.system(size: 12))
                 Text(title)
                     .font(.system(size: 10))
+                    .lineLimit(1)
             }
+            // Equal-width cells: spacers would distribute the leftover space instead of
+            // the cells themselves, spacing the icons unevenly because the labels differ
+            // in width.
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
@@ -190,42 +270,22 @@ struct MenuBarView: View {
     @ViewBuilder
     private func menuBarRow(_ config: ConnectionConfig) -> some View {
         let mount = connectionManager.effectiveMountState(for: config.id)
-        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
 
         HStack(spacing: 10) {
-            // Backend icon with state ring
-            ZStack {
-                Circle()
-                    .fill(stateColor(mount).opacity(0.12))
-                    .frame(width: 30, height: 30)
-                Image(systemName: config.backendType.iconName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(stateColor(mount))
-                    .animation(AnimationConstants.mountState, value: mount)
-            }
+            // The sole mount indicator, leading the row.
+            Circle()
+                .fill(stateColor(mount))
+                .frame(width: 8, height: 8)
+                .animation(AnimationConstants.mountState, value: mount)
 
-            // Info
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(config.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                    if mount.isMounted {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 6, height: 6)
-                            .transition(.opacity.combined(with: .scale(scale: 0.5)))
-                    }
-                }
-                Text(verbatim: mount.isMounted
-                    ? FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL)
-                    : config.displayAddress
-                )
-                .font(.system(size: 11))
-                .foregroundStyle(mount.isMounted ? .green.opacity(0.8) : .secondary)
-                .lineLimit(1)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
+                Text(config.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                Text(verbatim: config.displaySubtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 if case .error(let msg) = mount {
                     Text(msg)
                         .font(.system(size: 10))
@@ -240,7 +300,6 @@ struct MenuBarView: View {
             HStack(spacing: 4) {
                 if mount.isMounted {
                     Button {
-                        dismissMenuBarPanel()
                         revealInFinder(config: config)
                     } label: {
                         Image(systemName: "folder")
@@ -268,7 +327,6 @@ struct MenuBarView: View {
                 .accessibilityLabel(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…"))
         } else {
             Button {
-                dismissMenuBarPanel()
                 Task {
                     if mountState.isMounted {
                         await connectionManager.disconnect(config.id)
@@ -279,7 +337,7 @@ struct MenuBarView: View {
             } label: {
                 Image(systemName: mountState.isMounted ? "eject.circle" : "play.circle")
                     .font(.system(size: 16))
-                    .foregroundStyle(mountState.isMounted ? .red : .green)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
@@ -302,6 +360,18 @@ struct MenuBarView: View {
         connectionManager.connections.filter { connectionManager.effectiveMountState(for: $0.id).isMounting }.count
     }
 
+    /// What Unmount All has something to do about. A row left in `.error` counts: a
+    /// teardown that failed part-way still holds a filesystem, a domain or a convenience
+    /// link, and `disconnect` is the retry for it — leaving it out disabled the only batch
+    /// control that could clear it.
+    private var unmountableCount: Int {
+        connectionManager.connections.filter {
+            let state = connectionManager.effectiveMountState(for: $0.id)
+            if case .error = state { return true }
+            return state.isMounted || state.isMounting
+        }.count
+    }
+
     private func stateColor(_ state: MountState) -> Color {
         switch state {
         case .unmounted:  return .secondary
@@ -313,16 +383,7 @@ struct MenuBarView: View {
 
     private func revealInFinder(config: ConnectionConfig) {
         Task {
-            if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                await MainActor.run {
-                    NSWorkspace.shared.activateFileViewerSelecting([targetURL])
-                }
-            }
+            await connectionManager.revealInFinder(config)
         }
-    }
-
-    @MainActor
-    private func dismissMenuBarPanel() {
-        NSApp.keyWindow?.orderOut(nil)
     }
 }

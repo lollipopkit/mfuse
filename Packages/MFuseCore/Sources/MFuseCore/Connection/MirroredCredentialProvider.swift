@@ -41,6 +41,30 @@ private struct ModeTransitionRollbackError: Error, LocalizedError {
     }
 }
 
+/// The mode transition did not complete: the copies in the mode being left could not be
+/// removed, so the transition was rolled back.
+///
+/// Reported rather than logged: what an unremoved copy leaves is a credential in both
+/// Keychain partitions — a secret still synchronized to iCloud after the user turned that
+/// off, and a mixed state `credentialSyncState(for:)` cannot resolve on its own. The
+/// rollback runs before this is thrown, so the provider is back on the mode it started
+/// from and the user can retry the switch.
+public struct ModeTransitionCleanupError: Error, LocalizedError {
+    public let failures: [String]
+
+    public init(failures: [String]) {
+        self.failures = failures
+    }
+
+    public var errorDescription: String? {
+        MFuseCoreL10n.string(
+            "credential.error.modeTransitionCleanupFailed",
+            fallback: "The credential mode change was rolled back because the old copies could not be removed: %@",
+            failures.joined(separator: " ")
+        )
+    }
+}
+
 public enum MirroredCredentialSyncState: Sendable, Equatable {
     case local
     case synchronizable
@@ -242,26 +266,56 @@ public final class MirroredCredentialProvider: CredentialProvider, @unchecked Se
                 throw originalError
             }
 
+            var cleanupFailures: [String] = []
             for connectionID in connectionIDs {
                 do {
                     try await sourcePrimary.delete(for: connectionID)
                 } catch {
-                    NSLog(
-                        "MFuse credential migration cleanup failed for source primary item %@: %@",
-                        connectionID.uuidString,
-                        error.localizedDescription
+                    cleanupFailures.append(
+                        "primary [\(connectionID.uuidString)]: \(error.localizedDescription)"
                     )
                 }
 
                 do {
                     try sourceSharedStore.delete(for: connectionID)
                 } catch {
-                    NSLog(
-                        "MFuse credential migration cleanup failed for source shared item %@: %@",
-                        connectionID.uuidString,
-                        error.localizedDescription
+                    cleanupFailures.append(
+                        "shared [\(connectionID.uuidString)]: \(error.localizedDescription)"
                     )
                 }
+            }
+
+            // A credential the cleanup could not delete is still readable in the mode the
+            // user just left — an iCloud-synchronized secret surviving the switch to local
+            // above all. Returning normally reported that as a completed move, and the
+            // caller persisted the new setting over a Keychain holding both copies.
+            //
+            // Unwound the way a failed write is, rather than half-committed: the source is
+            // populated either way, so leaving it as the mode in force keeps the app, the
+            // extension and the persisted setting reading the one partition that is whole,
+            // and the user can retry the switch.
+            guard cleanupFailures.isEmpty else {
+                for failure in cleanupFailures {
+                    NSLog("MFuse credential migration cleanup failed for source %@", failure)
+                }
+                let cleanupError = ModeTransitionCleanupError(failures: cleanupFailures)
+                let context = ModeTransitionContext(
+                    credentialsToMove: credentialsToMove,
+                    sourcePrimary: sourcePrimary,
+                    sourceSharedStore: sourceSharedStore,
+                    targetPrimary: targetPrimary,
+                    targetSharedStore: targetSharedStore,
+                    writtenConnectionIDs: writtenConnectionIDs
+                )
+                do {
+                    try await rollbackModeTransition(context: context)
+                } catch {
+                    throw ModeTransitionError(
+                        originalError: cleanupError,
+                        rollbackError: error
+                    )
+                }
+                throw cleanupError
             }
 
             lock.withLock {

@@ -27,23 +27,33 @@ struct ConnectionDetailView: View {
                     if config.backendType.usesHostBasedAddressing {
                         LabeledContent(AppL10n.string("detail.field.host", fallback: "Host"), value: config.host)
                         LabeledContent(AppL10n.string("detail.field.port", fallback: "Port"), value: String(config.port))
-                        LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
+                        // NFS is anonymous-only, and FTP/WebDAV can be too, so the row
+                        // would otherwise stand empty for a value the backend never uses.
+                        if !config.username.isEmpty {
+                            LabeledContent(AppL10n.string("detail.field.username", fallback: "Username"), value: config.username)
+                        }
                     } else {
                         LabeledContent(AppL10n.string("detail.field.address", fallback: "Address"), value: config.displayAddress)
+                        // displayAddress prefers the endpoint, so without this an S3
+                        // target with both set would never show its bucket, and two
+                        // buckets on one endpoint would look identical here.
+                        if config.backendType == .s3,
+                           let bucket = config.s3Bucket,
+                           bucket != config.displayAddress {
+                            LabeledContent(AppL10n.string("editor.field.bucket", fallback: "Bucket"), value: bucket)
+                        }
                     }
                     LabeledContent(AppL10n.string("detail.field.remotePath", fallback: "Remote Path"), value: config.remotePath)
                     LabeledContent(AppL10n.string("detail.field.auth", fallback: "Auth"), value: config.authMethod.displayName)
                 }
 
-                Section(AppL10n.string("detail.section.mount", fallback: "Mount")) {
-                    LabeledContent(AppL10n.string("detail.field.state", fallback: "State")) {
-                        HStack(spacing: 6) {
-                            Image(systemName: mount.isMounted ? "folder.fill" : "folder")
-                                .foregroundStyle(iconColor)
-                                .contentTransition(.symbolEffect(.replace))
-                                .animation(AnimationConstants.mountState, value: mount.isMounted)
+                // Only surfaced on failure: while mounted this just repeated the
+                // container path, but it is the one place an error is reported.
+                if case .error = mount {
+                    Section(AppL10n.string("detail.section.mount", fallback: "Mount")) {
+                        LabeledContent(AppL10n.string("detail.field.state", fallback: "State")) {
                             Text(mount.statusText)
-                                .foregroundStyle(mountStateColor)
+                                .foregroundStyle(.red)
                                 .animation(AnimationConstants.mountState, value: mount)
                         }
                     }
@@ -62,9 +72,7 @@ struct ConnectionDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(config.name)
                     .font(.title2.bold())
-                Text(verbatim: config.displayAddress == config.backendType.displayName
-                    ? config.displayAddress
-                    : "\(config.backendType.displayName) — \(config.displayAddress)")
+                Text(verbatim: config.displaySubtitle)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -72,11 +80,7 @@ struct ConnectionDetailView: View {
                 if mount.isMounted {
                     Button {
                         Task {
-                            if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                                await MainActor.run {
-                                    NSWorkspace.shared.activateFileViewerSelecting([targetURL])
-                                }
-                            }
+                            await connectionManager.revealInFinder(config)
                         }
                     } label: {
                         Label(AppL10n.string("detail.action.openInFinder", fallback: "Open in Finder"), systemImage: "folder")
@@ -95,22 +99,33 @@ struct ConnectionDetailView: View {
     private var mountButton: some View {
         Group {
             if mount.isMounted {
-                Button(AppL10n.string("common.action.unmount", fallback: "Unmount")) {
+                Button {
                     Task {
                         await connectionManager.disconnect(config.id)
                     }
+                } label: {
+                    Image(systemName: "eject.fill")
                 }
-                .tint(.red)
+                .buttonStyle(.bordered)
+                // An icon-only control still needs both a pointer tooltip and a label
+                // for VoiceOver.
+                .help(AppL10n.string("common.action.unmount", fallback: "Unmount"))
+                .accessibilityLabel(AppL10n.string("common.action.unmount", fallback: "Unmount"))
             } else if case .mounting = mount {
                 ProgressView()
                     .controlSize(.small)
+                    // The control the header shows while a mount comes up carries no name of
+                    // its own, so VoiceOver read nothing where the Mount button had been.
+                    // Named the way the sidebar and the menu bar name the same indicator.
+                    .help(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…"))
+                    .accessibilityLabel(AppL10n.string("sidebar.action.mounting", fallback: "Mounting…"))
             } else {
                 Button(AppL10n.string("common.action.mount", fallback: "Mount")) {
                     Task {
                         await connectionManager.connect(config.id)
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
             }
         }
     }
@@ -119,34 +134,24 @@ struct ConnectionDetailView: View {
         Group {
             if mount.isMounted {
                 Button {
+                    // Only the id is carried across, and the manager owns the rest: the
+                    // refresh rewrites the domain's bootstrap snapshot, so it has to be
+                    // tracked and generation-fenced or one racing an edit puts the old
+                    // config back — and one racing a removal writes a snapshot for a domain
+                    // that is going away. Repair-on-failure lives there too.
                     Task {
-                        try? await connectionManager.mountProvider?.signalEnumerator(for: config)
+                        await connectionManager.refreshMountedConnection(for: config.id)
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
+                .buttonStyle(.bordered)
                 .help(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
+                .accessibilityLabel(AppL10n.string("detail.help.refreshFinderListing", fallback: "Refresh Finder listing"))
                 .transition(.opacity)
             }
         }
         .animation(AnimationConstants.mountState, value: mount.isMounted)
     }
 
-    private var iconColor: Color {
-        switch mount {
-        case .mounted:    return .green
-        case .mounting:   return .orange
-        case .error:      return .red
-        case .unmounted:  return .secondary
-        }
-    }
-
-    private var mountStateColor: Color {
-        switch mount {
-        case .unmounted:  return .secondary
-        case .mounting:   return .orange
-        case .mounted:    return .green
-        case .error:      return .red
-        }
-    }
 }

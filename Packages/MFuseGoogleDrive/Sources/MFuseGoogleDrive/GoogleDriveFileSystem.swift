@@ -27,7 +27,9 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     private var pathToIDCache: [String: CachedPathEntry] = [
         "/": CachedPathEntry(fileID: "root", isFolder: true)
     ]
-    private let session = URLSession.shared
+    /// Injectable so a test can drive the token endpoint this talks to. Production builds
+    /// take the default.
+    private let session: URLSession
 
     private static let apiBase = "https://www.googleapis.com/drive/v3"
     private static let uploadBase = "https://www.googleapis.com/upload/drive/v3"
@@ -38,11 +40,31 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     public init(
         config: ConnectionConfig,
         credential: Credential,
+        session: URLSession = .shared,
         onCredentialUpdated: (@Sendable (Credential) async throws -> Void)? = nil
     ) {
         self.config = config
         self.credential = credential
+        self.session = session
         self.onCredentialUpdated = onCredentialUpdated
+    }
+
+    /// The OAuth client this connection renews its access token with.
+    ///
+    /// The one place both refresh paths read it — `connect()` renews on a 401 of its own,
+    /// and so does every operation afterwards — so neither can send what the other
+    /// normalizes away. The editor writes these trimmed, but a legacy row, or one synced
+    /// from a build that did not, carries the whitespace: `" client-id "` reaches Google's
+    /// token endpoint as a client that does not exist, and a stored refresh token that is
+    /// perfectly good stops renewing.
+    ///
+    /// `nil` when either half is missing, which each caller reports in its own terms.
+    private var oauthClient: (clientID: String, redirectURI: String)? {
+        guard let clientID = ConnectionConfig.trimmedParameter(config.parameters["clientID"]),
+              let redirectURI = ConnectionConfig.trimmedParameter(config.parameters["redirectURI"]) else {
+            return nil
+        }
+        return (clientID, redirectURI)
     }
 
     // MARK: - Lifecycle
@@ -64,14 +86,16 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             if http.statusCode == 401 {
                 // Try refresh
                 if let refreshToken = credential.password {
-                    let clientID = config.parameters["clientID"] ?? ""
-                    let redirectURI = config.parameters["redirectURI"] ?? ""
-                    guard !clientID.isEmpty, !redirectURI.isEmpty else {
+                    guard let oauthClient else {
                         throw RemoteFileSystemError.connectionFailed(
                             "Google Drive OAuth refresh requires non-empty clientID and redirectURI"
                         )
                     }
-                    let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
+                    let provider = GoogleOAuthProvider(
+                        clientID: oauthClient.clientID,
+                        redirectURI: oauthClient.redirectURI,
+                        session: session
+                    )
                     let newToken = try await provider.refresh(refreshToken: refreshToken)
                     let updatedCredential = Credential(
                         password: newToken.refreshToken ?? credential.password,
@@ -543,7 +567,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         do {
             try await refreshAccessToken()
         } catch {
-            throw RemoteFileSystemError.authenticationFailed
+            throw Self.refreshFailure(error)
         }
 
         var retriedRequest = request
@@ -572,7 +596,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         do {
             try await refreshAccessToken()
         } catch {
-            throw RemoteFileSystemError.authenticationFailed
+            throw Self.refreshFailure(error)
         }
 
         var retriedRequest = request
@@ -588,18 +612,50 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         return retriedResult
     }
 
+    /// What a failed token refresh means for the operation that needed it.
+    ///
+    /// The provider already tells a grant Google has stopped honouring — reported as
+    /// `authenticationFailed`, which the extension turns into the sign-in prompt — from the
+    /// token endpoint failing to answer. Calling every one of them an authentication failure
+    /// sent the user to sign in again over a network blip or a 503, and disagreed with
+    /// `connect()`, which passes the same failures through as they are.
+    ///
+    /// Cancellation is not a failure of the refresh at all: it is a teardown, a timeout or
+    /// an operation the caller stopped, and every layer above reads it as its own — the
+    /// extension leaves `URLError.cancelled` alone rather than calling the server
+    /// unreachable, and the manager's teardowns check for `CancellationError` instead of
+    /// publishing a mount error over the state they are already writing. Reporting it as a
+    /// connection failure put "could not reach Google Drive" on a mount the user had just
+    /// unmounted.
+    static func refreshFailure(_ error: Error) -> Error {
+        if let remoteError = error as? RemoteFileSystemError {
+            return remoteError
+        }
+        if error is CancellationError {
+            return error
+        }
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            return error
+        }
+        return RemoteFileSystemError.connectionFailed(
+            "Could not refresh the Google Drive access token: \(error.localizedDescription)"
+        )
+    }
+
     private func refreshAccessToken() async throws {
         guard let refreshToken = credential.password else {
             throw RemoteFileSystemError.authenticationFailed
         }
 
-        let clientID = config.parameters["clientID"] ?? ""
-        let redirectURI = config.parameters["redirectURI"] ?? ""
-        guard !clientID.isEmpty, !redirectURI.isEmpty else {
+        guard let oauthClient else {
             throw RemoteFileSystemError.authenticationFailed
         }
 
-        let provider = GoogleOAuthProvider(clientID: clientID, redirectURI: redirectURI)
+        let provider = GoogleOAuthProvider(
+            clientID: oauthClient.clientID,
+            redirectURI: oauthClient.redirectURI,
+            session: session
+        )
         let newToken = try await provider.refresh(refreshToken: refreshToken)
         let updatedCredential = Credential(
             password: newToken.refreshToken ?? credential.password,
@@ -640,8 +696,28 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             .appendingPathComponent(UUID().uuidString)
         FileManager.default.createFile(atPath: multipartURL.path, contents: nil)
 
-        let outputHandle = try FileHandle(forWritingTo: multipartURL)
-        let inputHandle = try FileHandle(forReadingFrom: sourceFileURL)
+        // From the first thing that can fail after the file exists: the caller's `defer`
+        // is installed on what this returns, so nothing removes the file on a throwing
+        // path out of here.
+        let outputHandle: FileHandle
+        do {
+            outputHandle = try FileHandle(forWritingTo: multipartURL)
+        } catch {
+            try? FileManager.default.removeItem(at: multipartURL)
+            throw error
+        }
+        // Its own cleanup: the caller's `defer` is installed on what this returns, so a
+        // throw here answers before there is anything to remove — and the output handle and
+        // the file it was opened on would both be left behind. A File Provider upload URL
+        // that has been moved or revoked is exactly the case that throws.
+        let inputHandle: FileHandle
+        do {
+            inputHandle = try FileHandle(forReadingFrom: sourceFileURL)
+        } catch {
+            try? outputHandle.close()
+            try? FileManager.default.removeItem(at: multipartURL)
+            throw error
+        }
 
         do {
             defer {

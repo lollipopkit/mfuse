@@ -240,6 +240,124 @@
         }
       }
     },
+    "app.error.startupDomainSyncFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MFuse could not reconcile its File Provider domains at launch: %@. Mounts may be missing or show the wrong state until this succeeds."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MFuse no pudo conciliar sus dominios de File Provider al iniciarse: %@. Es posible que falten montajes o que muestren un estado incorrecto hasta que esto se complete."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MFuse n’a pas pu réconcilier ses domaines File Provider au lancement : %@. Des montages peuvent manquer ou afficher un état incorrect tant que cela n’aboutit pas."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MFuse tidak dapat merekonsiliasi domain File Provider saat diluncurkan: %@. Mount bisa hilang atau menampilkan status yang salah sampai proses ini berhasil."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MFuse non è riuscito a riconciliare i suoi domini File Provider all’avvio: %@. Alcuni montaggi potrebbero mancare o mostrare uno stato errato finché l’operazione non riesce."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "起動時に File Provider ドメインを同期できませんでした：%@。同期が成功するまで、マウントが表示されない、または状態が正しく表示されないことがあります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 시 File Provider 도메인을 조정하지 못했습니다: %@. 성공할 때까지 마운트가 표시되지 않거나 잘못된 상태로 표시될 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动时无法同步 File Provider 域：%@。在成功之前，挂载可能缺失或显示错误状态。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟動時無法同步 File Provider 網域：%@。在成功之前，掛載可能缺失或顯示錯誤狀態。"
+          }
+        }
+      }
+    },
+    "app.warning.startupDomainSyncIssue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Domain Sync Issue"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Problema de sincronización de dominios"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Problème de synchronisation des domaines"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Masalah sinkronisasi domain"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Problema di sincronizzazione dei domini"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ドメイン同期の問題"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "도메인 동기화 문제"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "域同步问题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網域同步問題"
+          }
+        }
+      }
+    },
     "com.lollipopkit.mfuse:/oauth" : {
 
     },
@@ -298,6 +416,65 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "取消"
+          }
+        }
+      }
+    },
+    "common.action.dismiss" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dismiss"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignorer"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abaikan"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignora"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "閉じる"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "닫기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "忽略"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "忽略"
           }
         }
       }
@@ -652,6 +829,65 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重新整理"
+          }
+        }
+      }
+    },
+    "common.action.retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reintentar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réessayer"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coba lagi"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Riprova"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再試行"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다시 시도"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重試"
           }
         }
       }
@@ -1183,6 +1419,65 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "連線已儲存，但 File Provider 網域同步失敗：%@。MFuse 會在下次啟動時重試協調。"
+          }
+        }
+      }
+    },
+    "content.error.saveFailedWithCredentialRollbackFailure" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ The stored credential could not be put back either: %2$@. Save the mount again to repair it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Tampoco se pudo restaurar la credencial guardada: %2$@. Vuelve a guardar el montaje para repararlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ L’identifiant enregistré n’a pas pu être restauré non plus : %2$@. Enregistrez de nouveau le montage pour le réparer."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Kredensial tersimpan juga tidak dapat dikembalikan: %2$@. Simpan ulang pemasangan ini untuk memperbaikinya."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Non è stato possibile ripristinare nemmeno la credenziale salvata: %2$@. Salva di nuovo il montaggio per ripararlo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 保存されていた認証情報も元に戻せませんでした: %2$@。マウントを保存し直して修復してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 저장된 자격 증명도 복원하지 못했습니다: %2$@. 마운트를 다시 저장해 복구하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已保存的凭据也未能恢复：%2$@。请再次保存该挂载以修复。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已儲存的憑證也無法還原：%2$@。請重新儲存此掛載以修復。"
           }
         }
       }
@@ -2130,6 +2425,124 @@
         }
       }
     },
+    "editor.action.connectAccount" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect Account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectar cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecter le compte"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hubungkan akun"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connetti account"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アカウントを接続"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정 연결"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接账户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接帳戶"
+          }
+        }
+      }
+    },
+    "editor.action.reauthenticate" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Re-authenticate"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volver a autenticar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se réauthentifier"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentikasi ulang"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentica di nuovo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再認証"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다시 인증"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新认证"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新認證"
+          }
+        }
+      }
+    },
     "editor.action.testAccess" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2244,6 +2657,124 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Google Drive 需要同時填寫 OAuth Client ID 與 Redirect URI"
+          }
+        }
+      }
+    },
+    "editor.error.loadStoredCredential" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not read the saved credential: %@. Saving will replace it with what is entered here."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer la credencial guardada: %@. Al guardar se reemplazará por lo introducido aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire l’identifiant enregistré : %@. L’enregistrement le remplacera par ce qui est saisi ici."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tidak dapat membaca kredensial tersimpan: %@. Menyimpan akan menggantinya dengan yang dimasukkan di sini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile leggere la credenziale salvata: %@. Il salvataggio la sostituirà con quanto inserito qui."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存された認証情報を読み込めませんでした: %@。保存すると、ここに入力した内容で置き換えられます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 자격 증명을 읽을 수 없습니다: %@. 저장하면 여기에 입력한 내용으로 대체됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取已保存的凭证：%@。保存将用此处输入的内容替换它。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取已儲存的憑證：%@。儲存將以此處輸入的內容取代它。"
+          }
+        }
+      }
+    },
+    "editor.error.oauthProviderUnavailable" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This backend does not support built-in OAuth authorization."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este backend no admite la autorización OAuth integrada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce backend ne prend pas en charge l’autorisation OAuth intégrée."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backend ini tidak mendukung otorisasi OAuth bawaan."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo backend non supporta l’autorizzazione OAuth integrata."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このバックエンドは組み込みの OAuth 認可に対応していません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 백엔드는 내장 OAuth 인증을 지원하지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此后端不支持内置 OAuth 授权。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此後端不支援內建 OAuth 授權。"
           }
         }
       }
@@ -3545,61 +4076,120 @@
         }
       }
     },
-    "editor.message.googleSignInAfterSaving" : {
+    "editor.message.accountConnected" : {
       "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "You will be prompted to sign in with Google after saving."
+            "value" : "Account connected"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Inicia sesión en Google después de guardar."
+            "value" : "Cuenta conectada"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connectez-vous à Google après l’enregistrement."
+            "value" : "Compte connecté"
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Masuk ke Google setelah menyimpan."
+            "value" : "Akun terhubung"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Accedi a Google dopo aver salvato."
+            "value" : "Account connesso"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "保存後に Google にサインインしてください。"
+            "value" : "アカウントを接続しました"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "저장한 후 Google에 로그인하세요."
+            "value" : "계정이 연결되었습니다"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "保存后登录 Google。"
+            "value" : "账户已连接"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "儲存後登入 Google。"
+            "value" : "帳戶已連接"
+          }
+        }
+      }
+    },
+    "editor.message.connectAccountBeforeSaving" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect your account before testing or saving this mount."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conecta tu cuenta antes de probar o guardar este montaje."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez votre compte avant de tester ou d’enregistrer ce montage."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hubungkan akun Anda sebelum menguji atau menyimpan mount ini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connetti il tuo account prima di testare o salvare questo montaggio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このマウントをテストまたは保存する前にアカウントを接続してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 마운트를 테스트하거나 저장하기 전에 계정을 연결하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先连接账户，然后再测试或保存此挂载。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請先連接帳戶，再測試或儲存此掛載。"
           }
         }
       }
@@ -4560,49 +5150,49 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las credenciales se almacenarán en texto claro en el archivo de configuración compartido."
+            "value" : "Las credenciales se enviarán en texto claro. Activa TLS para cifrar este montaje."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les identifiants seront stockés en clair dans le fichier de configuration partagé."
+            "value" : "Les identifiants seront envoyés en clair. Activez TLS pour chiffrer ce montage."
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kredensial akan disimpan sebagai teks biasa di file konfigurasi bersama."
+            "value" : "Kredensial akan dikirim sebagai teks biasa. Aktifkan TLS untuk mengenkripsi mount ini."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le credenziali verranno archiviate in chiaro nel file di configurazione condiviso."
+            "value" : "Le credenziali verranno inviate in chiaro. Attiva TLS per cifrare questo montaggio."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "資格情報は共有設定ファイルに平文で保存されます。"
+            "value" : "資格情報は平文で送信されます。このマウントを暗号化するには TLS を有効にしてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자격 증명이 공유 구성 파일에 평문으로 저장됩니다."
+            "value" : "자격 증명이 평문으로 전송됩니다. 이 마운트를 암호화하려면 TLS를 활성화하십시오."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "凭证将以明文形式存储在共享配置文件中。"
+            "value" : "凭证将以明文发送。启用 TLS 以加密此挂载。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "憑證將以純文字形式儲存在共用設定檔中。"
+            "value" : "憑證將以純文字傳送。啟用 TLS 以加密此掛載。"
           }
         }
       }
@@ -6975,6 +7565,65 @@
     },
     "shared" : {
 
+    },
+    "sidebar.action.mountActions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mount Actions"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acciones de montaje"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actions de montage"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tindakan mount"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Azioni di montaggio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マウント操作"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마운트 작업"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "挂载操作"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "掛載操作"
+          }
+        }
+      }
     },
     "sidebar.action.mounting" : {
       "extractionState" : "stale",

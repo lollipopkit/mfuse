@@ -17,10 +17,14 @@
      */
     "sourceMap": true,
     "esModuleInterop": true,
-    "baseUrl": ".",
+    /**
+     * Relative, and without `baseUrl`: TypeScript 7 removed the option and rejects
+     * non-relative path targets, so the old form made every `tsc` run fail on the
+     * config before it read a single source file.
+     */
     "paths": {
-      "$lib": ["src/lib"],
-      "$lib/*": ["src/lib/*"]
+      "$lib": ["./src/lib"],
+      "$lib/*": ["./src/lib/*"]
     },
     "types": ["vite/client"],
     "skipLibCheck": true,
@@ -34,5 +38,10 @@
    * Use global.d.ts instead of compilerOptions.types
    * to avoid limiting type declarations.
    */
-  "include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.svelte"]
+  /**
+   * `.ts` is listed explicitly: `tsc` cannot parse `.svelte`, so the generated i18n
+   * modules that only `App.svelte` imports were never pulled into the program and an
+   * invalid locale file passed `bun run check` untouched.
+   */
+  "include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.ts", "src/**/*.svelte"]
 }

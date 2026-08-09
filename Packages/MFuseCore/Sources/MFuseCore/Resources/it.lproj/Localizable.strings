@@ -1,6 +1,6 @@
 "backend.googleDrive" = "Google Drive";
 "backend.dropbox" = "Dropbox";
-"backend.oneDrive" = "Microsoft OneDrive";
+"backend.oneDrive" = "OneDrive";
 "auth.password" = "Password";
 "auth.publicKey" = "Chiave pubblica";
 "auth.agent" = "SSH Agent";
@@ -40,9 +40,17 @@
 "icloud.sync.stateChangedDuringSync" = "Lo stato delle connessioni locali o cloud è cambiato durante la sincronizzazione iCloud. Riprova.";
 "credential.error.unsupportedPrimaryProvider" = "L'attuale provider di credenziali non supporta la migrazione di iCloud Keychain.";
 "credential.error.modeTransitionFailed" = "Transizione della modalità credenziali non riuscita: %1$@. Ripristino non riuscito: %2$@";
+"credential.error.modeTransitionCleanupFailed" = "La modifica della modalità delle credenziali è stata annullata perché non è stato possibile rimuovere le vecchie copie: %@";
+"credential.error.legacyFileNotRemoved" = "Un vecchio file di credenziali in %1$@ è ancora leggibile: non è stato possibile rimuoverlo (%2$@) né svuotarlo (%3$@). Eliminalo per evitare che il segreto resti sul disco in chiaro.";
 "connectionManager.error.cleanupFailed" = "Impossibile ripulire la connessione %@ prima della rimozione";
+"connectionManager.error.removalInProgress" = "La connessione %@ è in fase di rimozione; salvala di nuovo al termine";
+"connectionManager.error.connectionNotFound" = "La connessione %@ non esiste più";
+"connectionManager.error.revisionConflict" = "La connessione %@ è stata modificata altrove; riaprila e ripeti la modifica";
 "connectionManager.error.restoreRemovedConnection" = "Impossibile ripristinare la connessione rimossa: %@";
 "connectionManager.error.restoreCredential" = "Impossibile ripristinare la credenziale: %@";
+"connectionManager.error.restoreRegistration" = "Impossibile ripristinare il dominio File Provider: %@";
+"connectionManager.error.removeWithRestoreFailures" = "Impossibile rimuovere la connessione %1$@: %2$@. %3$@";
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "Impossibile eliminare la credenziale per la connessione %1$@: %2$@. %3$@";
 "connectionManager.error.deleteCredentialRecovered" = "Impossibile eliminare la credenziale per la connessione %1$@; connessione e credenziale sono state ripristinate per riprovare: %2$@";
 "connectionManager.error.unsupportedBackend" = "Backend non supportato: %@";
+"connectionManager.error.reregisterChangedConnection" = "Impossibile applicare le impostazioni aggiornate di %1$@: %2$@. Riconnetti o riavvia MFuse per riprovare.";

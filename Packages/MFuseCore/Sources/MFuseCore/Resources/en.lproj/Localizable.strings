@@ -1,6 +1,6 @@
 "backend.googleDrive" = "Google Drive";
 "backend.dropbox" = "Dropbox";
-"backend.oneDrive" = "Microsoft OneDrive";
+"backend.oneDrive" = "OneDrive";
 "auth.password" = "Password";
 "auth.publicKey" = "Public Key";
 "auth.agent" = "SSH Agent";
@@ -40,9 +40,17 @@
 "icloud.sync.stateChangedDuringSync" = "Local or cloud connection state changed during iCloud synchronization. Please retry.";
 "credential.error.unsupportedPrimaryProvider" = "The current credential provider does not support iCloud Keychain migration.";
 "credential.error.modeTransitionFailed" = "Credential mode transition failed: %1$@. Rollback failed: %2$@";
+"credential.error.modeTransitionCleanupFailed" = "The credential mode change was rolled back because the old copies could not be removed: %@";
+"credential.error.legacyFileNotRemoved" = "A legacy credential file at %1$@ is still readable: it could not be removed (%2$@) or emptied (%3$@). Delete it to keep the secret from staying on disk in cleartext.";
 "connectionManager.error.cleanupFailed" = "Failed to clean up connection %@ before removal";
+"connectionManager.error.removalInProgress" = "Connection %@ is being removed; save it again once that finishes";
+"connectionManager.error.connectionNotFound" = "Connection %@ no longer exists";
+"connectionManager.error.revisionConflict" = "Connection %@ was changed elsewhere; reopen it and make the change again";
 "connectionManager.error.restoreRemovedConnection" = "Failed to restore the removed connection: %@";
 "connectionManager.error.restoreCredential" = "Failed to restore the credential: %@";
+"connectionManager.error.restoreRegistration" = "Failed to restore the File Provider domain: %@";
+"connectionManager.error.removeWithRestoreFailures" = "Failed to remove connection %1$@: %2$@. %3$@";
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "Failed to delete credential for connection %1$@: %2$@. %3$@";
 "connectionManager.error.deleteCredentialRecovered" = "Failed to delete credential for connection %1$@; restored the connection and credential so removal can be retried: %2$@";
 "connectionManager.error.unsupportedBackend" = "Unsupported backend: %@";
+"connectionManager.error.reregisterChangedConnection" = "Failed to apply the updated settings for %1$@: %2$@. Reconnect or restart MFuse to retry.";

@@ -2,6 +2,32 @@ import Foundation
 import os.log
 import Security
 
+/// A legacy cleartext credential file that could neither be removed nor emptied.
+///
+/// Both attempts are reported: the removal needs the directory to be writable and the
+/// truncation needs the file to be, so which one was refused is what says where to look.
+public struct LegacyCredentialFileError: LocalizedError {
+    public let path: String
+    public let removalError: Error
+    public let truncationError: Error
+
+    public init(path: String, removalError: Error, truncationError: Error) {
+        self.path = path
+        self.removalError = removalError
+        self.truncationError = truncationError
+    }
+
+    public var errorDescription: String? {
+        MFuseCoreL10n.string(
+            "credential.error.legacyFileNotRemoved",
+            fallback: "A legacy credential file at %1$@ is still readable: it could not be removed (%2$@) or emptied (%3$@). Delete it to keep the secret from staying on disk in cleartext.",
+            path,
+            removalError.localizedDescription,
+            truncationError.localizedDescription
+        )
+    }
+}
+
 /// Stores provider-readable credential snapshots in the shared Keychain.
 /// Legacy cleartext credential files in the App Group container are only used
 /// as a read-once migration source and are deleted after successful migration.
@@ -11,9 +37,15 @@ public final class SharedCredentialStore: @unchecked Sendable {
         subsystem: "com.lollipopkit.mfuse",
         category: "SharedCredentialStore"
     )
-    private static let service = "com.lollipopkit.mfuse.credentials"
+    /// The Keychain service every credential item is filed under.
+    public static let defaultService = "com.lollipopkit.mfuse.credentials"
 
     public let containerURL: URL
+    /// Overridable so tests do not file their fixtures under the service the installed
+    /// app uses: an unentitled process — every test binary — has no access group, which
+    /// puts its items in the login Keychain, where nothing but a matching service tells
+    /// them apart from a developer's real credentials.
+    public let service: String
     private let accessGroup: String?
     private let allowLegacyKeychainMigration: Bool
     private let legacyAccessGroups: [String]
@@ -26,6 +58,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
             forSecurityApplicationGroupIdentifier: AppGroupConstants.groupIdentifier
         ),
         accessGroup: String? = AppGroupConstants.keychainAccessGroup,
+        service: String = SharedCredentialStore.defaultService,
         syncMode: KeychainItemSyncMode = SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local,
         allowLegacyKeychainMigration: Bool = true,
         legacyAccessGroups: [String] = [AppGroupConstants.legacyKeychainAccessGroup].compactMap { $0 }
@@ -42,6 +75,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
             )
         }
         self.accessGroup = accessGroup
+        self.service = service
         self.syncMode = syncMode
         self.allowLegacyKeychainMigration = allowLegacyKeychainMigration
         self.legacyAccessGroups = legacyAccessGroups.filter { $0 != accessGroup }
@@ -49,6 +83,14 @@ public final class SharedCredentialStore: @unchecked Sendable {
 
     public func credential(for connectionID: UUID) throws -> Credential? {
         if let data = try readKeychainData(account: connectionID.uuidString) {
+            // Tried again on every read, not only on the read that migrated the file. A
+            // cleanup that failed during migration was never retried: the Keychain item
+            // exists from then on, so this method answers from it and the cleartext copy
+            // stayed on disk for as long as nobody happened to save that connection again.
+            // Still best-effort — the caller is the extension about to mount, and a file
+            // this cannot remove is not a reason to take the mount down — but it is a
+            // standing attempt rather than a single one, and each failure logs a fault.
+            try? removeLegacyCredentialFileIfPresent(for: connectionID)
             do {
                 return try JSONDecoder().decode(Credential.self, from: data)
             } catch {
@@ -62,15 +104,27 @@ public final class SharedCredentialStore: @unchecked Sendable {
         return try migrateLegacyCredentialIfNeeded(for: connectionID)
     }
 
+    /// Stores the credential in the Keychain, then disposes of any legacy cleartext copy.
+    ///
+    /// Throws `LegacyCredentialFileError` when that copy is still readable afterwards. The
+    /// Keychain write has already happened by then and is not undone — putting the secret
+    /// back on disk is the one thing that cannot help — so a caller that retries writes the
+    /// same item again and gets the same answer until the file is gone. Reporting success
+    /// with a cleartext secret left behind is what this refuses to do.
     public func store(_ credential: Credential, for connectionID: UUID) throws {
         let data = try JSONEncoder().encode(credential)
         try writeKeychainData(data, account: connectionID.uuidString)
-        removeLegacyCredentialFileIfPresent(for: connectionID)
+        try removeLegacyCredentialFileIfPresent(for: connectionID)
     }
 
+    /// Deletes the credential, the legacy cleartext copy included.
+    ///
+    /// Throws `LegacyCredentialFileError` when that copy survives: a delete that answers
+    /// "gone" while the secret is still readable on disk is the failure that matters most
+    /// here, and only the caller can tell the user about it.
     public func delete(for connectionID: UUID) throws {
         try deleteKeychainData(account: connectionID.uuidString)
-        removeLegacyCredentialFileIfPresent(for: connectionID)
+        try removeLegacyCredentialFileIfPresent(for: connectionID)
     }
 
     public func credentialURL(for connectionID: UUID) throws -> URL {
@@ -91,7 +145,22 @@ public final class SharedCredentialStore: @unchecked Sendable {
 
     private func migrateLegacyCredentialIfNeeded(for connectionID: UUID) throws -> Credential? {
         let url = credentialFileURL(for: connectionID)
-        guard let data = try? Data(contentsOf: url) else {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            // A file that is not there is the ordinary case and says nothing. One that is
+            // there and cannot be read is a cleartext secret this store cannot migrate:
+            // answering `nil` reported that as "no legacy copy" and left it on disk with
+            // nobody told. The disposal below needs the directory, not the file, so it can
+            // still succeed — and what it cannot do is raised the way `store` raises it.
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return nil
+            }
+            Self.logger.fault(
+                "Unreadable legacy shared credential at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            try removeLegacyCredentialFileIfPresent(for: connectionID)
             return nil
         }
 
@@ -99,7 +168,12 @@ public final class SharedCredentialStore: @unchecked Sendable {
             let credential = try JSONDecoder().decode(Credential.self, from: data)
             let encoded = try JSONEncoder().encode(credential)
             try writeKeychainData(encoded, account: connectionID.uuidString)
-            removeLegacyCredentialFileIfPresent(for: connectionID)
+            // Best-effort here alone, unlike `store` and `delete`: this is a read, and the
+            // caller asking for the credential is the extension about to mount with it.
+            // Failing it would take the mount down over a file this call did not create,
+            // while the next write reports the leftover and can be retried. The attempt
+            // logs a fault of its own either way.
+            try? removeLegacyCredentialFileIfPresent(for: connectionID)
             return credential
         } catch {
             Self.logger.error(
@@ -109,7 +183,7 @@ public final class SharedCredentialStore: @unchecked Sendable {
         }
     }
 
-    private func removeLegacyCredentialFileIfPresent(for connectionID: UUID) {
+    private func removeLegacyCredentialFileIfPresent(for connectionID: UUID) throws {
         let url = credentialFileURL(for: connectionID)
         guard FileManager.default.fileExists(atPath: url.path) else {
             return
@@ -121,6 +195,34 @@ public final class SharedCredentialStore: @unchecked Sendable {
             Self.logger.error(
                 "Failed to remove legacy shared credential at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)"
             )
+            // The secret is already in the Keychain, so failing the write that put it there
+            // would only cost the caller the credential it just stored. What must not
+            // survive is the cleartext copy: deleting needs the directory to be writable
+            // and emptying only the file, so this is a second chance at the part that
+            // matters even when the first one is refused.
+            //
+            // Truncated in place rather than replaced atomically: an atomic write creates a
+            // temporary file and renames it over this one, which needs exactly the
+            // directory permission the removal above was just refused — so it would fail
+            // for the same reason and leave the secret readable.
+            do {
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                try handle.truncate(atOffset: 0)
+            } catch let truncationError {
+                Self.logger.fault(
+                    "Left a readable legacy credential file at \(url.path, privacy: .public): \(String(describing: truncationError), privacy: .public)"
+                )
+                // Raised rather than logged alone: the caller has just been told the
+                // credential was stored or deleted, and it is the only one that can put a
+                // readable secret on disk in front of the user. A log entry nobody reads is
+                // how it stayed there.
+                throw LegacyCredentialFileError(
+                    path: url.path,
+                    removalError: error,
+                    truncationError: truncationError
+                )
+            }
         }
     }
 
@@ -163,52 +265,106 @@ public final class SharedCredentialStore: @unchecked Sendable {
         try deleteLegacyKeychainData(account: account)
     }
 
+    /// Both Keychain partitions, the one this store writes to first.
+    ///
+    /// A legacy item was written under whatever iCloud-sync setting was in force at the
+    /// time, which need not be the one in force now: probing only this store's partition
+    /// leaves an item in the other one invisible — the credential is never migrated, so the
+    /// mount stops authenticating, and the item stays behind in an access group nothing
+    /// else cleans up.
+    private var legacySyncModes: [KeychainItemSyncMode] {
+        syncMode == .synchronizable ? [.synchronizable, .local] : [.local, .synchronizable]
+    }
+
     private func migrateLegacyKeychainDataIfNeeded(account: String) throws -> Data? {
         for legacyAccessGroup in legacyAccessGroups {
-            guard let legacyData = try readKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            ) else {
-                continue
-            }
+            for legacySyncMode in legacySyncModes {
+                guard let legacyData = try readKeychainData(
+                    account: account,
+                    accessGroup: legacyAccessGroup,
+                    useDataProtectionKeychain: true,
+                    syncMode: legacySyncMode
+                ) else {
+                    continue
+                }
 
-            try writeKeychainData(
-                legacyData,
-                account: account,
-                useDataProtectionKeychain: true
-            )
-            try deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
-            return legacyData
+                try writeKeychainData(
+                    legacyData,
+                    account: account,
+                    useDataProtectionKeychain: true
+                )
+                // Deleted from the partition it was found in, not from this store's.
+                try deleteKeychainData(
+                    account: account,
+                    accessGroup: legacyAccessGroup,
+                    useDataProtectionKeychain: true,
+                    syncMode: legacySyncMode
+                )
+                return legacyData
+            }
         }
 
         return nil
     }
 
+    /// Sweep the legacy partitions after a write, reporting what would not go.
+    ///
+    /// Best-effort by design — the credential the caller asked for is already in the
+    /// Keychain, and failing the write over a stale copy would only cost them that — but not
+    /// silent: an item that cannot be removed is an obsolete secret left readable in an
+    /// access group this app no longer writes to, and nothing else looks at those partitions
+    /// once the current one has an item. The record is what says the next write should be
+    /// retried, and where.
     private func cleanupLegacyKeychainData(account: String) {
         guard usesDataProtectionKeychain else {
             return
         }
         for legacyAccessGroup in legacyAccessGroups {
-            try? deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
+            for legacySyncMode in legacySyncModes {
+                do {
+                    try deleteKeychainData(
+                        account: account,
+                        accessGroup: legacyAccessGroup,
+                        useDataProtectionKeychain: true,
+                        syncMode: legacySyncMode
+                    )
+                } catch {
+                    Self.logger.error(
+                        "Left a legacy shared credential for \(account, privacy: .public) in \(legacyAccessGroup, privacy: .public) after storing the new one: \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
         }
     }
 
+    /// Deletes the account from every legacy partition, reporting afterwards.
+    ///
+    /// A refusal in one combination does not stop the others: returning at the first one
+    /// left the remaining partitions holding a credential the caller was just told is
+    /// deleted, and nothing else sweeps them. The first failure is what is thrown, so a
+    /// delete that could not finish still fails; the rest are logged.
     private func deleteLegacyKeychainData(account: String) throws {
+        var failures: [Error] = []
         for legacyAccessGroup in legacyAccessGroups {
-            try deleteKeychainData(
-                account: account,
-                accessGroup: legacyAccessGroup,
-                useDataProtectionKeychain: true
-            )
+            for legacySyncMode in legacySyncModes {
+                do {
+                    try deleteKeychainData(
+                        account: account,
+                        accessGroup: legacyAccessGroup,
+                        useDataProtectionKeychain: true,
+                        syncMode: legacySyncMode
+                    )
+                } catch {
+                    Self.logger.error(
+                        "Failed to delete legacy shared credential for \(account, privacy: .public) in \(legacyAccessGroup, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                    failures.append(error)
+                }
+            }
+        }
+
+        if let firstFailure = failures.first {
+            throw firstFailure
         }
     }
 
@@ -275,12 +431,14 @@ public final class SharedCredentialStore: @unchecked Sendable {
     private func readKeychainData(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncMode: KeychainItemSyncMode? = nil
     ) throws -> Data? {
         var query = baseQuery(
             account: account,
             accessGroup: accessGroup,
-            useDataProtectionKeychain: useDataProtectionKeychain
+            useDataProtectionKeychain: useDataProtectionKeychain,
+            syncMode: syncMode
         )
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -299,12 +457,14 @@ public final class SharedCredentialStore: @unchecked Sendable {
     private func deleteKeychainData(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncMode: KeychainItemSyncMode? = nil
     ) throws {
         let query = baseQuery(
             account: account,
             accessGroup: accessGroup,
-            useDataProtectionKeychain: useDataProtectionKeychain
+            useDataProtectionKeychain: useDataProtectionKeychain,
+            syncMode: syncMode
         )
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -315,11 +475,12 @@ public final class SharedCredentialStore: @unchecked Sendable {
     private func baseQuery(
         account: String,
         accessGroup: String?,
-        useDataProtectionKeychain: Bool
+        useDataProtectionKeychain: Bool,
+        syncMode: KeychainItemSyncMode? = nil
     ) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
         if let group = accessGroup {
@@ -328,9 +489,12 @@ public final class SharedCredentialStore: @unchecked Sendable {
         if useDataProtectionKeychain {
             query[kSecUseDataProtectionKeychain as String] = true
         }
-        if syncMode == .synchronizable {
-            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
-        }
+        // Stated for both modes, the way `KeychainService` states it. Omitting it leaves
+        // the partition to the Keychain's default rather than to this store, and the two
+        // modes exist precisely so a local item and a synchronized one are never confused
+        // for each other — a read, an update or a delete must address the one it was told.
+        query[kSecAttrSynchronizable as String] =
+            (syncMode ?? self.syncMode) == .synchronizable ? kCFBooleanTrue : kCFBooleanFalse
         return query
     }
 

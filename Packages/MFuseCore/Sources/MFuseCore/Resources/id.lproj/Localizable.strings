@@ -1,6 +1,6 @@
 "backend.googleDrive" = "Google Drive";
 "backend.dropbox" = "Dropbox";
-"backend.oneDrive" = "Microsoft OneDrive";
+"backend.oneDrive" = "OneDrive";
 "auth.password" = "Kata sandi";
 "auth.publicKey" = "Kunci publik";
 "auth.agent" = "SSH Agent";
@@ -40,9 +40,17 @@
 "icloud.sync.stateChangedDuringSync" = "Status koneksi lokal atau cloud berubah saat sinkronisasi iCloud. Coba lagi.";
 "credential.error.unsupportedPrimaryProvider" = "Penyedia kredensial saat ini tidak mendukung migrasi iCloud Keychain.";
 "credential.error.modeTransitionFailed" = "Transisi mode kredensial gagal: %1$@. Rollback juga gagal: %2$@";
+"credential.error.modeTransitionCleanupFailed" = "Perubahan mode kredensial dibatalkan karena salinan lama tidak dapat dihapus: %@";
+"credential.error.legacyFileNotRemoved" = "Berkas kredensial lama di %1$@ masih dapat dibaca: berkas tidak dapat dihapus (%2$@) atau dikosongkan (%3$@). Hapus berkas itu agar rahasianya tidak tersimpan di disk dalam bentuk teks biasa.";
 "connectionManager.error.cleanupFailed" = "Gagal membersihkan koneksi %@ sebelum dihapus";
+"connectionManager.error.removalInProgress" = "Koneksi %@ sedang dihapus; simpan lagi setelah proses itu selesai";
+"connectionManager.error.connectionNotFound" = "Koneksi %@ sudah tidak ada";
+"connectionManager.error.revisionConflict" = "Koneksi %@ telah diubah di tempat lain; buka lagi dan ulangi perubahannya";
 "connectionManager.error.restoreRemovedConnection" = "Gagal memulihkan koneksi yang dihapus: %@";
 "connectionManager.error.restoreCredential" = "Gagal memulihkan kredensial: %@";
+"connectionManager.error.restoreRegistration" = "Gagal memulihkan domain File Provider: %@";
+"connectionManager.error.removeWithRestoreFailures" = "Gagal menghapus koneksi %1$@: %2$@. %3$@";
 "connectionManager.error.deleteCredentialWithRestoreFailures" = "Gagal menghapus kredensial untuk koneksi %1$@: %2$@. %3$@";
 "connectionManager.error.deleteCredentialRecovered" = "Gagal menghapus kredensial untuk koneksi %1$@; koneksi dan kredensial dipulihkan agar bisa dicoba lagi: %2$@";
 "connectionManager.error.unsupportedBackend" = "Backend tidak didukung: %@";
+"connectionManager.error.reregisterChangedConnection" = "Gagal menerapkan pengaturan terbaru untuk %1$@: %2$@. Sambungkan ulang atau mulai ulang MFuse untuk mencoba lagi.";

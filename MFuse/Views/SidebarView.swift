@@ -39,6 +39,11 @@ struct SidebarView: View {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderless)
+                // An icon carries no name of its own: VoiceOver reads the symbol, and a
+                // pointer gets no tooltip. Both are supplied here the way the mount and
+                // refresh controls elsewhere supply them.
+                .help(AppL10n.string("content.action.addMount", fallback: "Add Mount"))
+                .accessibilityLabel(AppL10n.string("content.action.addMount", fallback: "Add Mount"))
                 Spacer()
                 Menu {
                     Button(AppL10n.string("common.action.mountAll", fallback: "Mount All")) {
@@ -56,11 +61,16 @@ struct SidebarView: View {
                             }
                         }
                     }
+                    .disabled(mountableCount == 0)
                     Button(AppL10n.string("common.action.unmountAll", fallback: "Unmount All")) {
                         Task {
-                            let configsToUnmount = connectionManager.connections.filter {
-                                connectionManager.effectiveMountState(for: $0.id).isMounted
-                            }
+                            // Every connection, not just the ones that look mounted right
+                            // now, the way the menu bar's Unmount All reads it: a Mount All
+                            // started moments earlier may not have reached `.connecting` for
+                            // a given row yet, and filtering on the state observed here let
+                            // that row come up after this batch had finished. `disconnect`
+                            // is a no-op for anything already torn down.
+                            let configsToUnmount = connectionManager.connections
                             await withTaskGroup(of: Void.self) { group in
                                 for config in configsToUnmount {
                                     group.addTask {
@@ -70,10 +80,13 @@ struct SidebarView: View {
                             }
                         }
                     }
+                    .disabled(unmountableCount == 0)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
                 .buttonStyle(.borderless)
+                .help(AppL10n.string("sidebar.action.mountActions", fallback: "Mount Actions"))
+                .accessibilityLabel(AppL10n.string("sidebar.action.mountActions", fallback: "Mount Actions"))
             }
             .padding(8)
         }
@@ -82,37 +95,17 @@ struct SidebarView: View {
     @ViewBuilder
     private func connectionRow(_ config: ConnectionConfig) -> some View {
         let mount = connectionManager.effectiveMountState(for: config.id)
-        let symlinkBaseURL = connectionManager.mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
         HStack(spacing: 8) {
-            Image(systemName: config.backendType.iconName)
-                .foregroundStyle(mount.isMounted ? .green : .secondary)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
-                .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(config.name)
                     .fontWeight(.medium)
                     .lineLimit(1)
-                Text(verbatim: config.displayAddress)
+                Text(verbatim: config.displaySubtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text(mount.isMounted
-                    ? FileProviderMountProvider.symlinkDisplayPath(for: config, baseDir: symlinkBaseURL)
-                    : ""
-                )
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .opacity(mount.isMounted ? 1 : 0)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
             }
             Spacer()
-            Image(systemName: "folder.fill")
-                .font(.caption2)
-                .foregroundStyle(.green.opacity(0.7))
-                .opacity(mount.isMounted ? 1 : 0)
-                .animation(AnimationConstants.mountState, value: mount.isMounted)
             Circle()
                 .fill(stateColor(mount))
                 .animation(AnimationConstants.mountState, value: mount)
@@ -139,11 +132,7 @@ struct SidebarView: View {
         if mount.isMounted {
             Button(AppL10n.string("common.action.revealInFinder", fallback: "Reveal in Finder")) {
                 Task {
-                    if let targetURL = await connectionManager.resolveFinderURL(for: config) {
-                        await MainActor.run {
-                            NSWorkspace.shared.activateFileViewerSelecting([targetURL])
-                        }
-                    }
+                    await connectionManager.revealInFinder(config)
                 }
             }
         }
@@ -160,11 +149,13 @@ struct SidebarView: View {
                         }
                     }
                 } catch {
+                    // Localized, not `String(describing:)`: the manager's errors are
+                    // `LocalizedError`, and the raw enum spelling is what the user saw.
                     let message = AppL10n.string(
                         "sidebar.error.removeMount",
                         fallback: "Failed to remove mount %@: %@",
-                        config.id.uuidString,
-                        String(describing: error)
+                        config.name,
+                        error.localizedDescription
                     )
                     logger.error(
                         "Failed to remove mount for connection \(config.id.uuidString, privacy: .private): \(String(describing: error), privacy: .private)"
@@ -186,6 +177,27 @@ struct SidebarView: View {
                 }
             }
         )
+    }
+
+    /// Eligibility for the batch actions, matching what each one actually operates on so
+    /// the menu cannot offer a run that would do nothing.
+    private var mountableCount: Int {
+        connectionManager.connections.filter {
+            let state = connectionManager.effectiveMountState(for: $0.id)
+            return !state.isMounted && !state.isMounting
+        }.count
+    }
+
+    /// A row left in `.error` counts too: a teardown that failed part-way is exactly what
+    /// `disconnect` is the retry for — it still holds a filesystem, a domain or a
+    /// convenience link — and leaving it out disabled the only batch control that could
+    /// clear it.
+    private var unmountableCount: Int {
+        connectionManager.connections.filter {
+            let state = connectionManager.effectiveMountState(for: $0.id)
+            if case .error = state { return true }
+            return state.isMounted || state.isMounting
+        }.count
     }
 
     private func stateColor(_ state: MountState) -> Color {

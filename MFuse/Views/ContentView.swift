@@ -9,6 +9,11 @@ struct ContentView: View {
     @State private var editorPresentation: EditorPresentation?
     @State private var showingExtensionGuide = false
     @State private var saveAlert: SaveAlertState?
+    /// The save in flight for each connection, so a later one queues behind it instead
+    /// of racing it or being dropped.
+    /// The save running for each connection, carrying the config it committed so the save
+    /// queued behind it knows what the row holds by the time it runs. See `saveConnection`.
+    @State private var saveTasks: [UUID: Task<ConnectionConfig?, Never>] = [:]
 
     var body: some View {
         NavigationSplitView {
@@ -32,7 +37,12 @@ struct ContentView: View {
             ConnectionEditorSheet(
                 config: presentation.config,
                 onSave: { config, credential in
-                    saveConnection(config, credential: credential)
+                    saveConnection(
+                        config,
+                        credential: credential,
+                        presentationID: presentation.id,
+                        openedConfig: presentation.config
+                    )
                 }
             )
             .frame(minWidth: 480, minHeight: 400)
@@ -71,12 +81,12 @@ struct ContentView: View {
             showNewEditor()
         }
         .onReceive(NotificationCenter.default.publisher(for: .refreshConnections)) { _ in
-            if let config = selectedConnection {
-                let mountState = connectionManager.effectiveMountState(for: config.id)
-                if connectionManager.mountProvider != nil && mountState.isMounted {
-                    Task {
-                        try? await connectionManager.mountProvider?.signalEnumerator(for: config)
-                    }
+            // Only the id is carried across: the manager reads the connection, checks it
+            // is still the current attempt, and tracks the work so an edit, a removal or
+            // a teardown can cancel and wait for it.
+            if let id = selectedConnection?.id {
+                Task { @MainActor in
+                    await connectionManager.refreshMountedConnection(for: id)
                 }
             }
         }
@@ -120,62 +130,241 @@ struct ContentView: View {
         editorPresentation = EditorPresentation(config: config)
     }
 
-    private func saveConnection(_ config: ConnectionConfig, credential: Credential) {
-        Task {
+    private func saveConnection(
+        _ config: ConnectionConfig,
+        credential: Credential,
+        presentationID: UUID,
+        openedConfig: ConnectionConfig?
+    ) {
+        // Queued behind whatever is already saving this connection, not dropped. A save
+        // suspends repeatedly while its editor is still on screen and its button still
+        // enabled, and the user can cancel it, reopen the same mount, re-authorize an
+        // account and save again — discarding that second save would leave the older
+        // credential and config as the ones that stand, silently. Serializing instead
+        // keeps their credential writes from interleaving, keeps an older pass's rollback
+        // from restoring the secret a newer one just stored, and stops two passes over a
+        // new mount from both seeing no previous config and appending the same UUID twice.
+        let precedingSave = saveTasks[config.id]
+        let save = Task { @MainActor in
+            // What the save ahead of this one committed becomes what this one expects to
+            // find. `openedConfig` is the row as the sheet opened it, and a queued save is
+            // by definition running after another one changed it — expecting that stale
+            // revision would have every second Save fail as a conflict and roll back the
+            // credential it just stored, which is exactly the edit this queue is here to
+            // keep. A preceding save that committed nothing leaves the row as it was, so
+            // the sheet's own revision still stands.
+            let precedingConfig = await precedingSave?.value
+            return await performSave(
+                config,
+                credential: credential,
+                presentationID: presentationID,
+                openedConfig: precedingConfig ?? openedConfig
+            )
+        }
+        saveTasks[config.id] = save
+        Task { @MainActor in
+            _ = await save.value
+            guard saveTasks[config.id] == save else { return }
+            saveTasks.removeValue(forKey: config.id)
+        }
+    }
+
+    /// Returns the config it wrote to the connection list, or `nil` when it wrote none —
+    /// which is what the next save in the queue expects to find. See `saveConnection`.
+    @MainActor
+    @discardableResult
+    private func performSave(
+        _ config: ConnectionConfig,
+        credential: Credential,
+        presentationID: UUID,
+        openedConfig: ConnectionConfig?
+    ) async -> ConnectionConfig? {
+        // Read by the failure path below, which has to put back a mount this save took down
+        // before it knew whether it could write anything.
+        var didTearDownForTargetChange = false
+        do {
+            let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
+            // The revision this edit was made against, checked before a secret is written
+            // anywhere rather than only by `update` below. Another device — or a save the
+            // queue does not cover — can have replaced this row while the sheet was open,
+            // and the credential that came with it is already stored under the same id. A
+            // save that finds that out only at the write has by then overwritten it, and its
+            // rollback puts back a secret older than either revision: the row keeps the
+            // newer config paired with a credential that belongs to neither. Failing here
+            // leaves both untouched.
+            if let openedConfig, let previousConfig, previousConfig != openedConfig {
+                throw ConnectionManagerError.revisionConflict(config.id)
+            }
+            let previousCredential = try await credentialProvider.credential(for: config.id)
+            // Before the new secret exists anywhere the extension can read it. Credentials
+            // are keyed by connection id and shared with it, while the domain still
+            // bootstraps the address this edit is moving away from — so storing first
+            // leaves a window where the old server is authenticated with a secret the user
+            // issued for the new one. A failure here fails the save with nothing written.
+            let shouldRemountAfterTargetChange: Bool
+            if let previousConfig, !config.addressesSameServer(as: previousConfig) {
+                shouldRemountAfterTargetChange = try await connectionManager.prepareForTargetChange(config.id)
+                didTearDownForTargetChange = shouldRemountAfterTargetChange
+            } else {
+                shouldRemountAfterTargetChange = false
+            }
             do {
-                let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
-                let previousCredential = try await credentialProvider.credential(for: config.id)
+                // Inside the rollback, because a store can fail *after* committing part of
+                // itself: the mirrored provider writes the primary keychain item first and
+                // the shared one second, so a failure on the second leaves the new secret
+                // already paired with the old config.
                 try await credentialProvider.store(credential, for: config.id)
-                do {
-                    if previousConfig != nil {
-                        try connectionManager.update(config)
-                    } else {
-                        try connectionManager.add(config)
-                    }
-                } catch {
-                    if let previousCredential {
-                        try? await credentialProvider.store(previousCredential, for: config.id)
-                    } else {
-                        try? await credentialProvider.delete(for: config.id)
-                    }
-                    throw error
+                // Read now, not from `previousConfig`: a removal can finish while this save
+                // is queued or suspended, and adding the connection back then is not
+                // "saving an edit" — it resurrects a row and a credential the user deleted.
+                // A new mount is still an add, including a second save of the same draft,
+                // where the first one has since created it.
+                if connectionExists(config.id) {
+                    try connectionManager.update(config, expecting: openedConfig)
+                } else if openedConfig != nil {
+                    throw ConnectionManagerError.connectionNotFound(config.id)
+                } else {
+                    try connectionManager.add(config)
                 }
-                await MainActor.run {
+            } catch {
+                // The new credential is already stored, so a rollback that fails leaves
+                // the old config paired with it — or a credential behind for a mount
+                // that was never created. Reported alongside the primary failure rather
+                // than swallowed: only the user can put that right.
+                let rollbackFailure = await restoreCredential(
+                    previousCredential,
+                    replacing: credential,
+                    for: config.id
+                )
+                throw SaveFailure(primary: error, rollbackFailure: rollbackFailure)
+            }
+            await MainActor.run {
+                // The detail pane shows a copy, so whoever is looking at this row has to be
+                // handed the revision that was just committed — including a save queued
+                // behind another one, which commits after that one already dismissed the
+                // sheet. Gating this on the sheet left the pane showing the revision the
+                // second save replaced.
+                if selectedConnection?.id == config.id || editorPresentation?.id == presentationID {
                     selectedConnection = config
-                    editorPresentation = nil
                 }
-                do {
-                    try await connectionManager.syncSavedConnectionRegistration(
-                        config,
-                        previousConfig: previousConfig
-                    )
-                } catch {
-                    await MainActor.run {
-                        saveAlert = SaveAlertState(
-                            title: AppL10n.string(
-                                "content.warning.domainSyncIssue",
-                                fallback: "Domain Sync Issue"
-                            ),
-                            message: AppL10n.string(
-                                "content.error.savedButDomainSyncFailed",
-                                fallback: "The connection was saved, but File Provider domain sync failed: %@. MFuse will retry reconciliation on the next launch.",
-                                error.localizedDescription
-                            )
-                        )
-                    }
+                // Dismissal stays tied to the sheet that started this save: the user can
+                // cancel it and open another one meanwhile, and closing *that* one is not
+                // what this save is for.
+                guard editorPresentation?.id == presentationID else { return }
+                editorPresentation = nil
+            }
+            do {
+                try await connectionManager.syncSavedConnectionRegistration(
+                    config,
+                    previousConfig: previousConfig
+                )
+                // Put back the mount the teardown above took down for the switch. Only
+                // after the registration went through: the domain carries the new address
+                // from here on, and mounting one that still bootstraps the old one is the
+                // state this whole ordering exists to avoid.
+                if shouldRemountAfterTargetChange {
+                    await connectionManager.connect(config.id)
                 }
             } catch {
                 await MainActor.run {
                     saveAlert = SaveAlertState(
                         title: AppL10n.string(
-                            "content.error.unableToSaveMount",
-                            fallback: "Unable to Save Mount"
+                            "content.warning.domainSyncIssue",
+                            fallback: "Domain Sync Issue"
                         ),
-                        message: error.localizedDescription
+                        message: AppL10n.string(
+                            "content.error.savedButDomainSyncFailed",
+                            fallback: "The connection was saved, but File Provider domain sync failed: %@. MFuse will retry reconciliation on the next launch.",
+                            error.localizedDescription
+                        )
                     )
                 }
             }
+            // Reported only once the write itself went through: a failed domain sync leaves
+            // the connection list holding this config, which is what the next save has to
+            // expect. A failed write below leaves the row untouched, so it reports nothing.
+            return config
+        } catch {
+            await MainActor.run {
+                saveAlert = SaveAlertState(
+                    title: AppL10n.string(
+                        "content.error.unableToSaveMount",
+                        fallback: "Unable to Save Mount"
+                    ),
+                    message: error.localizedDescription
+                )
+            }
+            // The mount came down before the write so the extension could not authenticate
+            // the old server with the new secret. Nothing was written — the config and the
+            // credential are the ones that mount belongs to — so leaving it down would cost
+            // the user a working mount over an edit that never took effect.
+            if didTearDownForTargetChange {
+                await connectionManager.connect(config.id)
+            }
+            return nil
         }
+    }
+
+    /// Put back the credential a failed save replaced, reporting what went wrong instead
+    /// of leaving the mount paired with a secret that was never meant to stick.
+    ///
+    /// What belongs in the store is decided by whether the connection is still there: a
+    /// removal can finish while a save is in flight — that is one of the ways this save
+    /// fails — and putting the old secret back then would leave an orphan for a connection
+    /// nobody can see, keyed by an id that never appears again.
+    ///
+    /// Checked on both sides of the write, because the write suspends and the removal is
+    /// not serialized with it. `remove` drops the row before it deletes the credential, so
+    /// a removal that finished inside that window has already deleted the secret it knew
+    /// about and left this one behind — seeing the row gone afterwards is what catches it.
+    ///
+    /// `stored` is what this save wrote, and the rollback only undoes its own write: a
+    /// credential that arrived after it — from another device, or from a save this queue
+    /// does not cover — belongs to the revision the row holds now, and putting an older
+    /// secret over it would leave that revision authenticating with a secret issued for a
+    /// different one.
+    private func restoreCredential(
+        _ credential: Credential?,
+        replacing stored: Credential,
+        for id: UUID
+    ) async -> String? {
+        do {
+            guard try await credentialProvider.credential(for: id) == stored else {
+                return nil
+            }
+            guard let credential, connectionExists(id) else {
+                try await credentialProvider.delete(for: id)
+                return nil
+            }
+            try await credentialProvider.store(credential, for: id)
+            guard connectionExists(id) else {
+                try await credentialProvider.delete(for: id)
+                return nil
+            }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func connectionExists(_ id: UUID) -> Bool {
+        connectionManager.connections.contains { $0.id == id }
+    }
+}
+
+/// A save failure plus, when the credential could not be put back, what that left behind.
+private struct SaveFailure: LocalizedError {
+    let primary: Error
+    let rollbackFailure: String?
+
+    var errorDescription: String? {
+        guard let rollbackFailure else { return primary.localizedDescription }
+        return AppL10n.string(
+            "content.error.saveFailedWithCredentialRollbackFailure",
+            fallback: "%1$@ The stored credential could not be put back either: %2$@. Save the mount again to repair it.",
+            primary.localizedDescription,
+            rollbackFailure
+        )
     }
 }
 

@@ -2,6 +2,109 @@ import Foundation
 import FileProvider
 import os.log
 
+/// Serializes the operations of one connection that must not interleave.
+///
+/// Resolving a domain's CloudStorage path and acting on its convenience link are two
+/// steps with a suspension between them, and a rename moves that path: a pass that
+/// resolved the old one could otherwise resume after a later pass wrote the new one and
+/// put the stale destination back. Renames take the same lock, so a resolution cannot be
+/// invalidated while it is being acted on.
+///
+/// Operations run in the order they arrive: a rename that reached this before a link
+/// creation must also run before it, or the link is written against the path the rename
+/// was about to move. Resuming every waiter and letting them race back in would decide
+/// that by executor scheduling, and would let an operation arriving at that moment take
+/// the lock ahead of callers that were already queued.
+///
+/// Not reentrant: nothing inside a held section takes the lock again.
+actor MountOperationCoordinator {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
+    private var busyKeys: Set<String> = []
+    private var waiters: [String: [Waiter]] = [:]
+
+    /// Takes the lock, or throws if the caller is cancelled before it gets there.
+    ///
+    /// Only the *wait* answers cancellation: a caller parked here has not begun its
+    /// section, so withdrawing abandons nothing, while a holder that stopped halfway is
+    /// what this exists to prevent and is untouched. Waiting regardless made a teardown
+    /// depend on work it had nothing to do with — `ConnectionManager` cancels mount
+    /// resolution and repair and then *awaits* them, so a cancelled pass queued behind an
+    /// unrelated registration or link operation had to sit that operation out before it
+    /// could unwind, and an Unmount or a Remove waited with it.
+    ///
+    /// A caller that is handed the lock and only then cancelled still runs its section, as
+    /// an uncontended one does: the lock is held by then, and dropping it there is the
+    /// half-finished section this serializes to avoid.
+    func acquire(_ key: String) async throws {
+        guard busyKeys.contains(key) else {
+            busyKeys.insert(key)
+            return
+        }
+        let waiterID = UUID()
+        let acquired = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                // The handler below has nothing to withdraw until the waiter is registered,
+                // so a cancellation that lands first is answered here.
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    waiters[key, default: []].append(Waiter(id: waiterID, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.withdraw(waiterID, from: key) }
+        }
+        // Resumed holding the lock, handed over by `release`. Re-checking `busyKeys` here
+        // instead is what would let a newcomer overtake this caller.
+        guard acquired else { throw CancellationError() }
+    }
+
+    func release(_ key: String) {
+        guard var queue = waiters[key], !queue.isEmpty else {
+            busyKeys.remove(key)
+            waiters.removeValue(forKey: key)
+            return
+        }
+        let next = queue.removeFirst()
+        if queue.isEmpty {
+            waiters.removeValue(forKey: key)
+        } else {
+            waiters[key] = queue
+        }
+        // `busyKeys` stays set: ownership passes straight to the caller that has waited
+        // longest, so an operation arriving now queues behind it rather than racing it.
+        next.continuation.resume(returning: true)
+    }
+
+    /// Give up a place in the queue for a caller that was cancelled before its turn came.
+    ///
+    /// A waiter `release` has already taken is simply gone from the queue: ownership was
+    /// handed over, and the caller keeps it — resuming it a second time would trap, and
+    /// dropping the lock on its behalf would hand the same section to two callers.
+    private func withdraw(_ waiterID: UUID, from key: String) {
+        guard var queue = waiters[key],
+              let index = queue.firstIndex(where: { $0.id == waiterID }) else {
+            return
+        }
+        let waiter = queue.remove(at: index)
+        if queue.isEmpty {
+            waiters.removeValue(forKey: key)
+        } else {
+            waiters[key] = queue
+        }
+        waiter.continuation.resume(returning: false)
+    }
+
+    /// Test seam: how many callers are parked behind the operation holding this key.
+    func waitingCount(for key: String) -> Int {
+        waiters[key]?.count ?? 0
+    }
+}
+
 /// MountProvider backed by macOS File Provider (NSFileProviderDomain).
 /// Mounts appear under ~/Library/CloudStorage/. Convenience links are created in a writable shortcuts directory.
 public final class FileProviderMountProvider: MountProvider {
@@ -17,6 +120,20 @@ public final class FileProviderMountProvider: MountProvider {
     /// Base directory for convenience symlinks.
     public let symlinkBaseURL: URL
 
+    /// Test seams for `unregister`'s two steps, which exist so its ordering — the domain
+    /// before the bootstrap config it is the last fallback for — can be exercised without
+    /// a registered File Provider domain. Never set in production.
+    /// `nonisolated(unsafe)`, and only sound because of that "never in production": a
+    /// test sets these once, before the provider is handed to anything that could call it
+    /// concurrently.
+    nonisolated(unsafe) var removeRegisteredDomainOverride: ((ConnectionConfig) async throws -> Void)?
+    nonisolated(unsafe) var removeBootstrapConfigOverride: ((ConnectionConfig) throws -> Void)?
+    /// Test seam: replaces the CloudStorage lookup so a resolution can be held at the
+    /// point where another pass interleaves. Never set in production.
+    nonisolated(unsafe) var resolveMountURLOverride: ((ConnectionConfig) async throws -> URL?)?
+
+    private let operationCoordinator = MountOperationCoordinator()
+
     public init(
         symlinkBaseURL: URL = defaultSymlinkBaseURL
     ) {
@@ -24,7 +141,20 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func ensureRegistered(config: ConnectionConfig) async throws {
-        let existingDomain = try await findDomain(for: config)
+        // A rename registers a new display name, which is what moves the domain's
+        // CloudStorage path — the link operations resolve that path, so this cannot run
+        // while one of them is between its resolution and its write.
+        try await withMountOperationLock(for: config) {
+            try await performEnsureRegistered(config: config)
+        }
+    }
+
+    private func performEnsureRegistered(config: ConnectionConfig) async throws {
+        // What the rollback below puts back. The lookup can answer `nil` and `add` still
+        // report a duplicate — the domain exists but was not listed yet — so the refresh
+        // path records what it removed here: rolling back to "there was nothing" would then
+        // remove the replacement and leave the connection with no domain at all.
+        var existingDomain = try await findDomain(for: config)
         let domain = try makeDomain(for: config)
 
         do {
@@ -34,16 +164,35 @@ public final class FileProviderMountProvider: MountProvider {
                 throw MountError.extensionNotEnabled
             }
             if shouldRetryMountAfterDomainRefresh(error) {
+                var removedDomain: NSFileProviderDomain?
                 if let stale = try await findDomain(for: config) {
                     try await NSFileProviderManager.remove(stale)
+                    removedDomain = stale
+                    existingDomain = stale
                     try await Task.sleep(nanoseconds: FileProviderConstants.domainRemovalSettleNanoseconds)
                 }
-                try Task.checkCancellation()
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-                try Task.checkCancellation()
                 do {
+                    try Task.checkCancellation()
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                    try Task.checkCancellation()
                     try await NSFileProviderManager.add(domain)
                 } catch {
+                    // The refresh took the registered domain out to put a fresh one in its
+                    // place, and the replacement never arrived — through a failure or
+                    // through the cancellation the waits above observe. Every caller reads
+                    // a throw from here as "the registration is unchanged": a save reports
+                    // that it will retry on the next launch, a reload keeps the row. Left
+                    // as it is, the mount is simply gone until then, so what was removed
+                    // goes back. Best effort, and never at the cost of the failure itself.
+                    if let removedDomain {
+                        do {
+                            try await NSFileProviderManager.add(removedDomain)
+                        } catch let restoreError {
+                            Self.logger.error(
+                                "Failed to restore domain \(removedDomain.identifier.rawValue, privacy: .public) after its refresh could not re-add it: \(restoreError.localizedDescription, privacy: .private)"
+                            )
+                        }
+                    }
                     if isExtensionNotEnabledError(error) {
                         throw MountError.extensionNotEnabled
                     }
@@ -57,50 +206,97 @@ public final class FileProviderMountProvider: MountProvider {
         do {
             try persistBootstrapConfig(for: config)
         } catch {
-            if existingDomain == nil {
-                let persistError = error
-                do {
+            let persistError = error
+            do {
+                if let existingDomain {
+                    // Put the registration back as it was. `add` above already updated the
+                    // domain — its display name, and on macOS 15 its `userInfo` — while the
+                    // snapshot beside it is still the previous config, and that pairing is
+                    // what the extension bootstraps from before macOS 15.
+                    try await NSFileProviderManager.add(existingDomain)
+                } else {
                     try await NSFileProviderManager.remove(domain)
-                } catch {
-                    let rollbackError = error
-                    Self.logger.error(
-                        "persistBootstrapConfig(for:) failed for domain \(domain.identifier.rawValue, privacy: .public): \(persistError.localizedDescription, privacy: .public); rollback via NSFileProviderManager.remove(domain) also failed: \(rollbackError.localizedDescription, privacy: .public)"
-                    )
-                    throw MountError.mountFailed(
-                        "persistBootstrapConfig(for:) failed for \(domain.identifier.rawValue): \(persistError.localizedDescription); rollback via NSFileProviderManager.remove(domain) failed: \(rollbackError.localizedDescription)"
-                    )
                 }
+            } catch {
+                let rollbackError = error
+                Self.logger.error(
+                    "persistBootstrapConfig(for:) failed for domain \(domain.identifier.rawValue, privacy: .public): \(persistError.localizedDescription, privacy: .private); restoring the previous registration also failed: \(rollbackError.localizedDescription, privacy: .private)"
+                )
+                throw MountError.mountFailed(
+                    "persistBootstrapConfig(for:) failed for \(domain.identifier.rawValue): \(persistError.localizedDescription); restoring the previous registration failed: \(rollbackError.localizedDescription)"
+                )
             }
-            throw error
+            throw persistError
         }
     }
 
     public func unregister(config: ConnectionConfig) async throws {
-        if let domain = try await findDomain(for: config) {
-            try await NSFileProviderManager.remove(domain)
+        // Removing the domain invalidates the CloudStorage path the link operations
+        // resolve, so it takes the same lock they do rather than landing in the middle of
+        // one and leaving a link for a domain that no longer exists.
+        try await withMountOperationLock(for: config) {
+            try await performUnregister(config: config)
         }
-        try removeBootstrapConfig(for: config)
     }
 
-    public func reconnect(config: ConnectionConfig) async throws {
-        let domain = try await domainOrThrow(for: config)
-        try persistBootstrapConfig(for: config)
-        guard let manager = NSFileProviderManager(for: domain) else {
-            throw MountError.managerNotFound(config.domainIdentifier)
+    private func performUnregister(config: ConnectionConfig) async throws {
+        // Domain first, bookkeeping second. Removing the bootstrap config ahead of the
+        // domain leaves a still-registered domain with nothing to bootstrap from: before
+        // macOS 15 there is no `domain.userInfo`, and `reloadConnectionsFromStorage`
+        // reaches here *after* the connection is gone from `SharedStorage`, so the file
+        // this deletes is the last source there is. A failure at this step therefore has
+        // to leave everything intact and simply be retried.
+        if let removeRegisteredDomainOverride {
+            try await removeRegisteredDomainOverride(config)
+        } else if let domain = try await findDomain(for: config) {
+            try await NSFileProviderManager.remove(domain)
         }
-        try await manager.reconnect()
+
+        do {
+            try removeBootstrapConfigStep(for: config)
+        } catch {
+            // Best effort, because the domain is already gone: reporting a failure here
+            // would have the caller keep a connection that no longer has one. What is left
+            // behind is a bootstrap file for a domain that does not exist, which nothing
+            // reads — but it is not swallowed silently either.
+            // The message can carry the container path the config was written to, so it
+            // stays private — the domain identifier is enough to act on.
+            Self.logger.warning(
+                "Removed domain \(config.domainIdentifier, privacy: .public) but failed to remove its bootstrap config: \(error.localizedDescription, privacy: .private)"
+            )
+        }
+    }
+
+    /// Every operation that looks a domain up and then writes its bootstrap snapshot takes
+    /// the same section as `ensureRegistered`.
+    ///
+    /// The lookup suspends, and the snapshot is what the extension bootstraps from before
+    /// macOS 15: a pass holding an older config could resume after a save had registered the
+    /// newer one and write its own config over that snapshot, leaving the domain serving an
+    /// endpoint neither the row nor storage shows.
+    public func reconnect(config: ConnectionConfig) async throws {
+        try await withMountOperationLock(for: config) {
+            let domain = try await self.domainOrThrow(for: config)
+            try self.persistBootstrapConfig(for: config)
+            guard let manager = NSFileProviderManager(for: domain) else {
+                throw MountError.managerNotFound(config.domainIdentifier)
+            }
+            try await manager.reconnect()
+        }
     }
 
     public func disconnect(config: ConnectionConfig) async throws {
-        let domain = try await domainOrThrow(for: config)
-        try persistBootstrapConfig(for: config)
-        guard let manager = NSFileProviderManager(for: domain) else {
-            throw MountError.managerNotFound(config.domainIdentifier)
+        try await withMountOperationLock(for: config) {
+            let domain = try await self.domainOrThrow(for: config)
+            try self.persistBootstrapConfig(for: config)
+            guard let manager = NSFileProviderManager(for: domain) else {
+                throw MountError.managerNotFound(config.domainIdentifier)
+            }
+            try await manager.disconnect(
+                reason: "Disconnected from MFuse",
+                options: []
+            )
         }
-        try await manager.disconnect(
-            reason: "Disconnected from MFuse",
-            options: []
-        )
     }
 
     public func domainStates() async throws -> [RegisteredDomainState] {
@@ -114,24 +310,40 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func signalEnumerator(for config: ConnectionConfig) async throws {
-        guard let domain = try await refreshExistingDomain(for: config) else {
-            throw MountError.domainNotFound(config.domainIdentifier)
+        try await withMountOperationLock(for: config) {
+            guard let domain = try await self.refreshExistingDomain(for: config) else {
+                throw MountError.domainNotFound(config.domainIdentifier)
+            }
+            try self.persistBootstrapConfig(for: config)
+            guard let manager = NSFileProviderManager(for: domain) else {
+                throw MountError.managerNotFound(config.domainIdentifier)
+            }
+            try await manager.signalEnumerator(for: .workingSet)
         }
-        try persistBootstrapConfig(for: config)
-        guard let manager = NSFileProviderManager(for: domain) else {
-            throw MountError.managerNotFound(config.domainIdentifier)
-        }
-        try await manager.signalEnumerator(for: .workingSet)
     }
 
     public func mountURL(for config: ConnectionConfig) async throws -> URL? {
-        try await resolveMountURL(for: config)
+        // The same section the link operations resolve under: a rename moves the domain's
+        // CloudStorage path, so a lookup that landed inside one answered with a path that
+        // was already being replaced. The private `resolveMountURL` stays lock-free for the
+        // operations that call it while holding the lock themselves.
+        try await withMountOperationLock(for: config) {
+            try await self.resolveMountURL(for: config)
+        }
     }
 
     @discardableResult
     public func createSymlink(for config: ConnectionConfig) async throws -> URL? {
-        guard let mountURL = try await mountURL(for: config) else { return nil }
+        // Resolving the destination and writing the link are one operation: a rename moves
+        // the domain's CloudStorage path, so a pass that resolved the old one must not
+        // resume after a later pass wrote the new one and put its stale destination back.
+        // `ensureRegistered` — where a rename happens — takes the same lock.
+        try await withMountOperationLock(for: config) {
+            try await performCreateSymlink(for: config)
+        }
+    }
 
+    private func performCreateSymlink(for config: ConnectionConfig) async throws -> URL? {
         let fileManager = FileManager.default
         let baseDir = symlinkBaseURL
 
@@ -140,8 +352,14 @@ public final class FileProviderMountProvider: MountProvider {
         try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
         try cleanupLegacyShortcutIfNeeded(for: config)
 
+        guard let mountURL = try await resolveMountURL(for: config) else { return nil }
+
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
-        guard !fileManager.fileExists(atPath: symlinkURL.path) else {
+        // Link-aware, because `fileExists` resolves the link: a dangling one — a user's
+        // own, with a managed-looking name, pointing at something that is gone — reads as
+        // absent, and the creation below then fails with EEXIST instead of leaving the
+        // path alone and warning, which is what the ownership test above decided.
+        guard try itemType(at: symlinkURL) == nil else {
             Self.logger.warning(
                 "Skipping symlink creation because target path is occupied by a non-managed item: \(symlinkURL.path, privacy: .public)"
             )
@@ -165,7 +383,33 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func removeSymlink(for config: ConnectionConfig) async throws {
-        let expectedDestinationURL = try await resolveMountURL(for: config)
+        // Same section as `createSymlink`: both resolve the destination and then act on
+        // the link, and interleaving them lets one undo what the other just did.
+        try await withMountOperationLock(for: config) {
+            try await performRemoveSymlink(for: config)
+        }
+    }
+
+    private func performRemoveSymlink(for config: ConnectionConfig) async throws {
+        // A failed lookup must not abort the cleanup. The states that need it most — a
+        // provider failure mid-teardown, a domain damaged behind the app's back — are
+        // exactly the ones where the URL cannot be resolved, and giving up there leaves a
+        // link pointing into CloudStorage forever. Without a destination to match,
+        // removal falls back to the filename plus ownership test below.
+        let expectedDestinationURL: URL?
+        do {
+            expectedDestinationURL = try await resolveMountURL(for: config)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Domain and error identity are enough to diagnose this; the provider's
+            // message can carry paths and response detail, so it stays private.
+            let nsError = error as NSError
+            Self.logger.warning(
+                "Removing the convenience symlink for \(config.domainIdentifier, privacy: .public) without a resolved mount URL: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public) \(error.localizedDescription, privacy: .private)"
+            )
+            expectedDestinationURL = nil
+        }
         let symlinkURL = Self.symlinkURL(for: config, baseDir: symlinkBaseURL)
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
         try cleanupLegacyShortcutIfNeeded(for: config)
@@ -313,8 +557,14 @@ public final class FileProviderMountProvider: MountProvider {
                 }
             }
 
-            // Replace any managed same-name symlink so the current config always points
-            // at the latest CloudStorage mount instead of a stale legacy container path.
+            // Replace a stale link of ours so the config points at the current mount, but
+            // apply the same ownership test as the branch below: a link with a matching
+            // name that resolves outside CloudStorage was put there by the user, and
+            // reveal now runs this on every click. createSymlink leaves the path alone and
+            // warns instead.
+            guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
+                return
+            }
             try fm.removeItem(at: symlinkURL)
             return
         }
@@ -386,7 +636,36 @@ public final class FileProviderMountProvider: MountProvider {
         try await findDomain(for: config)
     }
 
+    /// Test seam: how many operations are queued behind the one currently holding this
+    /// connection, so a test can see that serialization is what is being exercised.
+    func queuedOperationCount(for config: ConnectionConfig) async -> Int {
+        await operationCoordinator.waitingCount(for: config.domainIdentifier)
+    }
+
+    /// Hold this connection's operation lock for the duration of `work`.
+    ///
+    /// Released on every path, including a thrown error, so one failed operation cannot
+    /// strand the connection's later ones.
+    private func withMountOperationLock<T>(
+        for config: ConnectionConfig,
+        _ work: () async throws -> T
+    ) async throws -> T {
+        let key = config.domainIdentifier
+        try await operationCoordinator.acquire(key)
+        do {
+            let result = try await work()
+            await operationCoordinator.release(key)
+            return result
+        } catch {
+            await operationCoordinator.release(key)
+            throw error
+        }
+    }
+
     private func resolveMountURL(for config: ConnectionConfig) async throws -> URL? {
+        if let resolveMountURLOverride {
+            return try await resolveMountURLOverride(config)
+        }
         guard let domain = try await refreshExistingDomain(for: config) else { return nil }
         guard let manager = NSFileProviderManager(for: domain) else {
             throw MountError.managerNotFound(config.domainIdentifier)
@@ -415,5 +694,13 @@ public final class FileProviderMountProvider: MountProvider {
 
     private func removeBootstrapConfig(for config: ConnectionConfig) throws {
         try FileProviderDomainStateStore.removeBootstrapConfig(for: config.domainIdentifier)
+    }
+
+    private func removeBootstrapConfigStep(for config: ConnectionConfig) throws {
+        if let removeBootstrapConfigOverride {
+            try removeBootstrapConfigOverride(config)
+            return
+        }
+        try removeBootstrapConfig(for: config)
     }
 }

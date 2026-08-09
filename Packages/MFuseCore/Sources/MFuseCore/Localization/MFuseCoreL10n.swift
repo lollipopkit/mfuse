@@ -37,16 +37,43 @@ enum MFuseCoreL10n {
     }
 
     private static func localizationCandidates(for localeIdentifier: String) -> [String] {
-        switch localeIdentifier.lowercased() {
-        case "zh-cn", "zh-hans", "zh":
+        // Underscores first, so `zh_TW` is read as the same locale as `zh-TW`.
+        let normalized = localeIdentifier.replacingOccurrences(of: "_", with: "-")
+        let lowercased = normalized.lowercased()
+
+        // Neither script has a bundle under its regional identifiers, and the generic path
+        // below would resolve every one of them to bare `zh` — which is not shipped either,
+        // leaving Chinese users with the English fallback. Taiwan, Hong Kong and Macau are
+        // Traditional; every other region is Simplified, which is also the script Chinese
+        // defaults to. Listing the Simplified regions instead left the ones nobody thought
+        // of — `zh-MY`, `zh-Hans-SG` — falling through to the English fallback.
+        //
+        // Read as subtags rather than matched whole: an identifier carries variants and
+        // extensions too, and `zh-TW-u-nu-latn` or `zh-HK-x-private` matched none of the
+        // regional spellings — so they took the Simplified branch and handed a Traditional
+        // reader the wrong script.
+        let subtags = lowercased.split(separator: "-").map(String.init)
+        if subtags.first == "zh" {
+            var script: String?
+            var region: String?
+            for subtag in subtags.dropFirst() {
+                // A one-character subtag opens the extension section; nothing after it
+                // describes the language any more.
+                if subtag.count == 1 { break }
+                if subtag.count == 4, script == nil {
+                    script = subtag
+                } else if subtag.count == 2, region == nil {
+                    region = subtag
+                }
+            }
+            if script == "hant" || ["tw", "hk", "mo"].contains(region ?? "") {
+                return ["zh-Hant", "zh_TW"]
+            }
             return ["zh-Hans", "zh_CN", "zh"]
-        case "zh-tw", "zh-hant":
-            return ["zh-Hant", "zh_TW"]
-        default:
-            let normalized = localeIdentifier.replacingOccurrences(of: "_", with: "-")
-            let languageCode = normalized.split(separator: "-").first.map(String.init)
-            return [normalized, localeIdentifier, languageCode].compactMap { $0 }
         }
+
+        let languageCode = normalized.split(separator: "-").first.map(String.init)
+        return [normalized, localeIdentifier, languageCode].compactMap { $0 }
     }
 
     private static func localizedStrings(for localization: String, table: String) -> [String: String]? {

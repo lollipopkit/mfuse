@@ -1,7 +1,672 @@
+import Foundation
 import Testing
+import MFuseCore
+import SotoCore
 
 @testable import MFuseS3
 
 @Test func placeholder() async throws {
     // Integration tests require real S3 credentials
+}
+
+/// A ranged read has to answer with the interval it asked for, whatever the server sends.
+///
+/// Collecting the body with a fixed allowance failed the read outright once the answer ran
+/// past it, and a File Provider download of a large file is nothing but these reads.
+@Test func rangedReadKeepsTheRequestedLengthOutOfAnOversizedAnswer() async throws {
+    let payload = Data((0..<4096).map { UInt8($0 % 251) })
+
+    // Answered with far more than the 1 KiB that was asked for, in chunks, the way a
+    // streamed response arrives.
+    let oversized = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload, chunkSize: 512),
+        skipping: 0,
+        length: 1024
+    )
+    #expect(oversized == payload.prefix(1024))
+
+    // A body that ends exactly on the requested length is returned whole.
+    let exact = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload.prefix(1024), chunkSize: 512),
+        skipping: 0,
+        length: 1024
+    )
+    #expect(exact == payload.prefix(1024))
+
+    // A body shorter than the request is not padded out — the end of an object is short.
+    let short = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload.prefix(100), chunkSize: 512),
+        skipping: 0,
+        length: 1024
+    )
+    #expect(short == payload.prefix(100))
+}
+
+/// A server that ignores the Range header answers the whole object with no `Content-Range`.
+/// Taking the head of that answer would return the start of the file for every chunk of a
+/// download, so the bytes are counted from where the response says they begin.
+@Test func rangedReadCountsFromWhereTheServerSaysTheBytesBegin() async throws {
+    #expect(S3FileSystem.rangeStart(fromContentRange: "bytes 1024-2047/8192") == 1024)
+    #expect(S3FileSystem.rangeStart(fromContentRange: "bytes 0-99/100") == 0)
+    // Absent or unreadable: the whole object, which begins at zero.
+    #expect(S3FileSystem.rangeStart(fromContentRange: nil) == 0)
+    #expect(S3FileSystem.rangeStart(fromContentRange: "bytes */8192") == 0)
+
+    let payload = Data((0..<4096).map { UInt8($0 % 251) })
+    // The whole object for a read of bytes 1024..<2048: the skip is what makes the answer
+    // the interval that was asked for rather than the head of the file.
+    let ignoredRange = try await S3FileSystem.collectRangedBody(
+        chunkedStream(of: payload, chunkSize: 512),
+        skipping: 1024,
+        length: 1024
+    )
+    #expect(ignoredRange == payload[1024..<2048])
+}
+
+private func chunkedStream(of data: Data, chunkSize: Int) -> AsyncThrowingStream<Data, Error> {
+    AsyncThrowingStream { continuation in
+        var index = data.startIndex
+        while index < data.endIndex {
+            let end = data.index(index, offsetBy: chunkSize, limitedBy: data.endIndex) ?? data.endIndex
+            continuation.yield(Data(data[index..<end]))
+            index = end
+        }
+        continuation.finish()
+    }
+}
+
+/// Credential problems must not be reported as an unreachable server, or the UI asks the
+/// user to check the network instead of the keys.
+@Test func credentialErrorsMapToAuthenticationFailed() {
+    for code in [
+        "AccessDenied",
+        "InvalidAccessKeyId",
+        "SignatureDoesNotMatch",
+        "InvalidSecurity",
+        "NotAuthorized"
+    ] {
+        let mapped = S3FileSystem.mapConnectionError(StubError(text: code), bucket: "b", endpoint: nil)
+        guard case .authenticationFailed = mapped else {
+            Issue.record("\(code) mapped to \(mapped) instead of .authenticationFailed")
+            continue
+        }
+    }
+}
+
+/// The bucket is identified as missing rather than unreachable, but the identifier itself
+/// stays out of the message: connection errors are surfaced through `LocalizedError` and
+/// logged with public privacy by both the app and the File Provider bootstrap.
+@Test func missingBucketIsReportedWithoutNamingIt() {
+    let mapped = S3FileSystem.mapConnectionError(StubError(text: "NoSuchBucket"), bucket: "photos", endpoint: nil)
+    guard case .connectionFailed(let message) = mapped else {
+        Issue.record("expected .connectionFailed, got \(mapped)")
+        return
+    }
+    #expect(!message.contains("photos"))
+    #expect(message.contains("bucket"))
+    #expect(message != S3FileSystem.mapConnectionError(StubError(text: "boom"), bucket: "photos", endpoint: nil).errorDescription)
+}
+
+/// SDK descriptions can carry response diagnostics from a custom endpoint, and error
+/// descriptions are logged with public privacy — they must not reach the message.
+@Test func unclassifiedErrorsDoNotLeakTheSDKDescription() {
+    let secret = "x-amz-signature=deadbeef"
+    let mapped = S3FileSystem.mapConnectionError(StubError(text: secret), bucket: "b", endpoint: nil)
+    guard case .connectionFailed(let message) = mapped else {
+        Issue.record("expected .connectionFailed, got \(mapped)")
+        return
+    }
+    #expect(!message.contains(secret))
+}
+
+/// A RemoteFileSystemError raised inside connect() is already classified.
+@Test func alreadyClassifiedErrorsPassThrough() {
+    let mapped = S3FileSystem.mapConnectionError(
+        RemoteFileSystemError.authenticationFailed,
+        bucket: "b",
+        endpoint: nil
+    )
+    guard case .authenticationFailed = mapped else {
+        Issue.record("expected .authenticationFailed, got \(mapped)")
+        return
+    }
+}
+
+/// `connect()` deduplicates overlapping attempts through `connectTask`. A first attempt
+/// finishing after `disconnect()` must not deregister the attempt that replaced it, or the
+/// next caller opens a second, overlapping connection.
+@Test func completingConnectAttemptKeepsTheAttemptThatReplacedIt() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+    }
+
+    let first = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    // Cancels the first probe and clears the registered attempt.
+    try await fileSystem.disconnect()
+
+    let second = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 2)
+
+    _ = await first.result
+    #expect(await fileSystem.hasPendingConnectTask)
+
+    // Only `disconnect()` reaches the probe: `connect()` awaits an unstructured task, so
+    // cancelling `second` would leave the second probe sleeping.
+    try await fileSystem.disconnect()
+    _ = await second.result
+}
+
+/// The probe runs in an unstructured task, which cancellation does not reach on its own.
+/// Without propagation the caller waits for a connection it no longer wants, and the actor
+/// publishes a client nobody is left to disconnect.
+@Test func cancellingConnectStopsTheProbeInsteadOfPublishing() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+    }
+
+    let attempt = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    attempt.cancel()
+    switch await attempt.result {
+    case .success:
+        Issue.record("expected the cancelled connect to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+
+    #expect(await fileSystem.isConnected == false)
+    #expect(await fileSystem.hasPendingConnectTask == false)
+}
+
+/// A caller that joins someone else's probe must still honour its own cancellation, and
+/// must not take the probe down with it: awaiting an unstructured task resumes only when
+/// that task finishes, so the joiner would otherwise sit out the whole probe and then
+/// report its result as its own.
+@Test func cancellingAJoinedConnectLeavesTheSharedProbeRunning() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+    }
+
+    let first = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    let joined = Task { try await fileSystem.connect() }
+    joined.cancel()
+    switch await joined.result {
+    case .success:
+        Issue.record("expected the cancelled joiner to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+
+    // The caller that started the probe is still waiting on it.
+    #expect(await fileSystem.hasPendingConnectTask)
+    #expect(await fileSystem.isConnected == false)
+
+    try await fileSystem.disconnect()
+    _ = await first.result
+}
+
+/// The attempt is shared, so the caller that happened to start it does not own it: its
+/// cancellation must not take the connection down for callers that joined it and were
+/// never cancelled themselves.
+@Test func cancellingTheStarterLeavesAJoinedConnectRunning() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        await coordinator.waitForRelease()
+    }
+
+    let starter = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    let joiner = Task { try await fileSystem.connect() }
+    while await fileSystem.pendingConnectWaiterCount == 0 {
+        await Task.yield()
+    }
+
+    starter.cancel()
+    await coordinator.release()
+
+    // The joiner asked for a connection and never withdrew, so it gets one.
+    switch await joiner.result {
+    case .success:
+        break
+    case .failure(let error):
+        Issue.record("the joined connect was taken down with the starter: \(error)")
+    }
+    #expect(await fileSystem.isConnected)
+
+    // The starter still answers for itself.
+    switch await starter.result {
+    case .success:
+        Issue.record("expected the cancelled starter to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+
+    try await fileSystem.disconnect()
+}
+
+/// A caller cancelled between the attempt publishing its client and its own resumption was
+/// answered with success, which leaves a live `AWSClient` nobody is obliged to take down:
+/// the caller withdrew, and the actor keeps the only reference until it is released — the
+/// release Soto asserts on.
+@Test func cancellingTheLastInterestedCallerTakesTheConnectionWithIt() async throws {
+    let held = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    // Holds without observing cancellation, so the attempt goes on to publish rather than
+    // unwinding — which is what puts the cancellation in the window this covers.
+    await fileSystem.setConnectivityProbe {
+        await held.probeStarted()
+        await held.waitForRelease()
+    }
+
+    let starter = Task { try await fileSystem.connect() }
+    await held.waitForProbes(count: 1)
+    await held.release()
+    starter.cancel()
+
+    switch await starter.result {
+    case .success:
+        Issue.record("a cancelled caller was handed the connection it withdrew from")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+    #expect(await fileSystem.isConnected == false)
+}
+
+/// The starter's withdrawal cancels the shared attempt only when nobody else is waiting on
+/// it, and a joiner arriving just after that check is answered with a cancellation it never
+/// asked for. It asked for a connection and never withdrew, so it gets one.
+@Test func aJoinerIsNotAnsweredWithTheStartersCancellation() async throws {
+    let held = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await held.probeStarted()
+        await held.waitForRelease()
+    }
+
+    let starter = Task { try await fileSystem.connect() }
+    await held.waitForProbes(count: 1)
+    // Withdrawn before the joiner below exists, so the relinquish that follows finds no
+    // waiters and cancels the attempt both of them would otherwise have shared.
+    starter.cancel()
+
+    let joiner = Task { try await fileSystem.connect() }
+    while await fileSystem.pendingConnectWaiterCount == 0 {
+        await Task.yield()
+    }
+    await held.release()
+
+    switch await joiner.result {
+    case .success:
+        break
+    case .failure(let error):
+        Issue.record("the joiner was answered with the starter's withdrawal: \(error)")
+    }
+    #expect(await fileSystem.isConnected)
+
+    _ = await starter.result
+    try await fileSystem.disconnect()
+}
+
+/// The interrupted attempt shuts down the client it built as it unwinds. `disconnect()`
+/// returning before that lets a replacement attempt allocate a second client while the
+/// first one is still open — and Soto asserts on a client released without a shutdown.
+@Test func disconnectWaitsForTheInterruptedAttemptToUnwind() async throws {
+    let coordinator = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe {
+        await coordinator.probeStarted()
+        do {
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        } catch {
+            await coordinator.probeUnwound()
+            throw error
+        }
+    }
+
+    let attempt = Task { try await fileSystem.connect() }
+    await coordinator.waitForProbes(count: 1)
+
+    try await fileSystem.disconnect()
+    #expect(await coordinator.didUnwind)
+
+    _ = await attempt.result
+}
+
+/// Creating the task does not run its body, so an attempt can be cancelled and replaced
+/// before it reaches its first line. It must not then tear down the client the replacement
+/// published: that takes a live connection from the caller that established it, which goes
+/// on to fail its own identity check and report the connection it made as interrupted.
+@Test func supersededAttemptLeavesTheReplacementConnectionAlone() async throws {
+    let held = ProbeCoordinator()
+    let fileSystem = S3FileSystem(
+        config: ConnectionConfig(
+            name: "s3",
+            backendType: .s3,
+            host: "s3.example.com",
+            parameters: ["bucket": "bucket", "region": "us-east-1"]
+        ),
+        credential: MFuseCore.Credential(accessKeyID: "key", secretAccessKey: "secret")
+    )
+    await fileSystem.setConnectivityProbe { }
+    // Holds the first attempt at the head of its body, which is where a body that has not
+    // been scheduled yet resumes.
+    await fileSystem.setAttemptStartHook {
+        await held.probeStarted()
+        await held.waitForRelease()
+    }
+
+    let superseded = Task { try await fileSystem.connect() }
+    await held.waitForProbes(count: 1)
+    // Only the first attempt is held; the replacement runs to completion.
+    await fileSystem.setAttemptStartHook(nil)
+
+    // Cancels and de-registers the held attempt, then waits for it to unwind — which is
+    // what leaves room for the replacement below while it is still held.
+    let disconnected = Task { try await fileSystem.disconnect() }
+    while await fileSystem.hasPendingConnectTask {
+        await Task.yield()
+    }
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+
+    await held.release()
+    switch await superseded.result {
+    case .success:
+        Issue.record("expected the superseded attempt to fail")
+    case .failure(let error):
+        #expect(error is CancellationError)
+    }
+    try await disconnected.value
+
+    // The connection the replacement published is still the one the actor holds.
+    #expect(await fileSystem.isConnected)
+
+    try await fileSystem.disconnect()
+}
+
+/// Endpoint diagnostics carry the configured hostname, so classifying by scanning the
+/// whole description can blame the credentials for an unrelated transport failure.
+@Test func structuredErrorCodesOutrankTheDescriptionScan() {
+    let mapped = S3FileSystem.mapConnectionError(
+        StubAWSError(errorCode: "NoSuchBucket"),
+        bucket: "photos",
+        endpoint: nil
+    )
+    guard case .connectionFailed(let message) = mapped else {
+        Issue.record("expected .connectionFailed, got \(mapped)")
+        return
+    }
+    #expect(message.contains("bucket"))
+
+    // An unrecognized structured code is still the SDK's own diagnosis: falling through
+    // to the description scan would blame the keys for a transport failure that merely
+    // names an endpoint reading like one.
+    let transport = S3FileSystem.mapConnectionError(
+        StubAWSError(errorCode: "RequestTimeout"),
+        bucket: "photos",
+        endpoint: nil
+    )
+    guard case .connectionFailed = transport else {
+        Issue.record("expected .connectionFailed, got \(transport)")
+        return
+    }
+}
+
+/// The XML code an S3-compatible server sends is vendor-specific and often empty, but the
+/// HTTP status is not: a 401 or 403 is about the keys or the access policy whatever the
+/// body calls it, and reporting an unreachable endpoint sends the user to check a network
+/// that is working.
+@Test func authenticationStatusCodesOutrankTheVendorErrorCode() {
+    for status: UInt in [401, 403] {
+        for code in ["", "AccessForbidden", "SomeVendorCode"] {
+            let mapped = S3FileSystem.classifyAWSError(
+                code: code,
+                httpStatus: status,
+                bucket: "photos",
+                error: StubError(text: "forbidden")
+            )
+            guard case .authenticationFailed = mapped else {
+                Issue.record("\(status) with code \"\(code)\" mapped to \(String(describing: mapped))")
+                continue
+            }
+        }
+    }
+
+    // A 404 on the list probe is still the bucket, whatever the code says.
+    guard case .connectionFailed(let message) = S3FileSystem.classifyAWSError(
+        code: "",
+        httpStatus: 404,
+        bucket: "photos",
+        error: StubError(text: "missing")
+    ) else {
+        Issue.record("404 did not map to a bucket error")
+        return
+    }
+    #expect(message.contains("bucket"))
+
+    // Anything else with no code at all is left to the description scan.
+    #expect(
+        S3FileSystem.classifyAWSError(
+            code: "",
+            httpStatus: 500,
+            bucket: "photos",
+            error: StubError(text: "boom")
+        ) == nil
+    )
+}
+
+/// A transport failure carries no error code to classify it by, and it names the host it
+/// could not reach — so a self-hosted endpoint whose own name reads like a rejection was
+/// reported as bad credentials, sending the user to re-enter keys that work.
+@Test func unreachableEndpointIsNotBlamedOnTheCredentials() {
+    let endpoint = "https://unauthorized.internal.example"
+    for description in [
+        "NIOConnectionError(host: \"unauthorized.internal.example\", port: 443)",
+        "could not connect to \(endpoint)"
+    ] {
+        let mapped = S3FileSystem.mapConnectionError(
+            StubError(text: description),
+            bucket: "photos",
+            endpoint: endpoint
+        )
+        guard case .connectionFailed = mapped else {
+            Issue.record("\"\(description)\" mapped to \(mapped) instead of an endpoint failure")
+            continue
+        }
+    }
+
+    // The bucket names a target too, and virtual-host addressing puts it in the hostname.
+    let bucketNamed = S3FileSystem.mapConnectionError(
+        StubError(text: "connection refused: accessdenied.storage.internal"),
+        bucket: "accessdenied",
+        endpoint: nil
+    )
+    guard case .connectionFailed = bucketNamed else {
+        Issue.record("a bucket name reading like a rejection mapped to \(bucketNamed)")
+        return
+    }
+
+    // The keys are still blamed when the error, rather than the address, says so.
+    let rejected = S3FileSystem.mapConnectionError(
+        StubError(text: "AccessDenied"),
+        bucket: "photos",
+        endpoint: endpoint
+    )
+    guard case .authenticationFailed = rejected else {
+        Issue.record("expected .authenticationFailed, got \(rejected)")
+        return
+    }
+}
+
+/// The description scan still classifies SDK errors that carry no structured code.
+@Test func descriptionScanRemainsForErrorsWithoutACode() {
+    let mapped = S3FileSystem.mapConnectionError(StubError(text: "AccessDenied"), bucket: "b", endpoint: nil)
+    guard case .authenticationFailed = mapped else {
+        Issue.record("expected .authenticationFailed, got \(mapped)")
+        return
+    }
+}
+
+private actor ProbeCoordinator {
+    private struct Waiter {
+        let id: Int
+        let threshold: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    private var started = 0
+    private var nextWaiterID = 0
+    private var waiters: [Waiter] = []
+    private var unwound = false
+    private var isReleased = false
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Holds a probe without observing cancellation, which is what a backend that ignores
+    /// it looks like from here.
+    func waitForRelease() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func release() {
+        isReleased = true
+        let pending = releaseWaiters
+        releaseWaiters = []
+        for continuation in pending {
+            continuation.resume()
+        }
+    }
+
+    /// Whether a probe has finished unwinding after being cancelled.
+    var didUnwind: Bool { unwound }
+
+    func probeUnwound() {
+        unwound = true
+    }
+
+    func probeStarted() {
+        started += 1
+        let ready = waiters.filter { $0.threshold <= started }
+        waiters.removeAll { $0.threshold <= started }
+        for waiter in ready {
+            waiter.continuation.resume()
+        }
+    }
+
+    /// Bounded: a probe that never starts must fail the test rather than hang the suite.
+    func waitForProbes(count: Int, timeoutNanoseconds: UInt64 = 10_000_000_000) async {
+        guard started < count else { return }
+
+        let id = nextWaiterID
+        nextWaiterID += 1
+        let timeout = Task { [weak self] in
+            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            await self?.timeOutWaiter(id, expected: count)
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(Waiter(id: id, threshold: count, continuation: continuation))
+        }
+        timeout.cancel()
+    }
+
+    private func timeOutWaiter(_ id: Int, expected: Int) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        Issue.record("timed out waiting for \(expected) probe(s); \(started) started")
+        waiter.continuation.resume()
+    }
+}
+
+private struct StubError: Error, CustomStringConvertible {
+    let text: String
+    var description: String { text }
+}
+
+/// An SDK error whose description points at an endpoint that reads like an auth failure.
+private struct StubAWSError: AWSErrorType {
+    let errorCode: String
+    var context: AWSErrorContext? { nil }
+    var description: String { "https://unauthorized.internal.example is unreachable" }
+
+    init(errorCode: String) {
+        self.errorCode = errorCode
+    }
+
+    init?(errorCode: String, context: AWSErrorContext) {
+        nil
+    }
 }

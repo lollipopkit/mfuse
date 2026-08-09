@@ -8,7 +8,8 @@ let package = Package(
         .library(name: "MFuseGoogleDrive", targets: ["MFuseGoogleDrive"])
     ],
     dependencies: [
-        .package(path: "../MFuseCore")
+        .package(path: "../MFuseCore"),
+        .package(path: "../MFuseTestSupport")
     ],
     targets: [
         .target(
@@ -17,7 +18,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MFuseGoogleDriveTests",
-            dependencies: ["MFuseGoogleDrive"]
+            dependencies: ["MFuseGoogleDrive", "MFuseTestSupport"]
         )
     ]
 )

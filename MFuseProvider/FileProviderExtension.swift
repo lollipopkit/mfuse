@@ -23,8 +23,18 @@ struct FileProviderRuntimeContext: Sendable {
 
 actor BootstrapTaskStore {
     private var bootstrapTask: Task<FileProviderRuntimeContext, Error>?
+    /// Set by `takeForInvalidation()` and never cleared: the extension instance is being
+    /// torn down, so a context created after that point is one nothing closes.
+    private var isInvalidated = false
 
-    func take() -> Task<FileProviderRuntimeContext, Error>? {
+    /// Hand the current task to the teardown and refuse to build another.
+    ///
+    /// Taking the task without closing the door let an operation that arrived while
+    /// cleanup was still disconnecting create a second context: the teardown owns only the
+    /// task it took, so that one was left connected, with its caches and state store open,
+    /// for an instance the system has already given up on.
+    func takeForInvalidation() -> Task<FileProviderRuntimeContext, Error>? {
+        isInvalidated = true
         let task = bootstrapTask
         bootstrapTask = nil
         return task
@@ -41,7 +51,10 @@ actor BootstrapTaskStore {
 
     func currentOrCreate(
         _ create: @Sendable () -> Task<FileProviderRuntimeContext, Error>
-    ) -> Task<FileProviderRuntimeContext, Error> {
+    ) throws -> Task<FileProviderRuntimeContext, Error> {
+        guard !isInvalidated else {
+            throw FileProviderExtensionInvalidated()
+        }
         if let bootstrapTask {
             return bootstrapTask
         }
@@ -52,12 +65,108 @@ actor BootstrapTaskStore {
     }
 }
 
+/// Counts the operations holding the runtime context, so teardown can wait for them
+/// instead of closing what they are using.
+///
+/// The count is raised *before* the context is asked for and lowered when the operation
+/// leaves, whichever way it leaves. Teardown shuts the door first and drains second, so an
+/// operation that arrives in between is refused a context rather than missed by the drain.
+final class RuntimeContextActivity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeCount = 0
+    /// Single-consumer: `invalidate()` is the only waiter, and waits once per instance.
+    private var idleWaiter: CheckedContinuation<Void, Never>?
+    private var isWaitCancelled = false
+
+    func begin() {
+        lock.withLock { activeCount += 1 }
+    }
+
+    func end() {
+        let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
+            activeCount -= 1
+            guard activeCount == 0 else { return nil }
+            return takeIdleWaiterLocked()
+        }
+        waiter?.resume()
+    }
+
+    /// Wait until nothing holds the context any more.
+    ///
+    /// Cancellation resumes the waiter here rather than leaving it to the last operation:
+    /// the caller bounds this wait, and a backend that never returns from a cancelled read
+    /// would otherwise strand the continuation for the life of the process.
+    func waitUntilIdle() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let isIdle: Bool = lock.withLock {
+                    guard activeCount > 0, !isWaitCancelled else { return true }
+                    idleWaiter = continuation
+                    return false
+                }
+                if isIdle {
+                    continuation.resume()
+                }
+            }
+        } onCancel: {
+            let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
+                isWaitCancelled = true
+                return takeIdleWaiterLocked()
+            }
+            waiter?.resume()
+        }
+    }
+
+    private func takeIdleWaiterLocked() -> CheckedContinuation<Void, Never>? {
+        let waiter = idleWaiter
+        idleWaiter = nil
+        return waiter
+    }
+}
+
+/// One operation's hold on the runtime context, counted for the duration of that operation.
+///
+/// `finish()` is called exactly once, from a `defer` at the point the lease is taken, so the
+/// hold ends whether the operation returned, threw or was cancelled.
+struct FileProviderRuntimeContextLease: Sendable {
+    let context: FileProviderRuntimeContext
+    private let activity: RuntimeContextActivity
+
+    init(context: FileProviderRuntimeContext, activity: RuntimeContextActivity) {
+        self.context = context
+        self.activity = activity
+    }
+
+    func finish() {
+        activity.end()
+    }
+}
+
+/// Raised for work that arrives after the extension instance has been invalidated.
+struct FileProviderExtensionInvalidated: LocalizedError {
+    var errorDescription: String? {
+        NSLocalizedString(
+            "fileprovider.invalidated",
+            tableName: nil,
+            bundle: .main,
+            value: "This mount was shut down. Try again.",
+            comment: ""
+        )
+    }
+}
+
 actor CleanupTaskStore {
     private var cleanupTask: Task<Void, Never>?
     private var cleanupTaskID: UUID?
 
-    func replace(with task: Task<Void, Never>, id: UUID) {
-        cleanupTask?.cancel()
+    /// Keep a reference to this cleanup pass, leaving any pass already running alone.
+    ///
+    /// Cancelling the previous one made a second `invalidate()` abandon the teardown
+    /// altogether: `BootstrapTaskStore.takeForInvalidation()` hands the runtime context to
+    /// whichever pass asks first, and the later pass finds nothing to close, so cancelling
+    /// the earlier one — parked on a drain, or on a bootstrap that has not unwound — left
+    /// the filesystem connected and the caches open with nothing left to answer for them.
+    func adopt(_ task: Task<Void, Never>, id: UUID) {
         cleanupTask = task
         cleanupTaskID = id
     }
@@ -115,40 +224,115 @@ final class SharedCredentialStoreProvider: @unchecked Sendable {
     }
 
     func credential(for connectionID: UUID) throws -> Credential? {
-        let store = lock.withLock { self.store }
-        return try store.credential(for: connectionID)
+        try currentStore().credential(for: connectionID)
     }
 
     func store(_ credential: Credential, for connectionID: UUID) throws {
-        let store = lock.withLock { self.store }
-        try store.store(credential, for: connectionID)
+        try currentStore().store(credential, for: connectionID)
     }
 
-    func replace(syncMode: KeychainItemSyncMode) {
-        lock.withLock {
-            self.store = SharedCredentialStore(syncMode: syncMode)
+    /// The store for the sync mode that is configured *now*.
+    ///
+    /// Read on every access rather than chosen once: turning iCloud sync on or off moves
+    /// every credential to the other Keychain sync mode, and the extension is a separate
+    /// process the app cannot call into. An instance built before the change would keep
+    /// looking in the mode the items have left — reporting an authentication failure for
+    /// every domain until the extension happens to be recreated — and would write refreshed
+    /// OAuth tokens back there, where nothing reads them.
+    private func currentStore() -> SharedCredentialStore {
+        let syncMode: KeychainItemSyncMode = SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
+        return lock.withLock {
+            if store.syncMode != syncMode {
+                store = SharedCredentialStore(syncMode: syncMode)
+            }
+            return store
         }
     }
 }
 
+/// Resumes its caller once, for whichever of the work, the deadline and the caller's own
+/// cancellation gets there first.
+private final class OperationTimeoutResumer<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var pendingResult: Result<T, Error>?
+    private var isFinished = false
+
+    /// Installed before anything can race for it, and answered straight away when the
+    /// first outcome arrived while the caller was still suspending.
+    func install(_ continuation: CheckedContinuation<T, Error>) {
+        let readyResult: Result<T, Error>? = lock.withLock {
+            guard let pendingResult else {
+                self.continuation = continuation
+                return nil
+            }
+            self.pendingResult = nil
+            return pendingResult
+        }
+        if let readyResult {
+            continuation.resume(with: readyResult)
+        }
+    }
+
+    func resume(with result: Result<T, Error>) {
+        let continuation: CheckedContinuation<T, Error>? = lock.withLock {
+            guard !isFinished else { return nil }
+            isFinished = true
+            guard let continuation = self.continuation else {
+                pendingResult = result
+                return nil
+            }
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(with: result)
+    }
+}
+
+/// Run `work` under a deadline, and stop waiting for it once that deadline passes.
+///
+/// Not a task group: a throwing group waits for every child task before its scope ends, so
+/// an operation that never observes cancellation held the caller well past the timeout the
+/// group had already decided on — `runtimeContext()` sat there indefinitely on a wedged
+/// backend, and `invalidate()`, which cancels the bootstrap and awaits it, sat behind it
+/// with the filesystem and caches still open. The work is cancelled and then left to
+/// unwind on its own; the caller is answered on time.
 @Sendable
 func withOperationTimeout<T: Sendable>(
     seconds: Double,
     operation: String,
     _ work: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask {
-            try await work()
+    let resumer = OperationTimeoutResumer<T>()
+    let workTask = Task {
+        do {
+            resumer.resume(with: .success(try await work()))
+        } catch {
+            resumer.resume(with: .failure(error))
         }
-        group.addTask {
+    }
+    let timeoutTask = Task {
+        do {
             try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw FileProviderOperationTimeout.timedOut(operation)
+        } catch {
+            // Cancelled because the work already answered.
+            return
         }
+        workTask.cancel()
+        resumer.resume(with: .failure(FileProviderOperationTimeout.timedOut(operation)))
+    }
+    defer { timeoutTask.cancel() }
 
-        let result = try await group.next()!
-        group.cancelAll()
-        return result
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            resumer.install(continuation)
+        }
+    } onCancel: {
+        workTask.cancel()
+        timeoutTask.cancel()
+        // Answered here rather than left to the work: cancellation is only prompt if it
+        // does not wait for an operation that may be ignoring it.
+        resumer.resume(with: .failure(CancellationError()))
     }
 }
 
@@ -157,6 +341,7 @@ func withOperationTimeout<T: Sendable>(
 public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, NSFileProviderDomainState {
 
     private static let bootstrapTimeoutSeconds = 15.0
+    private static let invalidationDrainTimeoutSeconds = 5.0
     private static let bootstrapTransientRetryCount = 2
     private static let bootstrapTransientRetryDelayNanoseconds: UInt64 = 750_000_000
     private static let contentCacheStoreRetryCount = 2
@@ -214,22 +399,12 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     private let logger = Logger(subsystem: "com.lollipopkit.mfuse.provider", category: "Extension")
     private let bootstrapTaskStore = BootstrapTaskStore()
     private let cleanupTaskStore = CleanupTaskStore()
+    private let runtimeContextActivity = RuntimeContextActivity()
 
     public required init(domain: NSFileProviderDomain) {
         self.domain = domain
         super.init()
-        Self.swapCredentialStoreForCurrentSettings()
         Self.registerBackends()
-    }
-
-    static func swapCredentialStore(syncMode: KeychainItemSyncMode) {
-        sharedCredentialStoreProvider.replace(syncMode: syncMode)
-    }
-
-    static func swapCredentialStoreForCurrentSettings() {
-        swapCredentialStore(
-            syncMode: SharedAppSettings.iCloudSyncEnabled ? .synchronizable : .local
-        )
     }
 
     public var domainVersion: NSFileProviderDomainVersion {
@@ -250,9 +425,40 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 }
             }
 
-            let bootstrapTask = await self.bootstrapTaskStore.take()
+            let bootstrapTask = await self.bootstrapTaskStore.takeForInvalidation()
             bootstrapTask?.cancel()
-            guard let bootstrapTask, let context = try? await bootstrapTask.value else { return }
+            guard let bootstrapTask else { return }
+            // Bounded like the drain below. The bootstrap unwinds through its own cleanup —
+            // `disconnect()` on a backend that may be exactly the one that stopped
+            // answering — and awaiting it outright parked the teardown for the life of the
+            // process, so nothing was ever drained or closed. What this gives up on is left
+            // to the process, which is on its way out.
+            let context = try? await withOperationTimeout(
+                seconds: Self.invalidationDrainTimeoutSeconds,
+                operation: "waiting for the bootstrap of domain \(self.domain.identifier.rawValue) to unwind"
+            ) {
+                try await bootstrapTask.value
+            }
+            guard let context else {
+                self.logger.error(
+                    "Left the runtime context for domain \(self.domain.identifier.rawValue, privacy: .public) to the process: its bootstrap did not unwind in time"
+                )
+                return
+            }
+
+            // Drained after the door is shut, and before anything is closed. An operation
+            // that is already running holds the same connection, caches and anchor store
+            // this is about to close: closing underneath it dropped the cache invalidation
+            // a delete or a move makes on its way out — `close()` leaves every later write
+            // a no-op — so the next extension instance opened the same database and served
+            // the entry for an item that is no longer there.
+            //
+            // A drain that runs out of time leaves the context open rather than closing it
+            // anyway. The operation still holding it is the one closing would damage, and
+            // the instance is being released: what is left open goes with the process,
+            // which costs nothing the next instance can observe, while closing under a live
+            // operation costs exactly the writes this drain exists to keep.
+            guard await self.awaitInFlightOperations() else { return }
 
             try? await context.fileSystem.disconnect()
             await context.cache.close()
@@ -262,7 +468,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         }
 
         Task {
-            await cleanupTaskStore.replace(with: cleanupTask, id: cleanupTaskID)
+            await cleanupTaskStore.adopt(cleanupTask, id: cleanupTaskID)
         }
     }
 
@@ -306,7 +512,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                     return
                 }
 
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let path = identifier.remotePath
                 let remoteItem = try await context.fileSystem.itemInfo(at: path)
                 let parentID = parentIdentifier(for: path)
@@ -332,7 +540,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 100 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let path = itemIdentifier.remotePath
                 let cachedItem = await context.cache.get(path: path)
                 if let cachedItem,
@@ -391,7 +601,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 1 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let parentPath = itemTemplate.parentItemIdentifier.remotePath
                 let newPath = parentPath.appending(itemTemplate.filename)
                 let createdFileURL: URL?
@@ -461,7 +673,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 1 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 var currentPath = item.itemIdentifier.remotePath
                 var updatedFileURL: URL?
                 let originalPath = currentPath
@@ -529,7 +743,9 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             defer { progress.completedUnitCount = 1 }
 
             do {
-                let context = try await runtimeContext()
+                let lease = try await runtimeContextLease()
+                defer { lease.finish() }
+                let context = lease.context
                 let path = identifier.remotePath
                 let deletedItem = await cachedOrRemoteItem(at: path, using: context)
                 let descendantItems = await descendantItemsForDeletion(
@@ -571,7 +787,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             guard let self else {
                 throw CancellationError()
             }
-            return try await self.runtimeContext()
+            return try await self.runtimeContextLease()
         } errorMapper: { [weak self] error in
             guard let self else {
                 return error as NSError
@@ -696,6 +912,16 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func shouldRetryTransientConnectionError(_ error: Error) -> Bool {
+        // A deadline this extension imposed is not a failure the backend reported: the
+        // attempt was cancelled and left to unwind, so it may still be inside `connect()`
+        // on the very filesystem a retry would connect again. Two connects interleaving on
+        // one instance is how an abandoned attempt finished after the retry and left the
+        // session it opened owned by nobody. The retry happens a level up instead, where
+        // `runtimeContext()` clears the failed bootstrap and the next request builds a
+        // fresh filesystem to attempt on.
+        if error is FileProviderOperationTimeout {
+            return false
+        }
         if let remoteError = error as? RemoteFileSystemError {
             if case .authenticationFailed = remoteError {
                 return false
@@ -717,7 +943,20 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func requireCredential(for config: ConnectionConfig) async throws -> Credential {
-        let credential = try Self.sharedCredentialStoreProvider.credential(for: config.id) ?? Credential()
+        let stored: Credential?
+        do {
+            stored = try Self.sharedCredentialStoreProvider.credential(for: config.id)
+        } catch is DecodingError {
+            // A credential item that cannot be decoded is not a server the extension failed
+            // to reach: no retry recovers it, and reporting it as unreachable left the
+            // domain with no way out. `notAuthenticated` is what asks the user to supply
+            // the credential again, which is the only thing that fixes it.
+            logger.error(
+                "Undecodable credential for domain \(config.domainIdentifier, privacy: .public); reporting it as an authentication failure"
+            )
+            throw RemoteFileSystemError.authenticationFailed
+        }
+        let credential = stored ?? Credential()
 
         switch config.authMethod {
         case .password:
@@ -745,13 +984,55 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func runtimeContext() async throws -> FileProviderRuntimeContext {
-        let task = await currentOrCreateBootstrapTask()
+        let task = try await currentOrCreateBootstrapTask()
 
         do {
             return try await task.value
         } catch {
             await bootstrapTaskStore.clearIfCurrent(task)
             throw error
+        }
+    }
+
+    /// Take the runtime context for one operation, and count that operation while it runs.
+    ///
+    /// Counted before the context is asked for: raising it afterwards leaves a window in
+    /// which teardown sees nothing in flight and starts closing, while this operation is
+    /// about to be handed the context it is closing. `BootstrapTaskStore` refuses a context
+    /// from the moment teardown takes over, so an operation that lands inside the drain is
+    /// turned away instead.
+    private func runtimeContextLease() async throws -> FileProviderRuntimeContextLease {
+        runtimeContextActivity.begin()
+        do {
+            let context = try await runtimeContext()
+            return FileProviderRuntimeContextLease(context: context, activity: runtimeContextActivity)
+        } catch {
+            runtimeContextActivity.end()
+            throw error
+        }
+    }
+
+    /// Wait for the operations still holding the runtime context, but not indefinitely.
+    ///
+    /// The system releases this instance shortly after `invalidate()`; a backend that never
+    /// returns from a cancelled read must not hold the teardown for the rest of the
+    /// process's life, so the wait is bounded.
+    ///
+    /// Returns whether everything let go — which is what says the context may be closed.
+    private func awaitInFlightOperations() async -> Bool {
+        do {
+            try await withOperationTimeout(
+                seconds: Self.invalidationDrainTimeoutSeconds,
+                operation: "waiting for in-flight operations on domain \(domain.identifier.rawValue)"
+            ) { [runtimeContextActivity] in
+                await runtimeContextActivity.waitUntilIdle()
+            }
+            return true
+        } catch {
+            logger.error(
+                "Leaving the runtime context for domain \(self.domain.identifier.rawValue, privacy: .public) open: operations are still in flight: \(error.localizedDescription, privacy: .public)"
+            )
+            return false
         }
     }
 
@@ -914,8 +1195,8 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         }
     }
 
-    private func currentOrCreateBootstrapTask() async -> Task<FileProviderRuntimeContext, Error> {
-        await bootstrapTaskStore.currentOrCreate {
+    private func currentOrCreateBootstrapTask() async throws -> Task<FileProviderRuntimeContext, Error> {
+        try await bootstrapTaskStore.currentOrCreate {
             let task = Task { [weak self, domain] in
                 guard let self else {
                     throw CancellationError()
@@ -942,7 +1223,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                 return NSError(
                     domain: NSFileProviderErrorDomain,
                     code: NSFileProviderError.noSuchItem.rawValue,
-                    userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"]
+                    userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription]
                 )
             case .alreadyExists:
                 return NSError(domain: NSFileProviderErrorDomain,
@@ -950,25 +1231,66 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             case .notConnected, .connectionFailed:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.serverUnreachable.rawValue,
-                               userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
+                               userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription])
             case .permissionDenied:
-                return NSError(domain: NSFileProviderErrorDomain,
-                               code: NSFileProviderError.serverUnreachable.rawValue,
-                               userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
+                // Not `serverUnreachable`: the server answered, and it answered "no". Told
+                // it is unreachable, Finder offers to retry a request that will be refused
+                // the same way every time and says nothing about access. A POSIX EACCES is
+                // what the file system layer above turns into the permission error the user
+                // can act on.
+                return NSError(domain: NSPOSIXErrorDomain,
+                               code: Int(EACCES),
+                               userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription])
             case .authenticationFailed:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.notAuthenticated.rawValue)
             default:
                 return NSError(domain: NSFileProviderErrorDomain,
                                code: NSFileProviderError.serverUnreachable.rawValue,
-                               userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
+                               userInfo: [NSLocalizedDescriptionKey: rfsError.localizedDescription])
             }
+        }
+        if error is FileProviderExtensionInvalidated {
+            return NSError(
+                domain: NSFileProviderErrorDomain,
+                code: NSFileProviderError.serverUnreachable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
+            )
         }
         if let mountError = error as? MountError {
             return NSError(
                 domain: NSFileProviderErrorDomain,
                 code: NSFileProviderError.serverUnreachable.rawValue,
                 userInfo: [NSLocalizedDescriptionKey: mountError.localizedDescription]
+            )
+        }
+        // A deadline this extension imposed is a server that did not answer in time, and
+        // Finder can act on that: it retries, and it says the mount is unreachable rather
+        // than showing a Swift error from a module it knows nothing about.
+        if let timeout = error as? FileProviderOperationTimeout {
+            return NSError(
+                domain: NSFileProviderErrorDomain,
+                code: NSFileProviderError.serverUnreachable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: timeout.localizedDescription]
+            )
+        }
+        // Answered the way the enumerator answers it. A bridged `CancellationError` carries
+        // this extension's own module in its domain, which nothing above it classifies —
+        // an operation stopped by an invalidation or a replaced request then reached Finder
+        // as an unexplained failure rather than as work that was called off.
+        if error is CancellationError {
+            return NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
+        }
+        // The HTTP backends hand their transport failures back as they come, and File
+        // Provider has no reading of `NSURLErrorDomain`: a host that could not be resolved
+        // or a connection that dropped reached Finder as an error it could not act on
+        // instead of a server it cannot reach. Cancellation is left alone — it is this
+        // extension stopping its own work, not the server.
+        if let urlError = error as? URLError, urlError.code != .cancelled {
+            return NSError(
+                domain: NSFileProviderErrorDomain,
+                code: NSFileProviderError.serverUnreachable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: urlError.localizedDescription]
             )
         }
         return error as NSError

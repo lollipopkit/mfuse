@@ -1,4 +1,5 @@
 import XCTest
+import Security
 @testable import MFuseCore
 
 private final class InMemoryCredentialProvider: @unchecked Sendable, CredentialProvider {
@@ -22,6 +23,14 @@ final class SharedStorageTests: XCTestCase {
     private var legacyDefaults: UserDefaults!
     private var legacyDefaultsSuiteName: String!
     private var containerURL: URL!
+    /// The Keychain service this test's fixtures are filed under.
+    ///
+    /// A test binary carries no App Group entitlement, so `SharedCredentialStore` falls
+    /// back to the login Keychain with no access group — the developer's own. Under the
+    /// production service the fixtures were indistinguishable from real credentials and
+    /// simply accumulated, one item per stored connection id, for every run. Filed under a
+    /// service of their own they can be deleted wholesale, whichever ids they used.
+    private var keychainService: String!
 
     override func setUp() {
         super.setUp()
@@ -30,6 +39,7 @@ final class SharedStorageTests: XCTestCase {
         legacyDefaults.removePersistentDomain(forName: legacyDefaultsSuiteName)
         containerURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SharedStorageTests-\(UUID().uuidString)", isDirectory: true)
+        keychainService = "\(SharedCredentialStore.defaultService).tests.\(UUID().uuidString)"
     }
 
     override func tearDown() {
@@ -39,7 +49,37 @@ final class SharedStorageTests: XCTestCase {
         if let containerURL {
             try? FileManager.default.removeItem(at: containerURL)
         }
+        if let keychainService {
+            Self.deleteKeychainItems(service: keychainService)
+        }
         super.tearDown()
+    }
+
+    private func makeSharedCredentialStore() -> SharedCredentialStore {
+        SharedCredentialStore(containerURL: containerURL, service: keychainService)
+    }
+
+    /// Remove every credential item this test filed, by service rather than by id: a store
+    /// writes on paths the test never names — the legacy-file migration and the mirror
+    /// backfill both do — so tracking the ids would miss exactly the items that leaked.
+    private static func deleteKeychainItems(service: String) {
+        for synchronizable in [kCFBooleanFalse, kCFBooleanTrue] as [CFBoolean] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrSynchronizable as String: synchronizable
+            ]
+            let status = SecItemDelete(query as CFDictionary)
+            XCTAssertTrue(
+                status == errSecSuccess
+                    || status == errSecItemNotFound
+                    // Synchronizable items live in the data protection Keychain, which a
+                    // test binary has no entitlement to reach — and so no way to have
+                    // written to either. Nothing to clean up rather than a failure.
+                    || status == errSecMissingEntitlement,
+                "Failed to clean up Keychain fixtures for \(service): \(status)"
+            )
+        }
     }
 
     func testSaveAndLoadConnectionsFromFileBackedStorage() throws {
@@ -180,7 +220,7 @@ final class SharedStorageTests: XCTestCase {
     }
 
     func testSharedCredentialStorePersistsAndDeletesCredentials() throws {
-        let store = SharedCredentialStore(containerURL: containerURL)
+        let store = makeSharedCredentialStore()
         let connectionID = UUID()
         let credential = Credential(
             password: "secret",
@@ -202,7 +242,7 @@ final class SharedStorageTests: XCTestCase {
     }
 
     func testSharedCredentialStoreReadDoesNotCreateDirectory() throws {
-        let store = SharedCredentialStore(containerURL: containerURL)
+        let store = makeSharedCredentialStore()
         let connectionID = UUID()
         let credentialsDirectory = containerURL
             .appendingPathComponent("Library", isDirectory: true)
@@ -215,7 +255,7 @@ final class SharedStorageTests: XCTestCase {
     }
 
     func testSharedCredentialStoreMigratesLegacyCredentialFileIntoKeychain() throws {
-        let store = SharedCredentialStore(containerURL: containerURL)
+        let store = makeSharedCredentialStore()
         let connectionID = UUID()
         let credential = Credential(password: "legacy-secret", token: "legacy-token")
         let legacyURL = try store.credentialURL(for: connectionID)
@@ -231,9 +271,92 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
+    /// A legacy file that cannot be deleted must at least be emptied.
+    ///
+    /// Deleting needs the containing directory to be writable; emptying needs only the
+    /// file. A read-only directory is exactly the case the fallback exists for, and the
+    /// cleartext secret must not survive it.
+    func testSharedCredentialStoreEmptiesLegacyCredentialFileItCannotDelete() throws {
+        let store = makeSharedCredentialStore()
+        let connectionID = UUID()
+        let legacyURL = try store.credentialURL(for: connectionID)
+        let legacyDirectory = legacyURL.deletingLastPathComponent()
+        let fileManager = FileManager.default
+
+        try fileManager.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try JSONEncoder().encode(Credential(password: "legacy-secret"))
+            .write(to: legacyURL, options: .atomic)
+
+        try fileManager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: legacyDirectory.path)
+        defer {
+            try? fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: legacyDirectory.path
+            )
+        }
+
+        try store.store(Credential(password: "current-secret"), for: connectionID)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: legacyURL.path))
+        XCTAssertEqual(try Data(contentsOf: legacyURL), Data())
+    }
+
+    /// A legacy file that survives both attempts fails the operation that left it there.
+    ///
+    /// The store answers for what it was asked to do with the secret, and a readable
+    /// cleartext copy on disk is not "stored" or "deleted". Logging it and reporting
+    /// success is how it stayed there with nobody told.
+    func testSharedCredentialStoreReportsLegacyCredentialFileItCanNeitherDeleteNorEmpty() throws {
+        let store = makeSharedCredentialStore()
+        let connectionID = UUID()
+        let legacyURL = try store.credentialURL(for: connectionID)
+        let legacyDirectory = legacyURL.deletingLastPathComponent()
+        let fileManager = FileManager.default
+
+        try fileManager.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        let legacyContents = try JSONEncoder().encode(Credential(password: "legacy-secret"))
+        try legacyContents.write(to: legacyURL, options: .atomic)
+
+        try fileManager.setAttributes([.posixPermissions: 0o400], ofItemAtPath: legacyURL.path)
+        try fileManager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: legacyDirectory.path)
+        defer {
+            try? fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: legacyDirectory.path
+            )
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: legacyURL.path)
+        }
+
+        XCTAssertThrowsError(try store.store(Credential(password: "current-secret"), for: connectionID)) { error in
+            guard let error = error as? LegacyCredentialFileError else {
+                return XCTFail("Expected LegacyCredentialFileError, got \(error)")
+            }
+            XCTAssertEqual(error.path, legacyURL.path)
+        }
+        // The Keychain write happened before the cleanup and is not undone: the failure is
+        // about the copy on disk, and putting the secret back there cannot help.
+        XCTAssertEqual(
+            try store.credential(for: connectionID),
+            Credential(password: "current-secret")
+        )
+        XCTAssertEqual(try Data(contentsOf: legacyURL), legacyContents)
+
+        XCTAssertThrowsError(try store.delete(for: connectionID)) { error in
+            XCTAssertTrue(error is LegacyCredentialFileError, "Expected LegacyCredentialFileError, got \(error)")
+        }
+    }
+
     func testMirroredCredentialProviderBackfillsMirrorFromPrimary() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
         let connectionID = UUID()
         let credential = Credential(password: "primary-only")
@@ -247,7 +370,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderPrefersPrimaryAndRepairsMirror() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
         let connectionID = UUID()
         let primaryCredential = Credential(token: "fresh-token")
@@ -264,7 +387,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderFallsBackToMirrorWhenPrimaryMissing() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let provider = MirroredCredentialProvider(primary: primary, sharedStore: sharedStore)
         let connectionID = UUID()
         let mirroredCredential = Credential(token: "mirror-only")
@@ -279,7 +402,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderReportsLocalCredentialState() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let connectionID = UUID()
         let credential = Credential(token: "local-token")
         let provider = MirroredCredentialProvider(
@@ -299,7 +422,7 @@ final class SharedStorageTests: XCTestCase {
 
     func testMirroredCredentialProviderReportsMixedCredentialStateAcrossModes() async throws {
         let primary = InMemoryCredentialProvider()
-        let sharedStore = SharedCredentialStore(containerURL: containerURL)
+        let sharedStore = makeSharedCredentialStore()
         let localConnectionID = UUID()
         let synchronizableConnectionID = UUID()
         let provider = MirroredCredentialProvider(
