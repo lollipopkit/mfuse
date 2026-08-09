@@ -514,7 +514,8 @@ public actor S3FileSystem: RemoteFileSystem {
         let s3 = try requireS3()
         let prefix = s3Key(for: path, isDirectory: true)
 
-        var items: [RemoteItem] = []
+        var fileItems: [RemoteItem] = []
+        var directoryItems: [RemoteItem] = []
         var continuationToken: String?
 
         repeat {
@@ -533,7 +534,7 @@ public actor S3FileSystem: RemoteFileSystem {
                     let name = directoryName(from: fullPrefix, parentPrefix: prefix)
                     guard !name.isEmpty else { continue }
                     let childPath = path.appending(name)
-                    items.append(RemoteItem(
+                    directoryItems.append(RemoteItem(
                         path: childPath,
                         type: .directory,
                         size: 0,
@@ -550,7 +551,7 @@ public actor S3FileSystem: RemoteFileSystem {
                     let name = fileName(from: key, parentPrefix: prefix)
                     guard !name.isEmpty && !name.contains("/") else { continue }
                     let childPath = path.appending(name)
-                    items.append(RemoteItem(
+                    fileItems.append(RemoteItem(
                         path: childPath,
                         type: .file,
                         size: UInt64(obj.size ?? 0),
@@ -562,7 +563,13 @@ public actor S3FileSystem: RemoteFileSystem {
             continuationToken = response.nextContinuationToken
         } while continuationToken != nil
 
-        return items
+        // An object and a prefix can carry the same name: a bucket holding `foo` and
+        // `foo/bar` lists `foo` in contents and `foo/` in the common prefixes. `itemInfo`
+        // resolves that name to the object, so listing both put two entries with the same
+        // path — one file, one directory — into the namespace, and the operations that
+        // followed acted on whichever one they were handed.
+        let filePaths = Set(fileItems.map(\.path.absoluteString))
+        return fileItems + directoryItems.filter { !filePaths.contains($0.path.absoluteString) }
     }
 
     public func itemInfo(at path: RemotePath) async throws -> RemoteItem {
@@ -639,8 +646,14 @@ public actor S3FileSystem: RemoteFileSystem {
             range: "bytes=\(offset)-\(end)"
         )
         let response = try await s3.getObject(request)
+        // Collected with slack and then cut to the requested length: a server that ignores
+        // or overshoots the Range header answers with more than was asked for, and the
+        // caller assembles these reads at fixed offsets — the extra bytes would land inside
+        // the next chunk's interval and corrupt the file being downloaded.
         let buffer = try await response.body.collect(upTo: Int(length) + 1024)
-        return Data(buffer: buffer)
+        let data = Data(buffer: buffer)
+        guard data.count > Int(length) else { return data }
+        return Data(data.prefix(Int(length)))
     }
 
     // MARK: - Write
@@ -695,6 +708,17 @@ public actor S3FileSystem: RemoteFileSystem {
     public func delete(at path: RemotePath) async throws {
         let s3 = try requireS3()
 
+        // The object at the exact key first, and on its own: a bucket can hold both `foo`
+        // and `foo/bar`, and `itemInfo` resolves `/foo` to the object — that is the file the
+        // namespace shows and the only thing the caller asked to delete. Sweeping the prefix
+        // as well took `foo/bar` with it, which nothing displayed under the item being
+        // deleted.
+        let exactKey = s3Key(for: path, isDirectory: false)
+        if !exactKey.isEmpty, try await objectExists(key: exactKey, using: s3) {
+            _ = try await s3.deleteObject(S3.DeleteObjectRequest(bucket: bucket, key: exactKey))
+            return
+        }
+
         // Check if it's a directory with contents
         let dirPrefix = s3Key(for: path, isDirectory: true)
         var continuationToken: String?
@@ -734,15 +758,23 @@ public actor S3FileSystem: RemoteFileSystem {
             continuationToken = listResp.nextContinuationToken
         } while continuationToken != nil
 
-        // The object at the exact key goes too, whether or not descendants were found: a
-        // bucket can hold both `foo` and `foo/bar`, and `itemInfo` calls `/foo` the file, so
-        // skipping this left the very object the caller asked to delete behind. Deleting a
-        // key that is not there is a no-op on S3, so a directory pays one request for it.
-        let key = s3Key(for: path, isDirectory: false)
-        if !key.isEmpty {
-            _ = try await s3.deleteObject(S3.DeleteObjectRequest(bucket: bucket, key: key))
-        } else if !deletedDirectoryObjects {
+        // Nothing under the prefix and no object at the exact key — checked above — is a
+        // path that is not there at all.
+        if !deletedDirectoryObjects {
             throw RemoteFileSystemError.notFound(path)
+        }
+    }
+
+    /// Whether an object is stored under exactly this key.
+    private func objectExists(key: String, using s3: S3) async throws -> Bool {
+        do {
+            _ = try await s3.headObject(.init(bucket: bucket, key: key))
+            return true
+        } catch {
+            guard isNotFoundError(error) else {
+                throw error
+            }
+            return false
         }
     }
 
@@ -782,7 +814,12 @@ public actor S3FileSystem: RemoteFileSystem {
 
                 for key in (listResp.contents ?? []).compactMap(\.key) {
                     let suffix = String(key.dropFirst(sourcePrefix.count))
-                    try await copyObject(fromKey: key, toKey: destinationPrefix + suffix, using: s3)
+                    try await copyObject(
+                        fromKey: key,
+                        toKey: destinationPrefix + suffix,
+                        destination: destination.appending(suffix),
+                        using: s3
+                    )
                 }
 
                 continuationToken = listResp.nextContinuationToken
@@ -793,6 +830,7 @@ public actor S3FileSystem: RemoteFileSystem {
         try await copyObject(
             fromKey: s3Key(for: source, isDirectory: false),
             toKey: s3Key(for: destination, isDirectory: false),
+            destination: destination,
             using: s3
         )
     }
@@ -827,13 +865,8 @@ public actor S3FileSystem: RemoteFileSystem {
 
     private func ensureDestinationDoesNotExist(_ destination: RemotePath, using s3: S3) async throws {
         let fileKey = s3Key(for: destination, isDirectory: false)
-        do {
-            _ = try await s3.headObject(.init(bucket: bucket, key: fileKey))
+        if try await objectExists(key: fileKey, using: s3) {
             throw RemoteFileSystemError.alreadyExists(destination)
-        } catch {
-            guard isNotFoundError(error) else {
-                throw error
-            }
         }
 
         let directoryPrefix = s3Key(for: destination, isDirectory: true)
@@ -848,16 +881,40 @@ public actor S3FileSystem: RemoteFileSystem {
         }
     }
 
-    private func copyObject(fromKey srcKey: String, toKey dstKey: String, using s3: S3) async throws {
+    /// Copy one object, refusing to write over a key that already holds one.
+    ///
+    /// `ensureDestinationDoesNotExist` answers for the destination as it was when it looked,
+    /// and there is no lock between that answer and this request: another client creating
+    /// the destination in between had it overwritten — and for `move`, the source was then
+    /// deleted, so what that client wrote was gone with nothing left to recover it from.
+    /// `If-None-Match: *` moves the check to the server, the way `createFile` does it for
+    /// PutObject. A server that does not implement the condition is no worse off than
+    /// before.
+    private func copyObject(
+        fromKey srcKey: String,
+        toKey dstKey: String,
+        destination: RemotePath,
+        using s3: S3
+    ) async throws {
         guard let encodedSrcKey = percentEncodeCopySourceKey(srcKey) else {
             throw RemoteFileSystemError.operationFailed("Failed to percent-encode S3 copy source key")
         }
         let request = S3.CopyObjectRequest(
             bucket: bucket,
             copySource: "\(bucket)/\(encodedSrcKey)",
+            ifNoneMatch: "*",
             key: dstKey
         )
-        _ = try await s3.copyObject(request)
+
+        do {
+            _ = try await s3.copyObject(request)
+        } catch let error as AWSErrorType {
+            // S3 signals an If-None-Match precondition failure with HTTP 412.
+            if let responseCode = error.context?.responseCode.code, responseCode == 412 {
+                throw RemoteFileSystemError.alreadyExists(destination)
+            }
+            throw error
+        }
     }
 
     /// Convert RemotePath to S3 key. Directory keys end with "/".

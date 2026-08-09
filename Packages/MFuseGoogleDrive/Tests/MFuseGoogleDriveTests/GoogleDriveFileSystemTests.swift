@@ -99,6 +99,33 @@ func googleOAuthProviderReportsRevokedRefreshTokenAsAuthenticationFailure(status
     }
 }
 
+/// A refresh stopped on the way out is not a server that could not be reached: an unmount,
+/// a quit and an operation timeout all cancel the work holding the token refresh, and every
+/// layer above reads cancellation as its own. Calling it `connectionFailed` put "could not
+/// reach Google Drive" on a mount the user had just taken down.
+@Test func googleDriveKeepsCancellationOutOfTheRefreshFailureMapping() async throws {
+    let cancellation = GoogleDriveFileSystem.refreshFailure(CancellationError())
+    #expect(cancellation is CancellationError)
+
+    let cancelledRequest = GoogleDriveFileSystem.refreshFailure(URLError(.cancelled))
+    #expect((cancelledRequest as? URLError)?.code == .cancelled)
+
+    // Everything else still reads as the token endpoint failing to answer, and a grant
+    // Google has stopped honouring still passes through as the authentication failure the
+    // provider classified it as.
+    let unreachable = GoogleDriveFileSystem.refreshFailure(URLError(.timedOut))
+    guard case .connectionFailed = unreachable as? RemoteFileSystemError else {
+        Issue.record("Expected RemoteFileSystemError.connectionFailed, got \(unreachable)")
+        return
+    }
+
+    let revoked = GoogleDriveFileSystem.refreshFailure(RemoteFileSystemError.authenticationFailed)
+    guard case .authenticationFailed = revoked as? RemoteFileSystemError else {
+        Issue.record("Expected RemoteFileSystemError.authenticationFailed, got \(revoked)")
+        return
+    }
+}
+
 private func makeMockSession(
     handler: @escaping @Sendable (URLRequest) throws -> MockURLProtocol.Response
 ) throws -> URLSession {

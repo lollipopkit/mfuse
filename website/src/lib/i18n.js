@@ -13,13 +13,18 @@ export const locales = declaredLocales.filter((locale) => generatedLocales.inclu
 export const localeStorageKey = 'mfuse.website.locale'
 
 /**
- * Narrows an arbitrary string to a locale the generated bundle actually has.
+ * Narrows an arbitrary string to a locale the site actually offers: one the generated
+ * bundle has *and* the selector lists.
+ *
+ * Resolving against the generated bundle alone let a locale nobody declared become the
+ * active one — a `fr` bundle left by an earlier build answers `?lang=fr`, and the selector
+ * then holds no entry for the language the page is being shown in.
  *
  * @param {string} locale
  * @returns {locale is import('../i18n/i18n-types').Locales}
  */
-function isGeneratedLocale(locale) {
-  return /** @type {readonly string[]} */ (generatedLocales).includes(locale)
+function isSupportedLocale(locale) {
+  return locales.some((supported) => supported.code === locale)
 }
 
 /**
@@ -31,11 +36,11 @@ function isGeneratedLocale(locale) {
  */
 export function resolveLocale(locale) {
   if (!locale) return undefined
-  if (isGeneratedLocale(locale)) return locale
+  if (isSupportedLocale(locale)) return locale
 
   const lowerLocale = locale.toLowerCase()
-  if (lowerLocale.startsWith('zh')) return 'zh-CN'
-  if (lowerLocale.startsWith('en')) return 'en'
+  if (lowerLocale.startsWith('zh') && isSupportedLocale('zh-CN')) return 'zh-CN'
+  if (lowerLocale.startsWith('en') && isSupportedLocale('en')) return 'en'
 
   return undefined
 }

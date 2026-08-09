@@ -32,6 +32,13 @@ public final class DomainManager: ObservableObject {
             let error: Error
         }
 
+        /// A teardown that reported its failure by publishing it rather than by throwing.
+        struct TeardownFailure: LocalizedError {
+            let message: String
+
+            var errorDescription: String? { message }
+        }
+
         let errors: [Entry]
 
         var errorDescription: String? {
@@ -133,11 +140,21 @@ public final class DomainManager: ObservableObject {
                     )
                     continue
                 }
-                do {
-                    try await mountProvider.disconnect(config: config)
-                } catch {
+                // Through the manager that owns the connection, not straight to the
+                // provider: a `connect` starting inside a direct provider call had nothing
+                // to wait for, so it registered and mounted the domain this pass was in the
+                // middle of taking down. `ConnectionManager.disconnect` is tracked and
+                // `connect` waits for a teardown in flight, so the two are ordered instead
+                // of racing. It publishes its failure rather than throwing, which is why
+                // what it left is read below.
+                await connectionManager.disconnect(config.id)
+                if case .error(let message) = connectionManager.effectiveMountState(for: config.id) {
                     errors.append(
-                        .init(id: config.domainIdentifier, operation: .disconnect, error: error)
+                        .init(
+                            id: config.domainIdentifier,
+                            operation: .disconnect,
+                            error: SyncDomainsError.TeardownFailure(message: message)
+                        )
                     )
                 }
             }

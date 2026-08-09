@@ -191,7 +191,13 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
         // took a working mount down and then refused to bring it back up. `makeConfig`
         // drops the same fields, and the editor's own `serverIdentity` ignores them for the
         // same reason.
-        if backendType.usesHostBasedAddressing, host != other.host || port != other.port {
+        // Trimmed the way `makeConfig` writes them, not as they are stored: a legacy row —
+        // or one synced from a build that saved the field as typed — can carry whitespace
+        // around a host that reaches exactly the same server. Comparing the raw strings
+        // reported the save that normalizes it away as a move to another server, which took
+        // a working mount down and then refused to bring it back up.
+        if backendType.usesHostBasedAddressing,
+           Self.comparableField(host) != Self.comparableField(other.host) || port != other.port {
             return false
         }
         // The username names the target only where the backend sends it. An anonymous
@@ -245,6 +251,15 @@ public struct ConnectionConfig: Codable, Identifiable, Sendable, Equatable, Hash
     /// `https://host`. Comparing them as written called one a move to another server and
     /// left a working mount down. Any other port is the address and is kept, as is an
     /// endpoint too malformed to parse.
+    /// A stored field as the editor would write it back.
+    ///
+    /// Only whitespace, and only where the editor itself trims: the username is saved as
+    /// typed, because a server is handed that string verbatim and " user" is a different
+    /// login from "user".
+    static func comparableField(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public static func comparableS3Endpoint(_ endpoint: String?) -> String? {
         guard let endpoint else { return nil }
         guard var components = URLComponents(string: endpoint),

@@ -4159,7 +4159,7 @@
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hubungkan akun Anda sebelum menguji atau menyimpan kaitan ini."
+            "value" : "Hubungkan akun Anda sebelum menguji atau menyimpan mount ini."
           }
         },
         "it" : {
@@ -5162,7 +5162,7 @@
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kredensial akan dikirim sebagai teks biasa. Aktifkan TLS untuk mengenkripsi kaitan ini."
+            "value" : "Kredensial akan dikirim sebagai teks biasa. Aktifkan TLS untuk mengenkripsi mount ini."
           }
         },
         "it" : {

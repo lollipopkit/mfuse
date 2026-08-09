@@ -122,7 +122,12 @@ extension ConnectionManager {
         // Guarded like the branch above: a link left behind by a teardown whose
         // removeSymlink failed still resolves, so opening it would take the user into a
         // domain that local state has already marked unmounted.
-        if canRevealMount(for: config), hasReachableLink(at: symlinkURL) {
+        //
+        // Ownership is checked too, not just reachability: the shortcuts directory is the
+        // user's own, and a link they put there under the name this connection resolves to
+        // can point anywhere. Reveal is not the place to follow it — the same test that
+        // decides which links MFuse may remove decides which one it may open.
+        if canRevealMount(for: config), isManagedReachableLink(at: symlinkURL) {
             return symlinkURL
         }
 
@@ -157,6 +162,12 @@ extension ConnectionManager {
         effectiveMountState(for: config.id).isMounted
             && !isLifecycleTeardownInFlight(for: config.id)
             && connections.contains(config)
+    }
+
+    /// A link MFuse created for a mount, and whose destination is still there.
+    func isManagedReachableLink(at url: URL) -> Bool {
+        FileProviderMountProvider.shouldRemoveManagedSymlink(at: url, fileManager: .default)
+            && hasReachableLink(at: url)
     }
 
     func hasReachableLink(at url: URL) -> Bool {

@@ -160,17 +160,32 @@ actor TestGate {
         }
     }
 
-    /// Wait until the call held here has been cancelled.
+    /// Wait until the call held here has been cancelled, and say whether it was.
     ///
     /// A handshake, where yielding a fixed number of times only hopes: it resumes at the
     /// point where the code under test has cancelled this work and is awaiting it.
-    func waitUntilWaiterCancelled() async {
-        guard cancelledWaiterCount == 0 else { return }
+    ///
+    /// Bounded like `waitUntilEntered`, and for the same reason: a change that stops the
+    /// cancellation from arriving at all would otherwise hang the whole suite instead of
+    /// failing the test that assumed it.
+    @discardableResult
+    func waitUntilWaiterCancelled(timeoutNanoseconds: UInt64 = 10_000_000_000) async -> Bool {
+        guard cancelledWaiterCount == 0 else { return true }
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+            await self?.resumeCancellationWaiters()
+        }
         await withCheckedContinuation { cancellationWaiters.append($0) }
+        timeout.cancel()
+        return cancelledWaiterCount > 0
     }
 
     private func recordWaiterCancellation() {
         cancelledWaiterCount += 1
+        resumeCancellationWaiters()
+    }
+
+    private func resumeCancellationWaiters() {
         let pendingCancellationWaiters = cancellationWaiters
         cancellationWaiters = []
         for continuation in pendingCancellationWaiters {
@@ -1342,6 +1357,49 @@ final class ConnectionManagerTests: XCTestCase {
     /// Quit-time cleanup carries a deadline per connection, so tearing them down one after
     /// another charged every connection behind a hanging backend another five seconds of
     /// quit. They are independent, so they run together and a hang costs only its own.
+    /// The teardown quit gives up on is created by `disconnect` and stored, and the wait
+    /// the deadline cancels is not that task: cancelling a waiter leaves the task it waits
+    /// on running. A teardown abandoned at the deadline therefore went on removing the
+    /// convenience link, disconnecting the domain and publishing state after quit had
+    /// reported the connections torn down.
+    func testShutdownCancelsTheTeardownItGivesUpOn() async throws {
+        let previousDeadline = ConnectionManager.shutdownDeadlineNanoseconds
+        ConnectionManager.shutdownDeadlineNanoseconds = 200_000_000
+        defer { ConnectionManager.shutdownDeadlineNanoseconds = previousDeadline }
+
+        let config = ConnectionConfig(
+            name: "AbandonedTeardown",
+            backendType: .sftp,
+            host: "example.com",
+            username: "user"
+        )
+        let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mounted-abandoned-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        await mountProvider.setMountURL(mountURL, for: config.domainIdentifier)
+        manager.mountProvider = mountProvider
+        credentialProvider.credentials[config.id] = Credential(password: "pass")
+        try manager.add(config)
+        await manager.connect(config.id)
+        _ = await waitForMountState(config.id)
+
+        // The teardown holds inside the provider for longer than quit is willing to wait.
+        let gate = TestGate()
+        await mountProvider.setDisconnectGate(gate)
+        await manager.shutdown()
+
+        // Cancelled, not merely left: what the deadline stopped waiting for is the task
+        // `disconnect` stored, and this is the point at which it observes that quit has
+        // given up on it.
+        let wasCancelled = await gate.waitUntilWaiterCancelled(timeoutNanoseconds: 2_000_000_000)
+        await gate.open()
+        XCTAssertTrue(
+            wasCancelled,
+            "shutdown returned with the teardown it abandoned still running uncancelled"
+        )
+    }
+
     func testShutdownTearsDownConnectionsConcurrently() async throws {
         let mountProvider = MockMountProvider(symlinkBaseURL: testSymlinkBaseURL)
         manager.mountProvider = mountProvider

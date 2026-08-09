@@ -129,7 +129,10 @@ public final class ConnectionManager: ObservableObject {
     private static let transientConnectionRetryCount = 2
     private static let transientConnectionRetryDelay: UInt64 = 750_000_000 // 750 ms in nanoseconds
     /// How long quit waits for one connection's cleanup before abandoning it.
-    private static let shutdownDeadlineNanoseconds: UInt64 = 5_000_000_000 // 5 seconds
+    ///
+    /// A `var` for the tests alone, which have to reach the deadline to observe what
+    /// abandoning a teardown does. Never changed in production.
+    static var shutdownDeadlineNanoseconds: UInt64 = 5_000_000_000 // 5 seconds
     private static let shutdownLogger = Logger(
         subsystem: "com.lollipopkit.mfuse.core",
         category: "ConnectionManagerShutdown"
@@ -1014,13 +1017,35 @@ public final class ConnectionManager: ObservableObject {
             for id in ids {
                 group.addTask { @MainActor [weak self] in
                     guard let self else { return }
-                    await self.withShutdownDeadline { [weak self] in
+                    await self.withShutdownDeadline({ [weak self] in
                         guard let self else { return }
                         await work(self, id)
-                    }
+                    }, onDeadline: { [weak self] in
+                        self?.cancelLifecycleWork(for: id)
+                    })
                 }
             }
         }
+    }
+
+    /// Cancel the lifecycle work a timed-out quit-time cleanup was waiting on.
+    ///
+    /// Both waits above join a task that was created outside the deadline: `disconnect` and
+    /// `remove` each store theirs so overlapping callers share one pass. Cancelling the task
+    /// that is *waiting* on one of those does not cancel the task itself, so the deadline
+    /// abandoned the wait while the teardown or the removal behind it went on removing
+    /// symlinks, unregistering domains, deleting credentials and publishing state after quit
+    /// had reported the connections torn down. Cancelling here is what the deadline's
+    /// "cancelled rather than merely left" is for.
+    ///
+    /// What ignores cancellation still runs to the end — nothing can stop that from outside
+    /// — but it stops at the first step that observes it instead of running the whole pass.
+    private func cancelLifecycleWork(for id: UUID) {
+        removalTasks[id]?.cancel()
+        disconnectTasks[id]?.cancel()
+        mountResolutionTasks[id]?.cancel()
+        mountRepairTasks[id]?.cancel()
+        refreshTasks[id]?.cancel()
     }
 
     /// Run quit-time cleanup, giving up on it once the deadline passes.
@@ -1036,7 +1061,13 @@ public final class ConnectionManager: ObservableObject {
     /// symlink removal — checks cancellation, so cancelling is what keeps it from going on
     /// to write state and touch the user's directory in a process that is already reporting
     /// itself torn down. What it cannot interrupt runs on until the process exits.
-    private func withShutdownDeadline(_ work: @escaping @MainActor () async -> Void) async {
+    ///
+    /// `onDeadline` cancels what the abandoned pass was *waiting* on, which cancelling the
+    /// wait does not reach. See `cancelLifecycleWork(for:)`.
+    private func withShutdownDeadline(
+        _ work: @escaping @MainActor () async -> Void,
+        onDeadline: @escaping @MainActor () -> Void = {}
+    ) async {
         let resumer = ShutdownDeadlineResumer()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             // Both tasks can only run at a suspension point, so the continuation is
@@ -1050,6 +1081,7 @@ public final class ConnectionManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: Self.shutdownDeadlineNanoseconds)
                 if resumer.resume() {
                     workTask.cancel()
+                    onDeadline()
                     Self.shutdownLogger.error("Quit cleanup timed out; cancelling and abandoning it")
                 }
             }

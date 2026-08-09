@@ -595,9 +595,23 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     /// token endpoint failing to answer. Calling every one of them an authentication failure
     /// sent the user to sign in again over a network blip or a 503, and disagreed with
     /// `connect()`, which passes the same failures through as they are.
-    private static func refreshFailure(_ error: Error) -> Error {
+    ///
+    /// Cancellation is not a failure of the refresh at all: it is a teardown, a timeout or
+    /// an operation the caller stopped, and every layer above reads it as its own — the
+    /// extension leaves `URLError.cancelled` alone rather than calling the server
+    /// unreachable, and the manager's teardowns check for `CancellationError` instead of
+    /// publishing a mount error over the state they are already writing. Reporting it as a
+    /// connection failure put "could not reach Google Drive" on a mount the user had just
+    /// unmounted.
+    static func refreshFailure(_ error: Error) -> Error {
         if let remoteError = error as? RemoteFileSystemError {
             return remoteError
+        }
+        if error is CancellationError {
+            return error
+        }
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            return error
         }
         return RemoteFileSystemError.connectionFailed(
             "Could not refresh the Google Drive access token: \(error.localizedDescription)"
@@ -657,7 +671,18 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         FileManager.default.createFile(atPath: multipartURL.path, contents: nil)
 
         let outputHandle = try FileHandle(forWritingTo: multipartURL)
-        let inputHandle = try FileHandle(forReadingFrom: sourceFileURL)
+        // Its own cleanup: the caller's `defer` is installed on what this returns, so a
+        // throw here answers before there is anything to remove — and the output handle and
+        // the file it was opened on would both be left behind. A File Provider upload URL
+        // that has been moved or revoked is exactly the case that throws.
+        let inputHandle: FileHandle
+        do {
+            inputHandle = try FileHandle(forReadingFrom: sourceFileURL)
+        } catch {
+            try? outputHandle.close()
+            try? FileManager.default.removeItem(at: multipartURL)
+            throw error
+        }
 
         do {
             defer {

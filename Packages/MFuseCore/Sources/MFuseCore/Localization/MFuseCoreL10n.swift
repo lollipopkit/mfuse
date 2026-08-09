@@ -43,14 +43,32 @@ enum MFuseCoreL10n {
 
         // Neither script has a bundle under its regional identifiers, and the generic path
         // below would resolve every one of them to bare `zh` — which is not shipped either,
-        // leaving Chinese users with the English fallback. Hong Kong and Macau are
+        // leaving Chinese users with the English fallback. Taiwan, Hong Kong and Macau are
         // Traditional; every other region is Simplified, which is also the script Chinese
         // defaults to. Listing the Simplified regions instead left the ones nobody thought
         // of — `zh-MY`, `zh-Hans-SG` — falling through to the English fallback.
-        if lowercased.hasPrefix("zh-hant") || ["zh-tw", "zh-hk", "zh-mo"].contains(lowercased) {
-            return ["zh-Hant", "zh_TW"]
-        }
-        if lowercased == "zh" || lowercased.hasPrefix("zh-") {
+        //
+        // Read as subtags rather than matched whole: an identifier carries variants and
+        // extensions too, and `zh-TW-u-nu-latn` or `zh-HK-x-private` matched none of the
+        // regional spellings — so they took the Simplified branch and handed a Traditional
+        // reader the wrong script.
+        let subtags = lowercased.split(separator: "-").map(String.init)
+        if subtags.first == "zh" {
+            var script: String?
+            var region: String?
+            for subtag in subtags.dropFirst() {
+                // A one-character subtag opens the extension section; nothing after it
+                // describes the language any more.
+                if subtag.count == 1 { break }
+                if subtag.count == 4, script == nil {
+                    script = subtag
+                } else if subtag.count == 2, region == nil {
+                    region = subtag
+                }
+            }
+            if script == "hant" || ["tw", "hk", "mo"].contains(region ?? "") {
+                return ["zh-Hant", "zh_TW"]
+            }
             return ["zh-Hans", "zh_CN", "zh"]
         }
 

@@ -150,7 +150,11 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     private func performEnsureRegistered(config: ConnectionConfig) async throws {
-        let existingDomain = try await findDomain(for: config)
+        // What the rollback below puts back. The lookup can answer `nil` and `add` still
+        // report a duplicate — the domain exists but was not listed yet — so the refresh
+        // path records what it removed here: rolling back to "there was nothing" would then
+        // remove the replacement and leave the connection with no domain at all.
+        var existingDomain = try await findDomain(for: config)
         let domain = try makeDomain(for: config)
 
         do {
@@ -164,6 +168,7 @@ public final class FileProviderMountProvider: MountProvider {
                 if let stale = try await findDomain(for: config) {
                     try await NSFileProviderManager.remove(stale)
                     removedDomain = stale
+                    existingDomain = stale
                     try await Task.sleep(nanoseconds: FileProviderConstants.domainRemovalSettleNanoseconds)
                 }
                 do {
@@ -262,25 +267,36 @@ public final class FileProviderMountProvider: MountProvider {
         }
     }
 
+    /// Every operation that looks a domain up and then writes its bootstrap snapshot takes
+    /// the same section as `ensureRegistered`.
+    ///
+    /// The lookup suspends, and the snapshot is what the extension bootstraps from before
+    /// macOS 15: a pass holding an older config could resume after a save had registered the
+    /// newer one and write its own config over that snapshot, leaving the domain serving an
+    /// endpoint neither the row nor storage shows.
     public func reconnect(config: ConnectionConfig) async throws {
-        let domain = try await domainOrThrow(for: config)
-        try persistBootstrapConfig(for: config)
-        guard let manager = NSFileProviderManager(for: domain) else {
-            throw MountError.managerNotFound(config.domainIdentifier)
+        try await withMountOperationLock(for: config) {
+            let domain = try await self.domainOrThrow(for: config)
+            try self.persistBootstrapConfig(for: config)
+            guard let manager = NSFileProviderManager(for: domain) else {
+                throw MountError.managerNotFound(config.domainIdentifier)
+            }
+            try await manager.reconnect()
         }
-        try await manager.reconnect()
     }
 
     public func disconnect(config: ConnectionConfig) async throws {
-        let domain = try await domainOrThrow(for: config)
-        try persistBootstrapConfig(for: config)
-        guard let manager = NSFileProviderManager(for: domain) else {
-            throw MountError.managerNotFound(config.domainIdentifier)
+        try await withMountOperationLock(for: config) {
+            let domain = try await self.domainOrThrow(for: config)
+            try self.persistBootstrapConfig(for: config)
+            guard let manager = NSFileProviderManager(for: domain) else {
+                throw MountError.managerNotFound(config.domainIdentifier)
+            }
+            try await manager.disconnect(
+                reason: "Disconnected from MFuse",
+                options: []
+            )
         }
-        try await manager.disconnect(
-            reason: "Disconnected from MFuse",
-            options: []
-        )
     }
 
     public func domainStates() async throws -> [RegisteredDomainState] {
@@ -294,14 +310,16 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public func signalEnumerator(for config: ConnectionConfig) async throws {
-        guard let domain = try await refreshExistingDomain(for: config) else {
-            throw MountError.domainNotFound(config.domainIdentifier)
+        try await withMountOperationLock(for: config) {
+            guard let domain = try await self.refreshExistingDomain(for: config) else {
+                throw MountError.domainNotFound(config.domainIdentifier)
+            }
+            try self.persistBootstrapConfig(for: config)
+            guard let manager = NSFileProviderManager(for: domain) else {
+                throw MountError.managerNotFound(config.domainIdentifier)
+            }
+            try await manager.signalEnumerator(for: .workingSet)
         }
-        try persistBootstrapConfig(for: config)
-        guard let manager = NSFileProviderManager(for: domain) else {
-            throw MountError.managerNotFound(config.domainIdentifier)
-        }
-        try await manager.signalEnumerator(for: .workingSet)
     }
 
     public func mountURL(for config: ConnectionConfig) async throws -> URL? {

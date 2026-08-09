@@ -153,6 +153,35 @@ final class BackendTypeTests: XCTestCase {
         }
     }
 
+    /// An identifier carries variants and extensions as well as a region, and matching the
+    /// regional spellings whole missed every one that does: `zh-TW-u-nu-latn` took the
+    /// Simplified branch and handed a Traditional reader the wrong script.
+    func testChineseIdentifiersWithExtensionsKeepTheirScript() {
+        for identifier in ["zh-TW-u-nu-latn", "zh-HK-x-private", "zh-Hant-TW-u-ca-roc"] {
+            XCTAssertEqual(
+                MFuseCoreL10n.string(
+                    "backend.googleDrive",
+                    localeIdentifier: identifier,
+                    fallback: "unlocalized"
+                ),
+                "Google 雲端硬碟",
+                "\(identifier) should read the Traditional Chinese resources"
+            )
+        }
+
+        for identifier in ["zh-CN-u-nu-hanidec", "zh-Hans-SG-x-private"] {
+            XCTAssertEqual(
+                MFuseCoreL10n.string(
+                    "backend.googleDrive",
+                    localeIdentifier: identifier,
+                    fallback: "unlocalized"
+                ),
+                "Google 云端硬盘",
+                "\(identifier) should read the Simplified Chinese resources"
+            )
+        }
+    }
+
     /// The fallbacks here deliberately differ from the expected values so a missing
     /// resource key fails the assertion instead of silently degrading to the fallback.
     ///
@@ -751,6 +780,34 @@ final class ConnectionConfigDisplayAddressTests: XCTestCase {
             parameters: ["oauthAccountName": "someone.else@example.com"]
         )
         XCTAssertFalse(normalizedDropbox.addressesSameServer(as: otherAccount))
+    }
+
+    /// The editor trims the host before it saves it, so a legacy row that kept the
+    /// whitespace addresses exactly the server the save writes. Comparing the raw strings
+    /// called that save a move to another server, which took a working mount down and left
+    /// the target-change path to bring it back.
+    func testHostWhitespaceIsNotAMoveToAnotherServer() {
+        func sftp(host: String, username: String = "user") -> ConnectionConfig {
+            ConnectionConfig(
+                name: "Test",
+                backendType: .sftp,
+                host: host,
+                port: 22,
+                username: username,
+                authMethod: .password,
+                remotePath: "/"
+            )
+        }
+
+        let padded = sftp(host: " example.com ")
+        let trimmed = sftp(host: "example.com")
+        XCTAssertTrue(padded.addressesSameServer(as: trimmed))
+        XCTAssertTrue(trimmed.addressesSameServer(as: padded))
+
+        XCTAssertFalse(trimmed.addressesSameServer(as: sftp(host: "other.example.com")))
+        // The username is saved as typed, and the server is handed it verbatim: " user" is
+        // a different login, not the same one written differently.
+        XCTAssertFalse(trimmed.addressesSameServer(as: sftp(host: "example.com", username: " user")))
     }
 
     /// Regression: requests are signed for the region, and the editor stores the Region

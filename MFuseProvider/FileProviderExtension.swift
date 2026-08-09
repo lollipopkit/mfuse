@@ -159,8 +159,14 @@ actor CleanupTaskStore {
     private var cleanupTask: Task<Void, Never>?
     private var cleanupTaskID: UUID?
 
-    func replace(with task: Task<Void, Never>, id: UUID) {
-        cleanupTask?.cancel()
+    /// Keep a reference to this cleanup pass, leaving any pass already running alone.
+    ///
+    /// Cancelling the previous one made a second `invalidate()` abandon the teardown
+    /// altogether: `BootstrapTaskStore.takeForInvalidation()` hands the runtime context to
+    /// whichever pass asks first, and the later pass finds nothing to close, so cancelling
+    /// the earlier one — parked on a drain, or on a bootstrap that has not unwound — left
+    /// the filesystem connected and the caches open with nothing left to answer for them.
+    func adopt(_ task: Task<Void, Never>, id: UUID) {
         cleanupTask = task
         cleanupTaskID = id
     }
@@ -429,7 +435,13 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             // a delete or a move makes on its way out — `close()` leaves every later write
             // a no-op — so the next extension instance opened the same database and served
             // the entry for an item that is no longer there.
-            await self.awaitInFlightOperations()
+            //
+            // A drain that runs out of time leaves the context open rather than closing it
+            // anyway. The operation still holding it is the one closing would damage, and
+            // the instance is being released: what is left open goes with the process,
+            // which costs nothing the next instance can observe, while closing under a live
+            // operation costs exactly the writes this drain exists to keep.
+            guard await self.awaitInFlightOperations() else { return }
 
             try? await context.fileSystem.disconnect()
             await context.cache.close()
@@ -439,7 +451,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
         }
 
         Task {
-            await cleanupTaskStore.replace(with: cleanupTask, id: cleanupTaskID)
+            await cleanupTaskStore.adopt(cleanupTask, id: cleanupTaskID)
         }
     }
 
@@ -883,6 +895,16 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     }
 
     private func shouldRetryTransientConnectionError(_ error: Error) -> Bool {
+        // A deadline this extension imposed is not a failure the backend reported: the
+        // attempt was cancelled and left to unwind, so it may still be inside `connect()`
+        // on the very filesystem a retry would connect again. Two connects interleaving on
+        // one instance is how an abandoned attempt finished after the retry and left the
+        // session it opened owned by nobody. The retry happens a level up instead, where
+        // `runtimeContext()` clears the failed bootstrap and the next request builds a
+        // fresh filesystem to attempt on.
+        if error is FileProviderOperationTimeout {
+            return false
+        }
         if let remoteError = error as? RemoteFileSystemError {
             if case .authenticationFailed = remoteError {
                 return false
@@ -976,10 +998,11 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
     /// Wait for the operations still holding the runtime context, but not indefinitely.
     ///
     /// The system releases this instance shortly after `invalidate()`; a backend that never
-    /// returns from a cancelled read must not keep the metadata cache and the anchor store
-    /// open for the rest of the process's life, so the wait is bounded and what it gave up
-    /// on is logged.
-    private func awaitInFlightOperations() async {
+    /// returns from a cancelled read must not hold the teardown for the rest of the
+    /// process's life, so the wait is bounded.
+    ///
+    /// Returns whether everything let go — which is what says the context may be closed.
+    private func awaitInFlightOperations() async -> Bool {
         do {
             try await withOperationTimeout(
                 seconds: Self.invalidationDrainTimeoutSeconds,
@@ -987,10 +1010,12 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
             ) { [runtimeContextActivity] in
                 await runtimeContextActivity.waitUntilIdle()
             }
+            return true
         } catch {
             logger.error(
-                "Closing the runtime context for domain \(self.domain.identifier.rawValue, privacy: .public) with operations still in flight: \(error.localizedDescription, privacy: .public)"
+                "Leaving the runtime context for domain \(self.domain.identifier.rawValue, privacy: .public) open: operations are still in flight: \(error.localizedDescription, privacy: .public)"
             )
+            return false
         }
     }
 
@@ -1191,8 +1216,13 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
                                code: NSFileProviderError.serverUnreachable.rawValue,
                                userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
             case .permissionDenied:
-                return NSError(domain: NSFileProviderErrorDomain,
-                               code: NSFileProviderError.serverUnreachable.rawValue,
+                // Not `serverUnreachable`: the server answered, and it answered "no". Told
+                // it is unreachable, Finder offers to retry a request that will be refused
+                // the same way every time and says nothing about access. A POSIX EACCES is
+                // what the file system layer above turns into the permission error the user
+                // can act on.
+                return NSError(domain: NSPOSIXErrorDomain,
+                               code: Int(EACCES),
                                userInfo: [NSLocalizedDescriptionKey: "\(rfsError)"])
             case .authenticationFailed:
                 return NSError(domain: NSFileProviderErrorDomain,

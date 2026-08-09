@@ -184,6 +184,17 @@ struct ContentView: View {
         var didTearDownForTargetChange = false
         do {
             let previousConfig = connectionManager.connections.first(where: { $0.id == config.id })
+            // The revision this edit was made against, checked before a secret is written
+            // anywhere rather than only by `update` below. Another device — or a save the
+            // queue does not cover — can have replaced this row while the sheet was open,
+            // and the credential that came with it is already stored under the same id. A
+            // save that finds that out only at the write has by then overwritten it, and its
+            // rollback puts back a secret older than either revision: the row keeps the
+            // newer config paired with a credential that belongs to neither. Failing here
+            // leaves both untouched.
+            if let openedConfig, let previousConfig, previousConfig != openedConfig {
+                throw ConnectionManagerError.revisionConflict(config.id)
+            }
             let previousCredential = try await credentialProvider.credential(for: config.id)
             // Before the new secret exists anywhere the extension can read it. Credentials
             // are keyed by connection id and shared with it, while the domain still
@@ -222,6 +233,7 @@ struct ContentView: View {
                 // than swallowed: only the user can put that right.
                 let rollbackFailure = await restoreCredential(
                     previousCredential,
+                    replacing: credential,
                     for: config.id
                 )
                 throw SaveFailure(primary: error, rollbackFailure: rollbackFailure)
@@ -305,8 +317,21 @@ struct ContentView: View {
     /// not serialized with it. `remove` drops the row before it deletes the credential, so
     /// a removal that finished inside that window has already deleted the secret it knew
     /// about and left this one behind — seeing the row gone afterwards is what catches it.
-    private func restoreCredential(_ credential: Credential?, for id: UUID) async -> String? {
+    ///
+    /// `stored` is what this save wrote, and the rollback only undoes its own write: a
+    /// credential that arrived after it — from another device, or from a save this queue
+    /// does not cover — belongs to the revision the row holds now, and putting an older
+    /// secret over it would leave that revision authenticating with a secret issued for a
+    /// different one.
+    private func restoreCredential(
+        _ credential: Credential?,
+        replacing stored: Credential,
+        for id: UUID
+    ) async -> String? {
         do {
+            guard try await credentialProvider.credential(for: id) == stored else {
+                return nil
+            }
             guard let credential, connectionExists(id) else {
                 try await credentialProvider.delete(for: id)
                 return nil
