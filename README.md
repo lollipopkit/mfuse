@@ -2,9 +2,6 @@
 
 [中文](README.zh-CN.md) | [Download](https://github.com/lollipopkit/mfuse/releases) | [License](LICENSE) | [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
-> Warning
-> This project is currently under active development. Behavior, APIs, and supported workflows may change.
-
 MFuse is a macOS app that exposes remote storage in Finder through File Provider, with a modular backend layer for multiple protocols.
 
 ## Screenshots

@@ -2,9 +2,6 @@
 
 [English](README.md) | [下载](https://github.com/lollipopkit/mfuse/releases) | [License](LICENSE) | [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
-> 提示
-> 当前项目仍在积极开发中，行为、接口和支持的工作流都可能发生变化。
-
 MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Finder 中，并用模块化后端支持多种协议。
 
 ## 截图
