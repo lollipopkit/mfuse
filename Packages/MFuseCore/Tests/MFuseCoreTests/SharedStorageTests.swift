@@ -508,6 +508,78 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL.path))
     }
 
+    /// The provider state directory holds cached listings and file contents; removing a
+    /// domain's state has to take it along with the bootstrap snapshot.
+    func testRemoveDomainStateDeletesBootstrapAndCachedState() throws {
+        let identifier = UUID().uuidString
+        let otherIdentifier = UUID().uuidString
+        let bootstrapURL = bootstrapDirectoryURL(for: identifier)
+        let cachedFileURL = try makeCachedFile(for: identifier)
+        let otherCachedFileURL = try makeCachedFile(for: otherIdentifier)
+        try FileManager.default.createDirectory(at: bootstrapURL, withIntermediateDirectories: true)
+
+        try FileProviderDomainStateStore.removeDomainState(for: identifier, containerURL: containerURL)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bootstrapURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedFileURL.deletingLastPathComponent().path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: otherCachedFileURL.path))
+    }
+
+    func testRemoveDomainStateToleratesMissingDirectories() throws {
+        XCTAssertNoThrow(
+            try FileProviderDomainStateStore.removeDomainState(for: UUID().uuidString, containerURL: containerURL)
+        )
+    }
+
+    func testRemoveOrphanedDomainStatesKeepsKnownDomainsAndUnrelatedEntries() throws {
+        let keptIdentifier = UUID().uuidString
+        let orphanedIdentifier = UUID().uuidString
+        let keptFileURL = try makeCachedFile(for: keptIdentifier)
+        let orphanedFileURL = try makeCachedFile(for: orphanedIdentifier)
+        let orphanedBootstrapURL = bootstrapDirectoryURL(for: orphanedIdentifier)
+        try FileManager.default.createDirectory(at: orphanedBootstrapURL, withIntermediateDirectories: true)
+        // Not a domain identifier, so not something this sweep owns.
+        let unrelatedFileURL = try makeCachedFile(for: "not-a-domain")
+
+        let failures = try FileProviderDomainStateStore.removeOrphanedDomainStates(
+            keeping: [keptIdentifier],
+            containerURL: containerURL
+        )
+
+        XCTAssertTrue(failures.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keptFileURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanedFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanedBootstrapURL.path))
+    }
+
+    func testRemoveOrphanedDomainStatesWithoutStateDirectories() throws {
+        let failures = try FileProviderDomainStateStore.removeOrphanedDomainStates(
+            keeping: [],
+            containerURL: containerURL
+        )
+
+        XCTAssertTrue(failures.isEmpty)
+    }
+
+    private func bootstrapDirectoryURL(for identifier: String) -> URL {
+        containerURL
+            .appendingPathComponent("Library/Application Support/MFuse/Bootstrap", isDirectory: true)
+            .appendingPathComponent(identifier, isDirectory: true)
+    }
+
+    private func makeCachedFile(for identifier: String) throws -> URL {
+        let stateURL = try FileProviderDomainStateStore.providerStateStorageURL(
+            containerURL: containerURL,
+            domainIdentifier: identifier
+        )
+        let cacheURL = stateURL.appendingPathComponent("content_cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+        let fileURL = cacheURL.appendingPathComponent("cached")
+        try Data("cached".utf8).write(to: fileURL)
+        return fileURL
+    }
+
     @available(macOS 15.0, *)
     func testPrepareManagedDirectoryURLCreatesDirectoryDirectly() throws {
         let managedURL = containerURL

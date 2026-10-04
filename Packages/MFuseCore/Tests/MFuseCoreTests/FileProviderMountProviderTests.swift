@@ -162,7 +162,7 @@ final class FileProviderMountProviderTests: XCTestCase {
     /// connection is already gone from `SharedStorage`. A domain removal that fails must
     /// therefore leave that file in place, so the still-registered domain keeps working and
     /// the removal can be retried.
-    func testUnregisterKeepsTheBootstrapConfigWhenDomainRemovalFails() async throws {
+    func testUnregisterKeepsTheDomainStateWhenDomainRemovalFails() async throws {
         let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
         let config = ConnectionConfig(
             name: "FailedUnregister",
@@ -172,9 +172,9 @@ final class FileProviderMountProviderTests: XCTestCase {
         provider.removeRegisteredDomainOverride = { _ in
             throw MountError.unmountFailed("domain removal failed")
         }
-        let bootstrapRemovals = InvocationRecorder()
-        provider.removeBootstrapConfigOverride = { config in
-            bootstrapRemovals.record(config.domainIdentifier)
+        let stateRemovals = InvocationRecorder()
+        provider.removeDomainStateOverride = { config in
+            stateRemovals.record(config.domainIdentifier)
         }
 
         do {
@@ -187,15 +187,15 @@ final class FileProviderMountProviderTests: XCTestCase {
         }
 
         XCTAssertTrue(
-            bootstrapRemovals.invocations.isEmpty,
-            "the bootstrap config was removed even though its domain is still registered"
+            stateRemovals.invocations.isEmpty,
+            "the domain state was removed even though its domain is still registered"
         )
     }
 
     /// Once the domain is gone the removal has to be reported as done: a failure to clear
-    /// the bookkeeping behind it would have the caller keep a connection whose domain no
+    /// the state behind it would have the caller keep a connection whose domain no
     /// longer exists.
-    func testUnregisterSucceedsWhenOnlyTheBootstrapRemovalFails() async throws {
+    func testUnregisterSucceedsWhenOnlyTheStateRemovalFails() async throws {
         let provider = FileProviderMountProvider(symlinkBaseURL: temporaryDirectoryURL)
         let config = ConnectionConfig(
             name: "BootstrapRemovalFailed",
@@ -206,10 +206,10 @@ final class FileProviderMountProviderTests: XCTestCase {
         provider.removeRegisteredDomainOverride = { config in
             domainRemovals.record(config.domainIdentifier)
         }
-        let bootstrapRemovals = InvocationRecorder()
-        provider.removeBootstrapConfigOverride = { config in
-            bootstrapRemovals.record(config.domainIdentifier)
-            throw MountError.unmountFailed("bootstrap removal failed")
+        let stateRemovals = InvocationRecorder()
+        provider.removeDomainStateOverride = { config in
+            stateRemovals.record(config.domainIdentifier)
+            throw MountError.unmountFailed("state removal failed")
         }
 
         try await provider.unregister(config: config)
@@ -217,7 +217,7 @@ final class FileProviderMountProviderTests: XCTestCase {
         XCTAssertEqual(domainRemovals.invocations, [config.domainIdentifier])
         // Attempted, not skipped: the point is that its failure is tolerated, not that the
         // step was never reached.
-        XCTAssertEqual(bootstrapRemovals.invocations, [config.domainIdentifier])
+        XCTAssertEqual(stateRemovals.invocations, [config.domainIdentifier])
     }
 
     /// A rename moves the domain's CloudStorage path. Resolving that path and writing the

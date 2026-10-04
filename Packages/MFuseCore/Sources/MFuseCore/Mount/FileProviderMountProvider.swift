@@ -121,13 +121,14 @@ public final class FileProviderMountProvider: MountProvider {
     public let symlinkBaseURL: URL
 
     /// Test seams for `unregister`'s two steps, which exist so its ordering — the domain
-    /// before the bootstrap config it is the last fallback for — can be exercised without
-    /// a registered File Provider domain. Never set in production.
+    /// before its on-disk state, whose bootstrap config is the domain's last config
+    /// fallback — can be exercised without a registered File Provider domain. Never set in
+    /// production.
     /// `nonisolated(unsafe)`, and only sound because of that "never in production": a
     /// test sets these once, before the provider is handed to anything that could call it
     /// concurrently.
     nonisolated(unsafe) var removeRegisteredDomainOverride: ((ConnectionConfig) async throws -> Void)?
-    nonisolated(unsafe) var removeBootstrapConfigOverride: ((ConnectionConfig) throws -> Void)?
+    nonisolated(unsafe) var removeDomainStateOverride: ((ConnectionConfig) throws -> Void)?
     /// Test seam: replaces the CloudStorage lookup so a resolution can be held at the
     /// point where another pass interleaves. Never set in production.
     nonisolated(unsafe) var resolveMountURLOverride: ((ConnectionConfig) async throws -> URL?)?
@@ -240,7 +241,7 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     private func performUnregister(config: ConnectionConfig) async throws {
-        // Domain first, bookkeeping second. Removing the bootstrap config ahead of the
+        // Domain first, on-disk state second. Removing the bootstrap config ahead of the
         // domain leaves a still-registered domain with nothing to bootstrap from: before
         // macOS 15 there is no `domain.userInfo`, and `reloadConnectionsFromStorage`
         // reaches here *after* the connection is gone from `SharedStorage`, so the file
@@ -253,16 +254,16 @@ public final class FileProviderMountProvider: MountProvider {
         }
 
         do {
-            try removeBootstrapConfigStep(for: config)
+            try removeDomainStateStep(for: config)
         } catch {
             // Best effort, because the domain is already gone: reporting a failure here
             // would have the caller keep a connection that no longer has one. What is left
-            // behind is a bootstrap file for a domain that does not exist, which nothing
-            // reads — but it is not swallowed silently either.
+            // behind is state for a domain that does not exist — logged here, and swept by
+            // `DomainManager`'s orphaned-state cleanup on the next domain sync.
             // The message can carry the container path the config was written to, so it
             // stays private — the domain identifier is enough to act on.
             Self.logger.warning(
-                "Removed domain \(config.domainIdentifier, privacy: .public) but failed to remove its bootstrap config: \(error.localizedDescription, privacy: .private)"
+                "Removed domain \(config.domainIdentifier, privacy: .public) but failed to remove its on-disk state: \(error.localizedDescription, privacy: .private)"
             )
         }
     }
@@ -692,15 +693,11 @@ public final class FileProviderMountProvider: MountProvider {
         try FileProviderDomainStateStore.saveBootstrapConfig(config)
     }
 
-    private func removeBootstrapConfig(for config: ConnectionConfig) throws {
-        try FileProviderDomainStateStore.removeBootstrapConfig(for: config.domainIdentifier)
-    }
-
-    private func removeBootstrapConfigStep(for config: ConnectionConfig) throws {
-        if let removeBootstrapConfigOverride {
-            try removeBootstrapConfigOverride(config)
+    private func removeDomainStateStep(for config: ConnectionConfig) throws {
+        if let removeDomainStateOverride {
+            try removeDomainStateOverride(config)
             return
         }
-        try removeBootstrapConfig(for: config)
+        try FileProviderDomainStateStore.removeDomainState(for: config.domainIdentifier)
     }
 }
