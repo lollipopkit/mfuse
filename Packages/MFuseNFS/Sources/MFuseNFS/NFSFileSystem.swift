@@ -131,6 +131,22 @@ public actor NFSFileSystem: RemoteFileSystem {
         }
     }
 
+    /// Copied through the Mac: NFSv3 has no server-side copy.
+    public func copy(from source: RemotePath, to destination: RemotePath) async throws {
+        guard !source.isRoot, !destination.isRoot else {
+            throw RemoteFileSystemError.operationFailed("The root of an NFS mount cannot be copied")
+        }
+        do {
+            try await client.copyItem(at: source.absoluteString, to: destination.absoluteString)
+        } catch NFSClientError.alreadyExists {
+            // About the destination, where `perform` would name the source.
+            throw RemoteFileSystemError.alreadyExists(destination)
+        } catch {
+            connected = await client.isConnected
+            throw Self.mapped(error, path: source)
+        }
+    }
+
     public func setPermissions(_ permissions: UInt16, at path: RemotePath) async throws {
         try await perform(on: path) { try await client.setPermissions(UInt32(permissions), at: path.absoluteString) }
     }

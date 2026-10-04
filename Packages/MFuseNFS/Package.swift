@@ -9,7 +9,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../MFuseCore"),
-        .package(url: "https://github.com/lollipopkit/nfs.swift.git", from: "0.1.0")
+        .package(url: "https://github.com/lollipopkit/nfs.swift.git", from: "0.2.0")
     ],
     targets: [
         .target(

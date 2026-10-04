@@ -42,7 +42,7 @@ Google Drive 使用 MFuse 的 OAuth 应用登录，该应用正在等待 Google 
 
 - SFTP 的目录枚举带有一个兼容性 fallback：当常规 SFTP 列表请求超时，或遇到某些连接级错误时，MFuse 可能会复用现有 SSH 会话，在远端主机上执行一小段 `python3` 脚本来完成目录枚举。这个 fallback 不会用于正常成功的列表请求，也不会用于权限不足或路径不存在这类错误。触发该 fallback 的远端主机需要提供 `python3`，否则目录枚举会失败。
 - FTP 只支持被动模式（先用 `EPSV`，不支持时改用 `PASV`）；主动模式在 NAT 后无法工作。开启 TLS 时，端口 990 使用隐式 FTPS，其他端口使用显式 FTPS（`AUTH TLS`），数据连接始终加密（`PROT P`）。要求数据连接复用 TLS session 的服务器（vsftpd 的 `require_ssl_reuse=YES`、FileZilla Server 的默认设置）暂不支持：MFuse 使用的 TLS 库不支持 session 复用。
-- NFS 使用 TCP 上的 NFSv3（通过 [nfs.swift](https://github.com/lollipopkit/nfs.swift)），不支持只提供 NFSv4 的服务器。远程路径填写导出的目录，通过 portmapper（端口 111）和 MOUNT 服务挂载。请求使用 `AUTH_SYS`，带上连接里设置的 UID 和 GID（默认是这台 Mac 当前用户的），来源端口大于 1024（File Provider extension 无法使用更小的端口）：Linux 的 export 需要加 `insecure` 选项（例如 `/srv/nfs *(rw,insecure,no_subtree_check)`），否则服务器会拒绝挂载。
+- NFS 使用 TCP 上的 NFSv3（通过 [nfs.swift](https://github.com/lollipopkit/nfs.swift)），不支持只提供 NFSv4 的服务器。远程路径填写导出的目录，通过 portmapper（端口 111）和 MOUNT 服务挂载。请求使用 `AUTH_SYS`，带上连接里设置的 UID 和 GID（默认是这台 Mac 当前用户的），来源端口大于 1024（File Provider extension 无法使用更小的端口）：Linux 的 export 需要加 `insecure` 选项（例如 `/srv/nfs *(rw,insecure,no_subtree_check)`），否则服务器会拒绝挂载。NFSv3 没有服务器端复制，复制的数据会经过这台 Mac 中转。不是 UTF-8 的文件名会保留原始字节，这些字节在 Finder 里显示为占位字符。
 
 ## 仓库结构
 

@@ -1,5 +1,5 @@
 {
-  "originHash" : "b62c1d66478ebd3239e0aa719a7a214e144246b3c74a7200f108e68ef8b2e5c7",
+  "originHash" : "34b248d0e2611f009368dae3e49c0f2b0d9a86fe7b94344c4c9714af96414830",
   "pins" : [
     {
       "identity" : "blake3-swift",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lollipopkit/nfs.swift.git",
       "state" : {
-        "revision" : "da762f12395019ef348024e23d91452f3d4bfcfe",
-        "version" : "0.1.0"
+        "revision" : "9b56de1d69183f3acc9129f5ed395c8f93576de8",
+        "version" : "0.2.0"
       }
     },
     {

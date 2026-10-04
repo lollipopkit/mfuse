@@ -73,7 +73,7 @@ final class BackendE2ETests: XCTestCase {
     func testNFS() async throws {
         let env = try E2EEnvironment()
         try await run(NFSFileSystem(config: try nfsConfig(env, export: "/srv/nfs"), credential: Credential()),
-                      rangeReads: true, copy: false)
+                      rangeReads: true, copy: true)
     }
 
     /// Without `insecure` the server refuses MFuse's unprivileged port; the error has to
