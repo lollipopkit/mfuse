@@ -84,6 +84,12 @@ const zhCN: Translation = {
     features: '特性',
     protocols: '协议',
     releases: '版本发布',
+    privacy: '隐私政策',
+  },
+  privacy: {
+    title: '隐私政策 — MFuse',
+    description:
+      'MFuse 如何处理你的数据，包括通过 Google Drive API 访问的 Google 用户数据。',
   },
 }
 

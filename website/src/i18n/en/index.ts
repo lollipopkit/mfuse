@@ -88,6 +88,12 @@ const en: BaseTranslation = {
     features: 'Features',
     protocols: 'Protocols',
     releases: 'Releases',
+    privacy: 'Privacy',
+  },
+  privacy: {
+    title: 'Privacy Policy — MFuse',
+    description:
+      'How MFuse handles your data, including Google user data accessed through the Google Drive API.',
   },
 }
 

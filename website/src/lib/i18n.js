@@ -1,4 +1,6 @@
+import { setLocale } from '../i18n/i18n-svelte'
 import { baseLocale, locales as generatedLocales } from '../i18n/i18n-util'
+import { loadLocale } from '../i18n/i18n-util.sync'
 
 export const defaultLocale = baseLocale
 
@@ -87,4 +89,28 @@ export function syncLocaleToUrl(locale) {
   const url = new URL(window.location.href)
   url.searchParams.set('lang', normalizeLocale(locale))
   window.history.replaceState({}, '', url)
+}
+
+/**
+ * Loads and activates a locale for this page without recording it as a preference — what
+ * a page does before its first render, from `getInitialLocale()`.
+ *
+ * @param {import('../i18n/i18n-types').Locales} locale
+ */
+export function activateLocale(locale) {
+  loadLocale(locale)
+  setLocale(locale)
+}
+
+/**
+ * A locale the user chose, or the one a page settled on once mounted: activated,
+ * remembered for every page of the site, and written to the URL so a shared link keeps it.
+ *
+ * @param {string | null | undefined} locale
+ */
+export function chooseLocale(locale) {
+  const resolved = normalizeLocale(locale)
+  activateLocale(resolved)
+  localStorage.setItem(localeStorageKey, resolved)
+  syncLocaleToUrl(resolved)
 }

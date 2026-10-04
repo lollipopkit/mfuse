@@ -217,6 +217,20 @@ type RootTranslation = {
 		 * R​e​l​e​a​s​e​s
 		 */
 		releases: string
+		/**
+		 * P​r​i​v​a​c​y
+		 */
+		privacy: string
+	}
+	privacy: {
+		/**
+		 * P​r​i​v​a​c​y​ ​P​o​l​i​c​y​ ​—​ ​M​F​u​s​e
+		 */
+		title: string
+		/**
+		 * H​o​w​ ​M​F​u​s​e​ ​h​a​n​d​l​e​s​ ​y​o​u​r​ ​d​a​t​a​,​ ​i​n​c​l​u​d​i​n​g​ ​G​o​o​g​l​e​ ​u​s​e​r​ ​d​a​t​a​ ​a​c​c​e​s​s​e​d​ ​t​h​r​o​u​g​h​ ​t​h​e​ ​G​o​o​g​l​e​ ​D​r​i​v​e​ ​A​P​I​.
+		 */
+		description: string
 	}
 }
 
@@ -424,6 +438,20 @@ export type TranslationFunctions = {
 		 * Releases
 		 */
 		releases: () => LocalizedString
+		/**
+		 * Privacy
+		 */
+		privacy: () => LocalizedString
+	}
+	privacy: {
+		/**
+		 * Privacy Policy — MFuse
+		 */
+		title: () => LocalizedString
+		/**
+		 * How MFuse handles your data, including Google user data accessed through the Google Drive API.
+		 */
+		description: () => LocalizedString
 	}
 }
 

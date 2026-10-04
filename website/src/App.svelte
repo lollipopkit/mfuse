@@ -1,14 +1,8 @@
 <script>
   import { onMount } from 'svelte'
-  import LL, { setLocale } from './i18n/i18n-svelte'
-  import { loadLocale } from './i18n/i18n-util.sync'
-  import {
-    defaultLocale,
-    getInitialLocale,
-    locales,
-    localeStorageKey,
-    syncLocaleToUrl,
-  } from './lib/i18n.js'
+  import LL from './i18n/i18n-svelte'
+  import { activateLocale, chooseLocale, getInitialLocale } from './lib/i18n.js'
+  import LanguageSelect from './lib/LanguageSelect.svelte'
 
   const protocols = ['SFTP', 'Amazon S3', 'WebDAV', 'SMB/CIFS', 'FTP', 'NFS', 'Google Drive']
 
@@ -26,34 +20,16 @@
     { key: 'eurafat45', name: 'Eurafat45' },
   ]
 
-  function getLocaleBeforeRender() {
-    if (typeof window === 'undefined') return undefined
-
-    return getInitialLocale()
-  }
-
-  const initialLocale = getLocaleBeforeRender()
+  const initialLocale = typeof window === 'undefined' ? undefined : getInitialLocale()
 
   if (initialLocale) {
-    loadLocale(initialLocale)
-    setLocale(initialLocale)
+    activateLocale(initialLocale)
   }
 
-  let locale = $state(initialLocale)
   let isMounted = $state(false)
 
-  function applyLocale(nextLocale) {
-    locale = nextLocale
-    loadLocale(nextLocale)
-    setLocale(nextLocale)
-    localStorage.setItem(localeStorageKey, nextLocale)
-  }
-
   onMount(() => {
-    const nextLocale = locale || getInitialLocale()
-    applyLocale(nextLocale)
-    syncLocaleToUrl(nextLocale)
-
+    chooseLocale(initialLocale ?? getInitialLocale())
     isMounted = true
   })
 
@@ -66,15 +42,9 @@
       .querySelector('meta[name="description"]')
       ?.setAttribute('content', $LL.meta.description())
   })
-
-  function handleLocaleChange(event) {
-    const nextLocale = event.currentTarget.value
-    applyLocale(nextLocale)
-    syncLocaleToUrl(nextLocale)
-  }
 </script>
 
-{#if locale && isMounted}
+{#if isMounted}
   <main class="site">
     <header class="site-nav" id="top">
       <a class="brand" href="#top">MFuse</a>
@@ -84,20 +54,7 @@
         <a href="#testimonials">{$LL.nav.testimonials()}</a>
       </nav>
       <div class="nav-actions">
-        <label class="language-switcher">
-          <span class="sr-only">{$LL.nav.languageLabel()}</span>
-          <select
-            id="locale"
-            name="locale"
-            aria-label={$LL.nav.languageLabel()}
-            value={locale}
-            onchange={handleLocaleChange}
-          >
-            {#each locales as item}
-              <option value={item.code}>{item.label}</option>
-            {/each}
-          </select>
-        </label>
+        <LanguageSelect />
         <a class="nav-cta" href="#homebrew">{$LL.nav.download()}</a>
       </div>
     </header>
@@ -192,6 +149,7 @@
         <a href="#protocols">{$LL.footer.protocols()}</a>
         <a href="https://github.com/lollipopkit/mfuse">GitHub</a>
         <a href="https://github.com/lollipopkit/mfuse/releases">{$LL.footer.releases()}</a>
+        <a href="/privacy.html">{$LL.footer.privacy()}</a>
       </div>
     </footer>
   </main>
