@@ -77,18 +77,24 @@ make generate
 
 ### 配置内置 OAuth 应用
 
-Dropbox 和 OneDrive 走内置 PKCE OAuth 配置，运行前需要在 `project.local.yml`
+Google Drive、Dropbox 和 OneDrive 走内置 PKCE OAuth 配置，运行前需要在 `project.local.yml`
 里填入对应的应用 ID：
 
 ```yaml
 settings:
   base:
+    MFGOOGLE_CLIENT_ID: YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com
     MFDROPBOX_CLIENT_ID: YOUR_DROPBOX_APP_KEY
     MFONEDRIVE_CLIENT_ID: YOUR_MICROSOFT_APP_ID
 ```
 
+Google 的 client 必须是 **iOS** 类型的 OAuth client，bundle ID 为
+`com.lollipopkit.mfuse`，并启用 Google Drive API、在 consent screen 中添加
+`https://www.googleapis.com/auth/drive` scope。
+
 应用内已经预置了默认回调 URI：
 
+- Google Drive：`com.googleusercontent.apps.<client-id 前缀>:/oauth2redirect`，由 client ID 推导
 - Dropbox：`com.lollipopkit.mfuse.dropbox:/oauth`
 - OneDrive：`com.lollipopkit.mfuse.onedrive:/oauth`
 

@@ -170,6 +170,86 @@ func googleOAuthProviderReportsRevokedRefreshTokenAsAuthenticationFailure(status
     #expect(await fileSystem.isConnected)
 }
 
+/// A connection without a client of its own renews against the bundled one.
+@Test func connectRefreshesWithTheBuiltInOAuthClient() async throws {
+    let session = try makeMockSession { request in
+        let url = try #require(request.url?.absoluteString)
+        if url.hasPrefix("https://www.googleapis.com/drive/v3/about") {
+            return .http(status: 401, body: Data("{\"error\":\"invalid_token\"}".utf8))
+        }
+
+        #expect(url == "https://oauth2.googleapis.com/token")
+        let body = String(bytes: readRequestBody(request), encoding: .utf8) ?? ""
+        #expect(body.contains("client_id=built-in.apps.googleusercontent.com"))
+        return .http(
+            status: 200,
+            body: Data("""
+            {"access_token":"renewed-token","expires_in":3599,"token_type":"Bearer"}
+            """.utf8)
+        )
+    }
+
+    let config = ConnectionConfig(name: "Drive", backendType: .googleDrive, host: "", authMethod: .oauth)
+    let fileSystem = GoogleDriveFileSystem(
+        config: config,
+        credential: Credential(password: "refresh-token", token: "expired-token"),
+        session: session,
+        builtInOAuthClient: {
+            GoogleOAuthClient(
+                clientID: "built-in.apps.googleusercontent.com",
+                redirectURI: "com.googleusercontent.apps.built-in:/oauth2redirect"
+            )
+        }
+    )
+
+    try await fileSystem.connect()
+    #expect(await fileSystem.isConnected)
+}
+
+@Test func builtInClientDerivesTheReversedClientIDRedirect() throws {
+    #expect(
+        try GoogleOAuthClient.redirectURI(forClientID: "1234-abc.apps.googleusercontent.com")
+            == "com.googleusercontent.apps.1234-abc:/oauth2redirect"
+    )
+    #expect(throws: GoogleDriveError.self) {
+        try GoogleOAuthClient.redirectURI(forClientID: "1234-abc")
+    }
+    #expect(throws: GoogleDriveError.self) {
+        try GoogleOAuthClient.redirectURI(forClientID: ".apps.googleusercontent.com")
+    }
+}
+
+/// An unconfigured build has to fail at sign-in rather than send an empty client ID.
+@Test func builtInClientRejectsAnUnconfiguredBundle() throws {
+    let bundleURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("bundle")
+    let contentsURL = bundleURL.appendingPathComponent("Contents", isDirectory: true)
+    try FileManager.default.createDirectory(at: contentsURL, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: bundleURL) }
+    let plist: [String: Any] = [
+        "CFBundleIdentifier": "com.example.unconfigured",
+        GoogleOAuthClient.clientIDKey: ""
+    ]
+    let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+    try data.write(to: contentsURL.appendingPathComponent("Info.plist"))
+    let bundle = try #require(Bundle(url: bundleURL))
+
+    #expect(throws: OAuthConfigurationError.self) {
+        try GoogleOAuthClient.builtIn(bundle: bundle)
+    }
+}
+
+/// A connection authorized against a user-supplied client keeps renewing against it.
+@Test func legacyClientIsReadOnlyWhenBothHalvesArePresent() {
+    #expect(
+        GoogleOAuthClient.legacy(from: ["clientID": " id ", "redirectURI": " uri "])
+            == GoogleOAuthClient(clientID: "id", redirectURI: "uri")
+    )
+    #expect(GoogleOAuthClient.legacy(from: ["clientID": "id"]) == nil)
+    #expect(GoogleOAuthClient.legacy(from: [:]) == nil)
+}
+
 /// URLSession hands `URLProtocol` the body as a stream, so a request built with `httpBody`
 /// arrives with that property empty.
 private func readRequestBody(_ request: URLRequest) -> Data {

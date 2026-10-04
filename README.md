@@ -77,18 +77,24 @@ make generate
 
 ### Configure bundled OAuth apps
 
-Dropbox and OneDrive use bundled PKCE OAuth app settings loaded from build settings.
+Google Drive, Dropbox and OneDrive use bundled PKCE OAuth app settings loaded from build settings.
 Set them in `project.local.yml` before running the app:
 
 ```yaml
 settings:
   base:
+    MFGOOGLE_CLIENT_ID: YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com
     MFDROPBOX_CLIENT_ID: YOUR_DROPBOX_APP_KEY
     MFONEDRIVE_CLIENT_ID: YOUR_MICROSOFT_APP_ID
 ```
 
+The Google client must be an **iOS**-type OAuth client with bundle ID
+`com.lollipopkit.mfuse`, with the Google Drive API enabled and the
+`https://www.googleapis.com/auth/drive` scope on its consent screen.
+
 Default redirect URIs are already wired in the app bundle:
 
+- Google Drive: `com.googleusercontent.apps.<client-id-prefix>:/oauth2redirect`, derived from the client ID
 - Dropbox: `com.lollipopkit.mfuse.dropbox:/oauth`
 - OneDrive: `com.lollipopkit.mfuse.onedrive:/oauth`
 

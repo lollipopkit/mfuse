@@ -51,6 +51,8 @@
 	<string>$(MFDROPBOX_CLIENT_ID)</string>
 	<key>MFDropboxRedirectURI</key>
 	<string>$(MFDROPBOX_REDIRECT_URI)</string>
+	<key>MFGoogleClientID</key>
+	<string>$(MFGOOGLE_CLIENT_ID)</string>
 	<key>MFOneDriveAuthority</key>
 	<string>$(MFONEDRIVE_AUTHORITY)</string>
 	<key>MFOneDriveClientID</key>

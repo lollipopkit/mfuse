@@ -66,6 +66,10 @@ public final class GoogleOAuthProvider: NSObject, @unchecked Sendable {
         self.session = session
     }
 
+    public convenience init(client: GoogleOAuthClient, session: URLSession = .shared) {
+        self.init(clientID: client.clientID, redirectURI: client.redirectURI, session: session)
+    }
+
     /// Perform the OAuth authorization code flow.
     @MainActor
     public func authorize() async throws -> TokenResponse {

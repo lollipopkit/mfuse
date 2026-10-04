@@ -20,9 +20,10 @@ settings:
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "0"
-    MFDROPBOX_CLIENT_ID: ""
+    # OAuth client IDs (MFDROPBOX_CLIENT_ID, MFGOOGLE_CLIENT_ID, MFONEDRIVE_CLIENT_ID)
+    # come from project.local.yml only. XcodeGen lets this spec override what it
+    # includes, so a default here would silently replace the local value.
     MFDROPBOX_REDIRECT_URI: "com.lollipopkit.mfuse.dropbox:/oauth"
-    MFONEDRIVE_CLIENT_ID: ""
     MFONEDRIVE_REDIRECT_URI: "com.lollipopkit.mfuse.onedrive:/oauth"
     MFONEDRIVE_AUTHORITY: "common"
 
