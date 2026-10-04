@@ -2292,10 +2292,13 @@ public final class ConnectionManager: ObservableObject {
             return
         }
 
-        let knownNames = Set(connections.map(FileProviderMountProvider.symlinkFilename(for:)))
-        for name in contents where !knownNames.contains(name) {
+        // By the connection each link belongs to: a name says nothing once links carry the
+        // connection name alone.
+        let knownIDs = Set(connections.map(\.id))
+        for name in contents {
             let candidateURL = baseDir.appendingPathComponent(name)
-            guard FileProviderMountProvider.shouldRemoveManagedSymlink(at: candidateURL, fileManager: fm) else {
+            guard let owner = FileProviderMountProvider.managedConnectionID(at: candidateURL),
+                  !knownIDs.contains(owner) else {
                 continue
             }
             do {

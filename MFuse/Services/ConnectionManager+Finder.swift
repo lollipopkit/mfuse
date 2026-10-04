@@ -50,9 +50,10 @@ extension ConnectionManager {
             )
             return nil
         }
-        // `nil` when no shortcuts folder is configured; the mount URL is used directly then.
-        let symlinkURL = mountProvider?.symlinkBaseURL.map {
-            FileProviderMountProvider.symlinkURL(for: config, baseDir: $0)
+        // This connection's link, found by the connection it belongs to; `nil` when there is
+        // none or no shortcuts folder is configured, and the mount URL is used directly then.
+        let symlinkURL = mountProvider?.symlinkBaseURL.flatMap {
+            FileProviderMountProvider.managedSymlinks(for: config.id, in: $0).first
         }
 
         // Told apart from a lookup that failed: the provider answers `nil` when there is no
