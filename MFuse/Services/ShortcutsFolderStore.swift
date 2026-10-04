@@ -80,12 +80,16 @@ final class ShortcutsFolderStore: ObservableObject {
 
     private func replaceFolder(with url: URL?) async {
         let previous = folderURL
-        endAccess()
+        // Access to the old folder is kept until the links in it have been removed: the
+        // change handler clears them, and without its scope the sandbox refuses.
+        let previousAccess = accessedURL
+        accessedURL = nil
         if let url {
             beginAccess(url)
         }
         publish(url)
         await onFolderChange?(previous)
+        previousAccess?.stopAccessingSecurityScopedResource()
     }
 
     private func restoreBookmarkedFolder() {
@@ -120,11 +124,6 @@ final class ShortcutsFolderStore: ObservableObject {
         if url.startAccessingSecurityScopedResource() {
             accessedURL = url
         }
-    }
-
-    private func endAccess() {
-        accessedURL?.stopAccessingSecurityScopedResource()
-        accessedURL = nil
     }
 
     private func publish(_ url: URL?) {

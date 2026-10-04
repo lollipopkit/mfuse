@@ -1454,6 +1454,13 @@ public final class ConnectionManager: ObservableObject {
         await task.value
     }
 
+    /// Waits for a repair already running for `id`, without starting one — so a caller that
+    /// changed what a repair does (a new shortcuts folder) can let the old pass finish
+    /// before starting a fresh one, which `repairMountState(for:)` would only join.
+    public func awaitInFlightMountRepair(for id: UUID) async {
+        await mountRepairTasks[id]?.value
+    }
+
     private func performMountRepair(for id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }),
               let mountProvider else {
