@@ -165,9 +165,11 @@ rm -f "$EXPORT_OPTIONS_PATH" "$DMG_PATH"
 /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$APP_BUNDLE_ID string $APP_PROFILE_NAME" "$EXPORT_OPTIONS_PATH"
 /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$EXTENSION_BUNDLE_ID string $EXTENSION_PROFILE_NAME" "$EXPORT_OPTIONS_PATH"
 
+# Released builds use exactly the package versions in the committed lockfile.
 xcodebuild archive \
   -project "$PROJECT_PATH" \
   -scheme "$SCHEME" \
+  -onlyUsePackageVersionsFromResolvedFile \
   -configuration Release \
   -archivePath "$ARCHIVE_PATH" \
   CODE_SIGN_STYLE=Manual \

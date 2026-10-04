@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "blake3-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/JoshBashed/blake3-swift.git",
+      "state" : {
+        "revision" : "8f313fd61f38cbb36f2f4438f6ae5ee97c5791e8",
+        "version" : "0.2.2"
+      }
+    },
+    {
+      "identity" : "smbclient",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/kishikawakatsumi/SMBClient.git",
+      "state" : {
+        "revision" : "e636c2b2458930770932a36d311ec9d478575b90",
+        "version" : "0.3.1"
+      }
+    }
+  ],
+  "version" : 2
+}
