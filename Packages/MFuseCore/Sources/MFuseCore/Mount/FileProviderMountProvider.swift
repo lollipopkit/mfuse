@@ -378,7 +378,7 @@ public final class FileProviderMountProvider: MountProvider {
 
         guard let mountURL = try await resolveMountURL(for: config) else { return nil }
 
-        guard let symlinkURL = try availableSymlinkURL(for: config, in: baseDir) else {
+        guard let symlinkURL = try availableSymlinkURL(for: config, in: baseDir, mountURL: mountURL) else {
             Self.logger.warning(
                 "Skipping symlink creation because every name for \(config.domainIdentifier, privacy: .public) is taken by an item MFuse does not own"
             )
@@ -386,8 +386,8 @@ public final class FileProviderMountProvider: MountProvider {
         }
 
         // This connection's links under any other name — the one before a rename, a
-        // `<name>-<uuid>` link from before the connection mark, a suffixed one whose plain
-        // name has since come free — go; one already right is kept as it is.
+        // `<name>-<uuid>` link from before the connection mark — go; one already right is
+        // kept as it is.
         var keepsExisting = false
         for existingURL in Self.managedSymlinks(for: config.id, in: baseDir) {
             if existingURL == symlinkURL,
@@ -417,11 +417,25 @@ public final class FileProviderMountProvider: MountProvider {
     /// The link's name for this connection: its plain name, or — when that is taken by
     /// another connection's link or by something the user put there — the name with a
     /// short id. `nil` when both are taken by items MFuse does not own for this connection.
-    private func availableSymlinkURL(for config: ConnectionConfig, in baseDir: URL) throws -> URL? {
+    ///
+    /// A link this connection already has under either name, still pointing at the mount,
+    /// keeps its name: a suffixed link does not move to the plain name when that comes
+    /// free, so a path the user has bookmarked stays where it is.
+    private func availableSymlinkURL(
+        for config: ConnectionConfig,
+        in baseDir: URL,
+        mountURL: URL
+    ) throws -> URL? {
         let name = Self.sanitizeName(config.name)
         let shortID = config.id.uuidString.prefix(8).lowercased()
-        for filename in [name, "\(name)-\(shortID)"] {
-            let url = baseDir.appendingPathComponent(filename)
+        let candidates = [name, "\(name)-\(shortID)"].map { baseDir.appendingPathComponent($0) }
+        if let current = candidates.first(where: {
+            Self.markedConnectionID(at: $0) == config.id
+                && Self.linkDestination(of: $0) == mountURL.standardizedFileURL
+        }) {
+            return current
+        }
+        for url in candidates {
             // Link-aware, because `fileExists` resolves the link: a dangling one reads as
             // absent, and the creation would then fail with EEXIST.
             if try itemType(at: url) == nil || Self.managedConnectionID(at: url) == config.id {

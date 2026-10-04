@@ -301,6 +301,12 @@ final class FileProviderMountProviderTests: XCTestCase {
         // Creating the first again keeps its link rather than trading names.
         let again = try await provider.createSymlink(for: first)
         XCTAssertEqual(again?.lastPathComponent, "nas")
+
+        // With the plain name free again, the second keeps its suffixed link: a path the
+        // user may have bookmarked does not move.
+        try await provider.removeSymlink(for: first)
+        let kept = try await provider.createSymlink(for: second)
+        XCTAssertEqual(kept, secondLink)
     }
 
     /// A `<name>-<uuid>` link from an older build becomes the plain-named one.
