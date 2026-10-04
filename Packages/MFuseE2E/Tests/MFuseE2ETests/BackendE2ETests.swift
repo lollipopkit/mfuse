@@ -85,6 +85,8 @@ final class BackendE2ETests: XCTestCase {
         let source = root.appending("a.txt")
         let destination = root.appending("b.txt")
         try await fileSystem.connect()
+        // Cleanup runs whatever happens below, and disconnects even when deleting fails.
+        var failure: Error?
         do {
             try await fileSystem.createDirectory(at: root)
             try await fileSystem.createFile(at: source, data: Data("a".utf8))
@@ -100,12 +102,15 @@ final class BackendE2ETests: XCTestCase {
             XCTAssertEqual(destinationData, Data("b".utf8))
             XCTAssertEqual(sourceData, Data("a".utf8))
         } catch {
-            try? await fileSystem.delete(at: root)
-            try? await fileSystem.disconnect()
-            throw error
+            failure = error
         }
-        try await fileSystem.delete(at: root)
-        try await fileSystem.disconnect()
+        do {
+            try await fileSystem.delete(at: root)
+        } catch {
+            failure = failure ?? error
+        }
+        try? await fileSystem.disconnect()
+        if let failure { throw failure }
     }
 
     /// Without `insecure` the server refuses MFuse's unprivileged port; the error has to
