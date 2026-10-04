@@ -17,6 +17,13 @@ extension ConnectionManager {
     /// convenience link and disconnected the domain — Finder was still sent to the
     /// location it had just taken away.
     func revealInFinder(_ requestedConfig: ConnectionConfig) async {
+        // Activation is cooperative since macOS 14: Finder only comes forward on the
+        // activation of the app in front, and a click in the menu bar panel — a panel that
+        // does not activate its app — leaves MFuse behind whatever was frontmost. Its yield
+        // then carries nothing, and Finder showed the item behind the other app's windows.
+        // So MFuse takes the activation the click entitles it to, before anything suspends,
+        // and hands it to Finder once the location is open.
+        NSApp.activate()
         guard let resolved = await resolveFinderURL(for: requestedConfig) else { return }
         // Checked against the revision the location was resolved from, not merely against
         // the row's id. The convenience link carries the connection's name, so a rename
@@ -30,6 +37,9 @@ extension ConnectionManager {
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([resolved.url])
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder")
+            .first?
+            .activate(from: .current, options: [])
     }
 
     /// A Finder location, and the revision of the connection it was resolved from.
