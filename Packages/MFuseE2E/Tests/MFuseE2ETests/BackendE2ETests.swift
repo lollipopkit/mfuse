@@ -81,12 +81,12 @@ final class BackendE2ETests: XCTestCase {
     func testNFSMoveRefusesExistingDestination() async throws {
         let env = try E2EEnvironment()
         let fileSystem = NFSFileSystem(config: try nfsConfig(env, export: "/srv/nfs"), credential: Credential())
-        try await fileSystem.connect()
         let root = RemotePath.root.appending("mfuse-e2e-move-\(UUID().uuidString.prefix(8))")
         let source = root.appending("a.txt")
         let destination = root.appending("b.txt")
-        try await fileSystem.createDirectory(at: root)
+        try await fileSystem.connect()
         do {
+            try await fileSystem.createDirectory(at: root)
             try await fileSystem.createFile(at: source, data: Data("a".utf8))
             try await fileSystem.createFile(at: destination, data: Data("b".utf8))
             do {
@@ -101,6 +101,7 @@ final class BackendE2ETests: XCTestCase {
             XCTAssertEqual(sourceData, Data("a".utf8))
         } catch {
             try? await fileSystem.delete(at: root)
+            try? await fileSystem.disconnect()
             throw error
         }
         try await fileSystem.delete(at: root)
