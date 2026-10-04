@@ -87,13 +87,13 @@ struct MFuseApp: App {
             }
         }
         // A new shortcuts folder takes the links with it: MFuse's links leave the old one,
-        // and every mounted connection gets its link again in the new one. Repairs already
-        // running may still be writing to the old folder, so they finish first; joining them
-        // instead would leave their link behind there and none in the new folder.
+        // and every mounted connection gets its link again in the new one. Mount resolutions
+        // and repairs already running may still be writing to the old folder, so they finish
+        // first; otherwise their link lands there after the cleanup and none in the new one.
         shortcutsFolder.onFolderChange = { [manager] previousFolder in
             let ids = manager.connections.map(\.id)
             for id in ids {
-                await manager.awaitInFlightMountRepair(for: id)
+                await manager.awaitInFlightSymlinkWork(for: id)
             }
             if let previousFolder {
                 FileProviderMountProvider.removeManagedSymlinks(in: previousFolder)

@@ -1454,10 +1454,13 @@ public final class ConnectionManager: ObservableObject {
         await task.value
     }
 
-    /// Waits for a repair already running for `id`, without starting one — so a caller that
-    /// changed what a repair does (a new shortcuts folder) can let the old pass finish
-    /// before starting a fresh one, which `repairMountState(for:)` would only join.
-    public func awaitInFlightMountRepair(for id: UUID) async {
+    /// Waits for the link-writing work already running for `id` — a mount resolution and a
+    /// repair — without starting or cancelling any. Each reads the shortcuts folder before
+    /// it suspends and writes the link there afterwards, so a caller that just changed the
+    /// folder lets them finish before clearing the old one; `repairMountState(for:)` would
+    /// only join a running repair, and cancelling a resolution would drop its mount state.
+    public func awaitInFlightSymlinkWork(for id: UUID) async {
+        await mountResolutionTasks[id]?.value
         await mountRepairTasks[id]?.value
     }
 

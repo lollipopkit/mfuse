@@ -81,11 +81,16 @@ if [[ -z "$TAP_CASK_PATH" && -n "$TAP_REPO_PATH" ]]; then
   # `Casks/m/mfuse.rb` — while a flat personal tap keeps them directly under `Casks`.
   # Whichever the repo uses is what it reads: a cask written to the other layout is a file
   # nothing installs from, and the release reports a tap update that never reached anyone.
+  # An existing cask decides first, so a tap that has both a flat cask and an unrelated
+  # shard directory keeps updating the file it already installs from.
+  FLAT_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"
   CASK_SHARD_DIR="$TAP_REPO_PATH/Casks/${CASK_NAME:0:1}"
-  if [[ -d "$CASK_SHARD_DIR" ]]; then
+  if [[ -f "$FLAT_CASK_PATH" ]]; then
+    TAP_CASK_PATH="$FLAT_CASK_PATH"
+  elif [[ -f "$CASK_SHARD_DIR/${CASK_NAME}.rb" || -d "$CASK_SHARD_DIR" ]]; then
     TAP_CASK_PATH="$CASK_SHARD_DIR/${CASK_NAME}.rb"
   else
-    TAP_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"
+    TAP_CASK_PATH="$FLAT_CASK_PATH"
   fi
 fi
 
@@ -98,6 +103,23 @@ if [[ -z "$EXPLICIT_TAP_CASK_PATH" && -n "$TAP_REPO_PATH" && ! -d "$TAP_REPO_PAT
   echo "TAP_REPO_PATH does not exist: $TAP_REPO_PATH" >&2
   exit 1
 fi
+
+# Every value below is written into Ruby string literals, so anything that could end the
+# string or start an interpolation — a quote, a backslash, `#`, a newline — is refused
+# rather than escaped: none of these names legitimately contain one.
+require_safe() {
+  local name="$1" value="$2" pattern="$3"
+  if [[ ! "$value" =~ $pattern ]]; then
+    echo "$name contains characters not allowed in the cask: $value" >&2
+    exit 1
+  fi
+}
+require_safe APP_NAME "$APP_NAME" '^[A-Za-z0-9][A-Za-z0-9 ._-]*$'
+require_safe CASK_NAME "$CASK_NAME" '^[a-z0-9][a-z0-9-]*$'
+require_safe APP_REPO_SLUG "$APP_REPO_SLUG" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+require_safe APP_VERSION "$APP_VERSION" '^[0-9A-Za-z._,-]+$'
+require_safe RELEASE_TAG "$RELEASE_TAG" '^[A-Za-z0-9._-]+$'
+require_safe DMG_BASENAME "$DMG_BASENAME" '^[A-Za-z0-9._ -]+$'
 
 SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 
