@@ -114,11 +114,30 @@ public final class FileProviderMountProvider: MountProvider {
         category: "FileProviderMountProvider"
     )
 
-    public static let defaultSymlinkBaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("MFuse", isDirectory: true)
+    /// The user's real home directory.
+    ///
+    /// Not `homeDirectoryForCurrentUser`: in a sandboxed app that is the container's `Data`
+    /// directory, so links were written where no user ever looks, and the real
+    /// `~/Library/CloudStorage` mounts never matched the CloudStorage path checked against.
+    public static var realHomeDirectoryURL: URL {
+        let home = getpwuid(getuid())?.pointee.pw_dir.map { String(cString: $0) } ?? NSHomeDirectory()
+        return URL(fileURLWithPath: home, isDirectory: true)
+    }
 
-    /// Base directory for convenience symlinks.
-    public let symlinkBaseURL: URL
+    /// `~/MFuse` in the user's real home directory. Writing there from the sandbox also
+    /// needs the app to be entitled to it — see `MFuse-DeveloperID.entitlements`.
+    public static var homeShortcutsDirectoryURL: URL {
+        realHomeDirectoryURL.appendingPathComponent("MFuse", isDirectory: true)
+    }
+
+    /// Where convenience links go, read on every operation: `nil` turns them off, and an
+    /// app that lets the user pick the folder can change it at any time.
+    private let symlinkDirectory: @Sendable () -> URL?
+
+    /// Base directory for convenience symlinks, or `nil` when none is configured.
+    public var symlinkBaseURL: URL? {
+        symlinkDirectory()
+    }
 
     /// Test seams for `unregister`'s two steps, which exist so its ordering — the domain
     /// before its on-disk state, whose bootstrap config is the domain's last config
@@ -135,10 +154,12 @@ public final class FileProviderMountProvider: MountProvider {
 
     private let operationCoordinator = MountOperationCoordinator()
 
-    public init(
-        symlinkBaseURL: URL = defaultSymlinkBaseURL
-    ) {
-        self.symlinkBaseURL = symlinkBaseURL
+    public init(symlinkDirectory: @escaping @Sendable () -> URL?) {
+        self.symlinkDirectory = symlinkDirectory
+    }
+
+    public convenience init(symlinkBaseURL: URL) {
+        self.init(symlinkDirectory: { symlinkBaseURL })
     }
 
     public func ensureRegistered(config: ConnectionConfig) async throws {
@@ -346,12 +367,16 @@ public final class FileProviderMountProvider: MountProvider {
 
     private func performCreateSymlink(for config: ConnectionConfig) async throws -> URL? {
         let fileManager = FileManager.default
-        let baseDir = symlinkBaseURL
+        // Read once: the directory can change while this operation suspends.
+        guard let baseDir = symlinkBaseURL else {
+            try cleanupLegacyShortcutIfNeeded(for: config, baseDir: nil)
+            return nil
+        }
 
         let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
         let parentDirectoryURL = symlinkURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
-        try cleanupLegacyShortcutIfNeeded(for: config)
+        try cleanupLegacyShortcutIfNeeded(for: config, baseDir: baseDir)
 
         guard let mountURL = try await resolveMountURL(for: config) else { return nil }
 
@@ -392,6 +417,11 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     private func performRemoveSymlink(for config: ConnectionConfig) async throws {
+        let baseDir = symlinkBaseURL
+        guard let baseDir else {
+            try cleanupLegacyShortcutIfNeeded(for: config, baseDir: nil)
+            return
+        }
         // A failed lookup must not abort the cleanup. The states that need it most — a
         // provider failure mid-teardown, a domain damaged behind the app's back — are
         // exactly the ones where the URL cannot be resolved, and giving up there leaves a
@@ -411,9 +441,29 @@ public final class FileProviderMountProvider: MountProvider {
             )
             expectedDestinationURL = nil
         }
-        let symlinkURL = Self.symlinkURL(for: config, baseDir: symlinkBaseURL)
+        let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
         try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
-        try cleanupLegacyShortcutIfNeeded(for: config)
+        try cleanupLegacyShortcutIfNeeded(for: config, baseDir: baseDir)
+    }
+
+    /// Removes every convenience link MFuse created in `directory`, leaving anything else
+    /// there alone — for a shortcuts folder the user has just replaced. Returns the names it
+    /// could not remove.
+    @discardableResult
+    public static func removeManagedSymlinks(in directory: URL) -> [String] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [] }
+        var failed: [String] = []
+        for name in names {
+            let url = directory.appendingPathComponent(name)
+            guard shouldRemoveManagedSymlink(at: url, fileManager: fm) else { continue }
+            do {
+                try fm.removeItem(at: url)
+            } catch {
+                failed.append(name)
+            }
+        }
+        return failed
     }
 
     /// Sanitize a connection name for use as a filesystem directory name.
@@ -505,7 +555,7 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public static func isManagedMountDestination(_ url: URL) -> Bool {
-        let cloudStorageRoot = FileManager.default.homeDirectoryForCurrentUser
+        let cloudStorageRoot = realHomeDirectoryURL
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("CloudStorage", isDirectory: true)
             .standardizedFileURL
@@ -577,9 +627,9 @@ public final class FileProviderMountProvider: MountProvider {
         try fm.removeItem(at: symlinkURL)
     }
 
-    private func cleanupLegacyShortcutIfNeeded(for config: ConnectionConfig) throws {
+    private func cleanupLegacyShortcutIfNeeded(for config: ConnectionConfig, baseDir: URL?) throws {
         guard let legacyBaseURL = Self.legacySymlinkBaseURL(),
-              legacyBaseURL.standardizedFileURL != symlinkBaseURL.standardizedFileURL else {
+              legacyBaseURL.standardizedFileURL != baseDir?.standardizedFileURL else {
             return
         }
 

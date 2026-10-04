@@ -1,6 +1,21 @@
 import XCTest
 @testable import MFuseCore
 
+/// A shortcuts folder a test can move while the provider holds on to it.
+private final class DirectoryBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: URL?
+
+    init(_ url: URL?) {
+        value = url
+    }
+
+    var url: URL? {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
+    }
+}
+
 /// Records what a seam was called with, from closures the provider may run on any
 /// executor.
 private final class InvocationRecorder: @unchecked Sendable {
@@ -218,6 +233,64 @@ final class FileProviderMountProviderTests: XCTestCase {
         // Attempted, not skipped: the point is that its failure is tolerated, not that the
         // step was never reached.
         XCTAssertEqual(stateRemovals.invocations, [config.domainIdentifier])
+    }
+
+    /// Without a shortcuts folder there is no link to make, and nothing is created on disk
+    /// in its place.
+    func testCreateSymlinkWithoutADirectoryCreatesNothing() async throws {
+        let provider = FileProviderMountProvider(symlinkDirectory: { nil })
+        let resolutions = InvocationRecorder()
+        provider.resolveMountURLOverride = { config in
+            resolutions.record(config.domainIdentifier)
+            return self.temporaryDirectoryURL
+        }
+        let config = ConnectionConfig(name: "NoFolder", backendType: .sftp, host: "example.com")
+
+        let created = try await provider.createSymlink(for: config)
+
+        XCTAssertNil(created)
+        XCTAssertTrue(resolutions.invocations.isEmpty, "the mount URL was resolved for a link that cannot exist")
+        XCTAssertNil(provider.symlinkBaseURL)
+    }
+
+    /// The folder can change at runtime — a user picks a new one — and the next link has to
+    /// go there rather than to the folder the provider was created with.
+    func testCreateSymlinkUsesTheCurrentDirectory() async throws {
+        let firstURL = temporaryDirectoryURL.appendingPathComponent("first", isDirectory: true)
+        let secondURL = temporaryDirectoryURL.appendingPathComponent("second", isDirectory: true)
+        let current = DirectoryBox(firstURL)
+        let provider = FileProviderMountProvider(symlinkDirectory: { current.url })
+        let mountURL = temporaryDirectoryURL.appendingPathComponent("mount", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        provider.resolveMountURLOverride = { _ in mountURL }
+        let config = ConnectionConfig(name: "Moved", backendType: .sftp, host: "example.com")
+
+        current.url = secondURL
+        let created = try await provider.createSymlink(for: config)
+
+        XCTAssertEqual(created?.deletingLastPathComponent().standardizedFileURL, secondURL.standardizedFileURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstURL.path))
+    }
+
+    /// Replacing the folder clears MFuse's links from the old one and nothing else.
+    func testRemoveManagedSymlinksLeavesForeignItems() throws {
+        let fileManager = FileManager.default
+        let mountDestinationURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/CloudStorage", isDirectory: true)
+            .appendingPathComponent("MFuse-\(UUID().uuidString)", isDirectory: true)
+        let managedURL = temporaryDirectoryURL.appendingPathComponent("Backup-\(UUID().uuidString)")
+        try fileManager.createSymbolicLink(at: managedURL, withDestinationURL: mountDestinationURL)
+        let foreignLinkURL = temporaryDirectoryURL.appendingPathComponent("notes")
+        try fileManager.createSymbolicLink(at: foreignLinkURL, withDestinationURL: mountDestinationURL)
+        let fileURL = temporaryDirectoryURL.appendingPathComponent("Backup-\(UUID().uuidString)")
+        fileManager.createFile(atPath: fileURL.path, contents: Data())
+
+        let failed = FileProviderMountProvider.removeManagedSymlinks(in: temporaryDirectoryURL)
+
+        XCTAssertTrue(failed.isEmpty)
+        XCTAssertNil(try? fileManager.destinationOfSymbolicLink(atPath: managedURL.path))
+        XCTAssertNotNil(try? fileManager.destinationOfSymbolicLink(atPath: foreignLinkURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: fileURL.path))
     }
 
     /// A rename moves the domain's CloudStorage path. Resolving that path and writing the

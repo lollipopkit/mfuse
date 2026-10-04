@@ -50,12 +50,10 @@ extension ConnectionManager {
             )
             return nil
         }
-        let symlinkBaseURL = mountProvider?.symlinkBaseURL
-            ?? FileProviderMountProvider.defaultSymlinkBaseURL
-        let symlinkURL = FileProviderMountProvider.symlinkURL(
-            for: config,
-            baseDir: symlinkBaseURL
-        )
+        // `nil` when no shortcuts folder is configured; the mount URL is used directly then.
+        let symlinkURL = mountProvider?.symlinkBaseURL.map {
+            FileProviderMountProvider.symlinkURL(for: config, baseDir: $0)
+        }
 
         // Told apart from a lookup that failed: the provider answers `nil` when there is no
         // domain registered for this connection any more — removed in System Settings, or
@@ -135,7 +133,7 @@ extension ConnectionManager {
         // user's own, and a link they put there under the name this connection resolves to
         // can point anywhere. Reveal is not the place to follow it — the same test that
         // decides which links MFuse may remove decides which one it may open.
-        if canRevealMount(for: config), isManagedReachableLink(at: symlinkURL) {
+        if canRevealMount(for: config), let symlinkURL, isManagedReachableLink(at: symlinkURL) {
             return ResolvedFinderLocation(url: symlinkURL, config: config)
         }
 
@@ -149,7 +147,7 @@ extension ConnectionManager {
 
         // Callers can only ignore a nil, so record why rather than failing silently.
         Self.finderLogger.error(
-            "No Finder location for connection \(config.id.uuidString, privacy: .public): no mount URL, no reachable symlink at \(symlinkURL.path, privacy: .private), no mount path"
+            "No Finder location for connection \(config.id.uuidString, privacy: .public): no mount URL, no reachable symlink at \(symlinkURL?.path ?? "<no shortcuts folder>", privacy: .private), no mount path"
         )
         return nil
     }

@@ -105,7 +105,7 @@
 
       <div class="code-block" id="homebrew">
         <span class="prompt">{$LL.protocols.installTapPrompt()}</span>
-        <span class="command">brew tap lollipopkit/taps</span>
+        <span class="command">brew tap lollipopkit/tap</span>
         <span class="prompt">{$LL.protocols.installCaskPrompt()}</span>
         <span class="command">brew install --cask mfuse</span>
       </div>

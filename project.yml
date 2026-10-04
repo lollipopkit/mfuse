@@ -73,8 +73,13 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lollipopkit.mfuse
         INFOPLIST_FILE: MFuse/Info.plist
-        # Keep this entitlements file aligned with App Group and iCloud container capabilities.
-        CODE_SIGN_ENTITLEMENTS: MFuse/MFuse.entitlements
+        # Distribution channel: DeveloperID (DMG, the default) or AppStore, e.g.
+        # `xcodebuild ... MFUSE_DISTRIBUTION=AppStore`. It picks the entitlements file and
+        # sets the MFUSE_DEVELOPERID / MFUSE_APPSTORE compilation condition.
+        MFUSE_DISTRIBUTION: DeveloperID
+        # Keep both entitlements files aligned with App Group and iCloud container capabilities.
+        CODE_SIGN_ENTITLEMENTS: MFuse/MFuse-$(MFUSE_DISTRIBUTION).entitlements
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) MFUSE_$(MFUSE_DISTRIBUTION:upper)
         ENABLE_APP_SANDBOX: true
         COMBINE_HIDPI_IMAGES: true
         PRODUCT_NAME: MFuse

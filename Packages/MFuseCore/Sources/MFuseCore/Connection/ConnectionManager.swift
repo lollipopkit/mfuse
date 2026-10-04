@@ -1454,6 +1454,16 @@ public final class ConnectionManager: ObservableObject {
         await task.value
     }
 
+    /// Waits for the link-writing work already running for `id` — a mount resolution and a
+    /// repair — without starting or cancelling any. Each reads the shortcuts folder before
+    /// it suspends and writes the link there afterwards, so a caller that just changed the
+    /// folder lets them finish before clearing the old one; `repairMountState(for:)` would
+    /// only join a running repair, and cancelling a resolution would drop its mount state.
+    public func awaitInFlightSymlinkWork(for id: UUID) async {
+        await mountResolutionTasks[id]?.value
+        await mountRepairTasks[id]?.value
+    }
+
     private func performMountRepair(for id: UUID) async {
         guard let config = connections.first(where: { $0.id == id }),
               let mountProvider else {
@@ -1971,7 +1981,8 @@ public final class ConnectionManager: ObservableObject {
             let path = try await resolveMountPath(for: config, using: mountProvider)
             try Task.checkCancellation()
             do {
-                if try await mountProvider.createSymlink(for: config) == nil {
+                if try await mountProvider.createSymlink(for: config) == nil,
+                   mountProvider.symlinkBaseURL != nil {
                     logger.warning(
                         "Mounted domain \(config.domainIdentifier, privacy: .public) without creating convenience symlink"
                     )
@@ -2274,8 +2285,7 @@ public final class ConnectionManager: ObservableObject {
 
     private func cleanupOrphanedSymlinks(for connections: [ConnectionConfig]) async throws {
         let fm = FileManager.default
-        guard let mountProvider else { return }
-        let baseDir = mountProvider.symlinkBaseURL
+        guard let mountProvider, let baseDir = mountProvider.symlinkBaseURL else { return }
 
         guard fm.fileExists(atPath: baseDir.path),
               let contents = try? fm.contentsOfDirectory(atPath: baseDir.path) else {

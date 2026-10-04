@@ -20,6 +20,7 @@ struct MFuseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var connectionManager: ConnectionManager
     @StateObject private var appSettings: AppSettingsStore
+    @StateObject private var shortcutsFolder: ShortcutsFolderStore
     @State private var didPerformInitialSetup = false
     /// What launch reconciliation left unresolved, for the user to see and retry.
     @State private var startupDomainSyncFailure: String?
@@ -38,7 +39,9 @@ struct MFuseApp: App {
         self.storage = storage
         self.credentialProvider = credentialProvider
         self.iCloudSyncService = iCloudSyncService
-        self.mountProvider = FileProviderMountProvider()
+        let shortcutsFolder = ShortcutsFolderStore()
+        let currentShortcutsFolder = shortcutsFolder.current
+        self.mountProvider = FileProviderMountProvider(symlinkDirectory: { currentShortcutsFolder.url })
         let registry = BackendRegistry.shared
         BackendRegistryFactory.register(into: registry) { updatedCredential, connectionID in
             try await credentialProvider.store(updatedCredential, for: connectionID)
@@ -83,6 +86,23 @@ struct MFuseApp: App {
                 break
             }
         }
+        // A new shortcuts folder takes the links with it: MFuse's links leave the old one,
+        // and every mounted connection gets its link again in the new one. Mount resolutions
+        // and repairs already running may still be writing to the old folder, so they finish
+        // first; otherwise their link lands there after the cleanup and none in the new one.
+        shortcutsFolder.onFolderChange = { [manager] previousFolder in
+            let ids = manager.connections.map(\.id)
+            for id in ids {
+                await manager.awaitInFlightSymlinkWork(for: id)
+            }
+            if let previousFolder {
+                FileProviderMountProvider.removeManagedSymlinks(in: previousFolder)
+            }
+            for id in ids {
+                await manager.repairMountState(for: id)
+            }
+        }
+        _shortcutsFolder = StateObject(wrappedValue: shortcutsFolder)
         _connectionManager = StateObject(wrappedValue: manager)
         _appSettings = StateObject(wrappedValue: AppSettingsStore(
             storage: storage,
@@ -145,9 +165,10 @@ struct MFuseApp: App {
             }
         }
 
-        // Menu bar extra. Filled, because the menu bar is where it sits next to other
-        // apps' icons — the outline variant reads as lighter than everything around it.
-        MenuBarExtra("MFuse", systemImage: "externaldrive.connected.to.line.below.fill") {
+        // Menu bar extra. A filled silhouette of the app icon's drive and cloud, rendered as a
+        // template image so it follows the menu bar's appearance; filled because an outline
+        // reads lighter than the icons next to it.
+        MenuBarExtra("MFuse", image: "MenuBarIcon") {
             // The same failure the window alerts on, repeated here because the window is
             // not always there: closing it leaves MFuse in the menu bar, and a retry that
             // failed after that had nowhere left to report and nowhere to be retried from
@@ -166,6 +187,7 @@ struct MFuseApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appSettings)
+                .environmentObject(shortcutsFolder)
         }
     }
 

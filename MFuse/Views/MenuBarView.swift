@@ -49,8 +49,12 @@ struct MenuBarView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "externaldrive.connected.to.line.below")
-                .font(.system(size: 14, weight: .semibold))
+            // The menu bar item's own icon, so the panel reads as the thing it opened from.
+            Image("MenuBarIcon")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 14)
                 .foregroundStyle(.secondary)
             Text("MFuse")
                 .font(.system(size: 14, weight: .bold))

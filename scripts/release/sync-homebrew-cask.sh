@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP_NAME="${APP_NAME:-MFuse}"
 CASK_NAME="${CASK_NAME:-mfuse}"
 APP_REPO_SLUG="${APP_REPO_SLUG:-lollipopkit/mfuse}"
-TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-cask}"
+TAP_REPO_PATH="${TAP_REPO_PATH:-$HOME/proj/homebrew-tap}"
 TAP_CASK_PATH="${TAP_CASK_PATH:-}"
 EXPLICIT_TAP_CASK_PATH="${TAP_CASK_PATH:-}"
 XCARCHIVE_PATH="${1:-${XCARCHIVE_PATH:-}}"
@@ -81,11 +81,16 @@ if [[ -z "$TAP_CASK_PATH" && -n "$TAP_REPO_PATH" ]]; then
   # `Casks/m/mfuse.rb` — while a flat personal tap keeps them directly under `Casks`.
   # Whichever the repo uses is what it reads: a cask written to the other layout is a file
   # nothing installs from, and the release reports a tap update that never reached anyone.
+  # An existing cask decides first, so a tap that has both a flat cask and an unrelated
+  # shard directory keeps updating the file it already installs from.
+  FLAT_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"
   CASK_SHARD_DIR="$TAP_REPO_PATH/Casks/${CASK_NAME:0:1}"
-  if [[ -d "$CASK_SHARD_DIR" ]]; then
+  if [[ -f "$FLAT_CASK_PATH" ]]; then
+    TAP_CASK_PATH="$FLAT_CASK_PATH"
+  elif [[ -f "$CASK_SHARD_DIR/${CASK_NAME}.rb" || -d "$CASK_SHARD_DIR" ]]; then
     TAP_CASK_PATH="$CASK_SHARD_DIR/${CASK_NAME}.rb"
   else
-    TAP_CASK_PATH="$TAP_REPO_PATH/Casks/${CASK_NAME}.rb"
+    TAP_CASK_PATH="$FLAT_CASK_PATH"
   fi
 fi
 
@@ -99,23 +104,62 @@ if [[ -z "$EXPLICIT_TAP_CASK_PATH" && -n "$TAP_REPO_PATH" && ! -d "$TAP_REPO_PAT
   exit 1
 fi
 
+# Every value below is written into Ruby string literals, so anything that could end the
+# string or start an interpolation — a quote, a backslash, `#`, a newline — is refused
+# rather than escaped: none of these names legitimately contain one.
+require_safe() {
+  local name="$1" value="$2" pattern="$3"
+  if [[ ! "$value" =~ $pattern ]]; then
+    echo "$name contains characters not allowed in the cask: $value" >&2
+    exit 1
+  fi
+}
+require_safe APP_NAME "$APP_NAME" '^[A-Za-z0-9][A-Za-z0-9 ._-]*$'
+require_safe CASK_NAME "$CASK_NAME" '^[a-z0-9][a-z0-9-]*$'
+require_safe APP_REPO_SLUG "$APP_REPO_SLUG" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+require_safe APP_VERSION "$APP_VERSION" '^[0-9A-Za-z._,-]+$'
+require_safe RELEASE_TAG "$RELEASE_TAG" '^[A-Za-z0-9._-]+$'
+require_safe DMG_BASENAME "$DMG_BASENAME" '^[A-Za-z0-9._ -]+$'
+
 SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 
+# Emit `#{version}` wherever the release path carries the version, so a bump touches one
+# line. A caller that overrode RELEASE_TAG or DMG_BASENAME with a string that does not
+# contain the version keeps the literal path, because interpolating it there would break.
+VERSION_TOKEN='#{version}'
+URL_TAG="${RELEASE_TAG//$APP_VERSION/$VERSION_TOKEN}"
+URL_BASENAME="${DMG_BASENAME//$APP_VERSION/$VERSION_TOKEN}"
+
+# Sandboxed app: both the app and its File Provider extension get their own container,
+# and the two share an app group. Paths verified against an installed build — see the
+# entitlements in the shipped bundle before adding to this list.
 mkdir -p "$(dirname "$TAP_CASK_PATH")"
 cat > "$TAP_CASK_PATH" <<CASK
 cask "$CASK_NAME" do
   version "$APP_VERSION"
   sha256 "$SHA256"
 
-  url "https://github.com/$APP_REPO_SLUG/releases/download/$RELEASE_TAG/${DMG_BASENAME}.dmg",
-      verified: "github.com/$APP_REPO_SLUG/"
+  url "https://github.com/$APP_REPO_SLUG/releases/download/$URL_TAG/${URL_BASENAME}.dmg"
   name "$APP_NAME"
   desc "Mount remote storage in Finder through File Provider"
   homepage "https://github.com/$APP_REPO_SLUG"
 
-  depends_on macos: ">= :sonoma"
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on macos: :sonoma
 
   app "$APP_NAME.app"
+
+  zap trash: [
+    "~/Library/Containers/com.lollipopkit.mfuse",
+    "~/Library/Containers/com.lollipopkit.mfuse.provider",
+    "~/Library/Group Containers/group.com.lollipopkit.mfuse.shared",
+    "~/Library/Preferences/com.lollipopkit.mfuse.plist",
+    "~/Library/Preferences/group.com.lollipopkit.mfuse.shared.plist",
+  ]
 end
 CASK
 

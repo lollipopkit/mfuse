@@ -1153,7 +1153,8 @@ struct ConnectionEditorSheet: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        // The real ~/.ssh: inside the sandbox `homeDirectoryForCurrentUser` is the container.
+        panel.directoryURL = FileProviderMountProvider.realHomeDirectoryURL
             .appendingPathComponent(".ssh")
         panel.begin { response in
             if response == .OK, let url = panel.url {
