@@ -135,7 +135,28 @@ find_profile_name() {
   exit 1
 }
 
-mkdir -p "$ARTIFACTS_PATH" "$(dirname "$ARCHIVE_PATH")"
+# Deletes previous build output. The paths can come from the release environment, so a
+# path that is, or contains, the filesystem root, the home folder or the repository is
+# refused instead of deleted.
+remove_build_output() {
+  local path resolved
+  for path in "$@"; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    if [[ -d "$path" && ! -L "$path" ]]; then
+      resolved="$(cd "$path" && pwd -P)"
+    else
+      resolved="$(cd "$(dirname "$path")" && pwd -P)"
+      resolved="${resolved%/}/$(basename "$path")"
+    fi
+    if [[ "$path" -ef / || "$HOME/" == "$resolved/"* || "$REPO_ROOT/" == "$resolved/"* ]]; then
+      echo "refusing to delete $path: it is or contains /, \$HOME or the repository" >&2
+      exit 1
+    fi
+    rm -rf -- "$path"
+  done
+}
+
+mkdir -p "$ARTIFACTS_PATH" "$(dirname "$ARCHIVE_PATH")" "$(dirname "$EXPORT_OPTIONS_PATH")" "$(dirname "$DMG_PATH")"
 
 if ! security find-identity -v -p codesigning | grep -F "$SIGNING_IDENTITY" >/dev/null; then
   echo "signing identity not found in keychain: $SIGNING_IDENTITY" >&2
@@ -153,8 +174,7 @@ fi
 APP_PROFILE_NAME="${APP_PROFILE_NAME:-$(find_profile_name "$APP_BUNDLE_ID" "$SIGNING_IDENTITY_SHA1")}"
 EXTENSION_PROFILE_NAME="${EXTENSION_PROFILE_NAME:-$(find_profile_name "$EXTENSION_BUNDLE_ID" "$SIGNING_IDENTITY_SHA1")}"
 
-rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$DMG_STAGING_PATH"
-rm -f "$EXPORT_OPTIONS_PATH" "$DMG_PATH"
+remove_build_output "$ARCHIVE_PATH" "$EXPORT_PATH" "$DMG_STAGING_PATH" "$EXPORT_OPTIONS_PATH" "$DMG_PATH"
 /usr/libexec/PlistBuddy -c 'Clear dict' "$EXPORT_OPTIONS_PATH"
 /usr/libexec/PlistBuddy -c 'Add :method string developer-id' "$EXPORT_OPTIONS_PATH"
 /usr/libexec/PlistBuddy -c 'Add :signingStyle string manual' "$EXPORT_OPTIONS_PATH"
