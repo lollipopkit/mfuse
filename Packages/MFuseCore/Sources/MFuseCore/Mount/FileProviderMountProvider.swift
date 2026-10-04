@@ -373,39 +373,76 @@ public final class FileProviderMountProvider: MountProvider {
             return nil
         }
 
-        let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
-        let parentDirectoryURL = symlinkURL.deletingLastPathComponent()
-        try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: baseDir, withIntermediateDirectories: true)
         try cleanupLegacyShortcutIfNeeded(for: config, baseDir: baseDir)
 
         guard let mountURL = try await resolveMountURL(for: config) else { return nil }
 
-        try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: mountURL)
-        // Link-aware, because `fileExists` resolves the link: a dangling one — a user's
-        // own, with a managed-looking name, pointing at something that is gone — reads as
-        // absent, and the creation below then fails with EEXIST instead of leaving the
-        // path alone and warning, which is what the ownership test above decided.
-        guard try itemType(at: symlinkURL) == nil else {
+        guard let symlinkURL = try availableSymlinkURL(for: config, in: baseDir, mountURL: mountURL) else {
             Self.logger.warning(
-                "Skipping symlink creation because target path is occupied by a non-managed item: \(symlinkURL.path, privacy: .public)"
+                "Skipping symlink creation because every name for \(config.domainIdentifier, privacy: .public) is taken by an item MFuse does not own"
             )
             return nil
         }
 
+        // This connection's links under any other name — the one before a rename, a
+        // `<name>-<uuid>` link from before the connection mark — go; one already right is
+        // kept as it is.
+        var keepsExisting = false
+        for existingURL in Self.managedSymlinks(for: config.id, in: baseDir) {
+            if existingURL == symlinkURL,
+               Self.markedConnectionID(at: existingURL) == config.id,
+               Self.linkDestination(of: existingURL) == mountURL.standardizedFileURL {
+                keepsExisting = true
+                continue
+            }
+            try fileManager.removeItem(at: existingURL)
+        }
+        if keepsExisting {
+            return symlinkURL
+        }
+
+        try fileManager.createSymbolicLink(atPath: symlinkURL.path, withDestinationPath: mountURL.path)
         do {
-            try fileManager.createSymbolicLink(
-                atPath: symlinkURL.path,
-                withDestinationPath: mountURL.path
-            )
-        } catch let error as NSError
-            where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
-            try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)
-            try fileManager.createSymbolicLink(
-                atPath: symlinkURL.path,
-                withDestinationPath: mountURL.path
-            )
+            try Self.markConnection(config.id, at: symlinkURL)
+        } catch {
+            // Without the mark the link is indistinguishable from one the user made, and
+            // nothing would ever remove it again.
+            try? fileManager.removeItem(at: symlinkURL)
+            throw error
         }
         return symlinkURL
+    }
+
+    /// The link's name for this connection: its plain name, or — when that is taken by
+    /// another connection's link or by something the user put there — the name with a
+    /// short id. `nil` when both are taken by items MFuse does not own for this connection.
+    ///
+    /// A link this connection already has under either name, still pointing at the mount,
+    /// keeps its name: a suffixed link does not move to the plain name when that comes
+    /// free, so a path the user has bookmarked stays where it is.
+    private func availableSymlinkURL(
+        for config: ConnectionConfig,
+        in baseDir: URL,
+        mountURL: URL
+    ) throws -> URL? {
+        let name = Self.sanitizeName(config.name)
+        let shortID = config.id.uuidString.prefix(8).lowercased()
+        let candidates = [name, "\(name)-\(shortID)"].map { baseDir.appendingPathComponent($0) }
+        if let current = candidates.first(where: {
+            Self.markedConnectionID(at: $0) == config.id
+                && Self.linkDestination(of: $0) == mountURL.standardizedFileURL
+        }) {
+            return current
+        }
+        for url in candidates {
+            // Link-aware, because `fileExists` resolves the link: a dangling one reads as
+            // absent, and the creation would then fail with EEXIST.
+            if try itemType(at: url) == nil || Self.managedConnectionID(at: url) == config.id {
+                return url
+            }
+        }
+        return nil
     }
 
     public func removeSymlink(for config: ConnectionConfig) async throws {
@@ -417,32 +454,14 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     private func performRemoveSymlink(for config: ConnectionConfig) async throws {
+        // Found by the connection they belong to, not by name or destination: a teardown
+        // has to work when the mount URL can no longer be resolved, and after a rename.
         let baseDir = symlinkBaseURL
-        guard let baseDir else {
-            try cleanupLegacyShortcutIfNeeded(for: config, baseDir: nil)
-            return
+        if let baseDir {
+            for url in Self.managedSymlinks(for: config.id, in: baseDir) {
+                try FileManager.default.removeItem(at: url)
+            }
         }
-        // A failed lookup must not abort the cleanup. The states that need it most — a
-        // provider failure mid-teardown, a domain damaged behind the app's back — are
-        // exactly the ones where the URL cannot be resolved, and giving up there leaves a
-        // link pointing into CloudStorage forever. Without a destination to match,
-        // removal falls back to the filename plus ownership test below.
-        let expectedDestinationURL: URL?
-        do {
-            expectedDestinationURL = try await resolveMountURL(for: config)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            // Domain and error identity are enough to diagnose this; the provider's
-            // message can carry paths and response detail, so it stays private.
-            let nsError = error as NSError
-            Self.logger.warning(
-                "Removing the convenience symlink for \(config.domainIdentifier, privacy: .public) without a resolved mount URL: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public) \(error.localizedDescription, privacy: .private)"
-            )
-            expectedDestinationURL = nil
-        }
-        let symlinkURL = Self.symlinkURL(for: config, baseDir: baseDir)
-        try removeManagedSymlinkIfNeeded(at: symlinkURL, expectedDestinationURL: expectedDestinationURL)
         try cleanupLegacyShortcutIfNeeded(for: config, baseDir: baseDir)
     }
 
@@ -488,17 +507,62 @@ public final class FileProviderMountProvider: MountProvider {
         return result.isEmpty ? "unnamed" : result
     }
 
-    public static func symlinkFilename(for config: ConnectionConfig) -> String {
-        let sanitizedName = sanitizeName(config.name)
-        return "\(sanitizedName)-\(config.id.uuidString)"
+    /// The extended attribute, on the link itself, naming the connection it belongs to.
+    static let connectionAttributeName = "com.lollipopkit.mfuse.connection"
+
+    /// `<name>-<uuid>`, how links were named before the connection mark existed.
+    /// TODO: remove with `legacyConnectionID(fromFilename:)`.
+    static func legacySymlinkFilename(for config: ConnectionConfig) -> String {
+        "\(sanitizeName(config.name))-\(config.id.uuidString)"
     }
 
-    public static func symlinkURL(for config: ConnectionConfig, baseDir: URL) -> URL {
-        baseDir.appendingPathComponent(symlinkFilename(for: config))
+    /// Every link in `directory` that MFuse created for the connection `id`.
+    public static func managedSymlinks(for id: UUID, in directory: URL) -> [URL] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return names.sorted()
+            .map { directory.appendingPathComponent($0) }
+            .filter { managedConnectionID(at: $0) == id }
     }
 
-    public static func symlinkDisplayPath(for config: ConnectionConfig, baseDir: URL) -> String {
-        symlinkURL(for: config, baseDir: baseDir).path
+    /// The connection a link MFuse created belongs to, or `nil` for anything else in the
+    /// folder, which is the user's. The connection mark on the link is MFuse's own, so it
+    /// is enough; the `<name>-<uuid>` name older builds used is not, and such a link also
+    /// has to point into CloudStorage, as it always had to.
+    public static func managedConnectionID(at url: URL) -> UUID? {
+        guard let destination = linkDestination(of: url) else {
+            return nil
+        }
+        if let id = markedConnectionID(at: url) {
+            return id
+        }
+        // TODO: drop the filename fallback once `<name>-<uuid>` links have been migrated.
+        guard isManagedMountDestination(destination) else {
+            return nil
+        }
+        return legacyConnectionID(fromFilename: url.lastPathComponent)
+    }
+
+    /// The connection named by the link's own mark, without following the link.
+    static func markedConnectionID(at url: URL) -> UUID? {
+        var buffer = [UInt8](repeating: 0, count: 64)
+        let length = getxattr(url.path, connectionAttributeName, &buffer, buffer.count, 0, XATTR_NOFOLLOW)
+        guard length > 0 else { return nil }
+        return String(bytes: buffer[..<length], encoding: .utf8).flatMap(UUID.init(uuidString:))
+    }
+
+    static func markConnection(_ id: UUID, at url: URL) throws {
+        let value = Array(id.uuidString.utf8)
+        guard setxattr(url.path, connectionAttributeName, value, value.count, 0, XATTR_NOFOLLOW) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    /// Where a symbolic link points, resolved against its folder; `nil` for anything else.
+    static func linkDestination(of url: URL) -> URL? {
+        guard let path = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else {
+            return nil
+        }
+        return URL(fileURLWithPath: path, relativeTo: url.deletingLastPathComponent()).standardizedFileURL
     }
 
     static func legacySymlinkBaseURL(
@@ -518,40 +582,22 @@ public final class FileProviderMountProvider: MountProvider {
     }
 
     public static func shouldRemoveManagedSymlink(at url: URL, fileManager: FileManager) -> Bool {
-        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
-              attributes[.type] as? FileAttributeType == .typeSymbolicLink,
-              matchesManagedSymlinkFilename(url.lastPathComponent),
-              let destinationPath = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
-            return false
-        }
-
-        let resolvedDestinationURL = URL(
-            fileURLWithPath: destinationPath,
-            relativeTo: url.deletingLastPathComponent()
-        ).standardizedFileURL
-
-        return isManagedMountDestination(resolvedDestinationURL)
+        managedConnectionID(at: url) != nil
     }
 
-    public static func matchesManagedSymlinkFilename(_ name: String) -> Bool {
+    /// The connection a `<name>-<uuid>` filename names.
+    /// TODO: remove once links from before the connection mark have been migrated.
+    static func legacyConnectionID(fromFilename name: String) -> UUID? {
         let uuidLength = 36
-        guard name.count > uuidLength else {
-            return false
+        guard name.count > uuidLength + 1 else {
+            return nil
         }
-
         let uuidStartIndex = name.index(name.endIndex, offsetBy: -uuidLength)
-        guard uuidStartIndex > name.startIndex else {
-            return false
-        }
-
         let separatorIndex = name.index(before: uuidStartIndex)
         guard name[separatorIndex] == "-" else {
-            return false
+            return nil
         }
-
-        let prefix = name[..<separatorIndex]
-        let suffix = name[uuidStartIndex...]
-        return !prefix.isEmpty && UUID(uuidString: String(suffix)) != nil
+        return UUID(uuidString: String(name[uuidStartIndex...]))
     }
 
     public static func isManagedMountDestination(_ url: URL) -> Bool {
@@ -583,57 +629,13 @@ public final class FileProviderMountProvider: MountProvider {
         }
     }
 
-    private func removeManagedSymlinkIfNeeded(at symlinkURL: URL, expectedDestinationURL: URL?) throws {
-        let fm = FileManager.default
-        guard let itemType = try itemType(at: symlinkURL) else {
-            return
-        }
-        guard itemType == .typeSymbolicLink else {
-            return
-        }
-
-        if let expectedDestinationURL {
-            guard Self.matchesManagedSymlinkFilename(symlinkURL.lastPathComponent) else {
-                return
-            }
-
-            if let destinationPath = try? fm.destinationOfSymbolicLink(atPath: symlinkURL.path) {
-                let resolvedDestinationURL = URL(
-                    fileURLWithPath: destinationPath,
-                    relativeTo: symlinkURL.deletingLastPathComponent()
-                ).standardizedFileURL
-                if resolvedDestinationURL == expectedDestinationURL.standardizedFileURL {
-                    try fm.removeItem(at: symlinkURL)
-                    return
-                }
-            }
-
-            // Replace a stale link of ours so the config points at the current mount, but
-            // apply the same ownership test as the branch below: a link with a matching
-            // name that resolves outside CloudStorage was put there by the user, and
-            // reveal now runs this on every click. createSymlink leaves the path alone and
-            // warns instead.
-            guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
-                return
-            }
-            try fm.removeItem(at: symlinkURL)
-            return
-        }
-
-        guard Self.shouldRemoveManagedSymlink(at: symlinkURL, fileManager: fm) else {
-            return
-        }
-
-        try fm.removeItem(at: symlinkURL)
-    }
-
     private func cleanupLegacyShortcutIfNeeded(for config: ConnectionConfig, baseDir: URL?) throws {
         guard let legacyBaseURL = Self.legacySymlinkBaseURL(),
               legacyBaseURL.standardizedFileURL != baseDir?.standardizedFileURL else {
             return
         }
 
-        let legacyShortcutURL = Self.symlinkURL(for: config, baseDir: legacyBaseURL)
+        let legacyShortcutURL = legacyBaseURL.appendingPathComponent(Self.legacySymlinkFilename(for: config))
         let fm = FileManager.default
 
         if Self.shouldRemoveManagedSymlink(at: legacyShortcutURL, fileManager: fm) {
@@ -643,7 +645,7 @@ public final class FileProviderMountProvider: MountProvider {
 
         guard let itemType = try itemType(at: legacyShortcutURL),
               itemType == .typeDirectory,
-              Self.matchesManagedSymlinkFilename(legacyShortcutURL.lastPathComponent),
+              Self.legacyConnectionID(fromFilename: legacyShortcutURL.lastPathComponent) != nil,
               let contents = try? fm.contentsOfDirectory(atPath: legacyShortcutURL.path),
               contents.isEmpty else {
             return

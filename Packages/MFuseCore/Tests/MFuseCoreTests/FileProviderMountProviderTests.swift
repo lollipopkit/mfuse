@@ -158,16 +158,16 @@ final class FileProviderMountProviderTests: XCTestCase {
         )
     }
 
-    func testManagedSymlinkFilenameNeedsANameAndAUUID() {
-        let uuid = UUID().uuidString
-        XCTAssertTrue(FileProviderMountProvider.matchesManagedSymlinkFilename("Backup-\(uuid)"))
-        XCTAssertFalse(FileProviderMountProvider.matchesManagedSymlinkFilename(uuid))
-        XCTAssertFalse(FileProviderMountProvider.matchesManagedSymlinkFilename("-\(uuid)"))
-        XCTAssertFalse(FileProviderMountProvider.matchesManagedSymlinkFilename("Backup-not-a-uuid"))
+    func testLegacySymlinkFilenameNeedsANameAndAUUID() {
+        let uuid = UUID()
+        XCTAssertEqual(FileProviderMountProvider.legacyConnectionID(fromFilename: "Backup-\(uuid.uuidString)"), uuid)
+        XCTAssertNil(FileProviderMountProvider.legacyConnectionID(fromFilename: uuid.uuidString))
+        XCTAssertNil(FileProviderMountProvider.legacyConnectionID(fromFilename: "-\(uuid.uuidString)"))
+        XCTAssertNil(FileProviderMountProvider.legacyConnectionID(fromFilename: "Backup-not-a-uuid"))
         // Long enough to reach the UUID parse rather than stopping at the length check.
-        XCTAssertFalse(
-            FileProviderMountProvider.matchesManagedSymlinkFilename(
-                "Backup-" + String(repeating: "x", count: uuid.count)
+        XCTAssertNil(
+            FileProviderMountProvider.legacyConnectionID(
+                fromFilename: "Backup-" + String(repeating: "x", count: uuid.uuidString.count)
             )
         )
     }
@@ -272,6 +272,99 @@ final class FileProviderMountProviderTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: firstURL.path))
     }
 
+    /// A link is named after its connection alone, and carries the connection it belongs
+    /// to as a mark on the link itself.
+    func testCreateSymlinkUsesThePlainNameAndMarksTheLink() async throws {
+        let (provider, mountURL) = try makeProviderWithMount()
+        let config = ConnectionConfig(name: "nas", backendType: .sftp, host: "example.com")
+
+        let created = try await provider.createSymlink(for: config)
+
+        XCTAssertEqual(created?.lastPathComponent, "nas")
+        let link = try XCTUnwrap(created)
+        XCTAssertEqual(FileProviderMountProvider.markedConnectionID(at: link), config.id)
+        XCTAssertEqual(FileProviderMountProvider.managedConnectionID(at: link), config.id)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), mountURL.path)
+    }
+
+    /// Two connections with the same name: the second takes the name with a short id.
+    func testSameNamedConnectionsGetDistinctLinks() async throws {
+        let (provider, _) = try makeProviderWithMount()
+        let first = ConnectionConfig(name: "nas", backendType: .sftp, host: "a.example.com")
+        let second = ConnectionConfig(name: "nas", backendType: .sftp, host: "b.example.com")
+
+        let firstLink = try await provider.createSymlink(for: first)
+        let secondLink = try await provider.createSymlink(for: second)
+
+        XCTAssertEqual(firstLink?.lastPathComponent, "nas")
+        XCTAssertEqual(secondLink?.lastPathComponent, "nas-\(second.id.uuidString.prefix(8).lowercased())")
+        // Creating the first again keeps its link rather than trading names.
+        let again = try await provider.createSymlink(for: first)
+        XCTAssertEqual(again?.lastPathComponent, "nas")
+
+        // With the plain name free again, the second keeps its suffixed link: a path the
+        // user may have bookmarked does not move.
+        try await provider.removeSymlink(for: first)
+        let kept = try await provider.createSymlink(for: second)
+        XCTAssertEqual(kept, secondLink)
+    }
+
+    /// A `<name>-<uuid>` link from an older build becomes the plain-named one.
+    /// TODO: remove with the legacy filename fallback.
+    func testCreateSymlinkMigratesALegacyNamedLink() async throws {
+        let (provider, _) = try makeProviderWithMount()
+        let config = ConnectionConfig(name: "nas", backendType: .sftp, host: "example.com")
+        let legacyURL = temporaryDirectoryURL.appendingPathComponent("nas-\(config.id.uuidString)")
+        let cloudStorageURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/CloudStorage/MFuse-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: legacyURL, withDestinationURL: cloudStorageURL)
+        XCTAssertEqual(FileProviderMountProvider.managedConnectionID(at: legacyURL), config.id)
+
+        let created = try await provider.createSymlink(for: config)
+
+        XCTAssertEqual(created?.lastPathComponent, "nas")
+        XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: legacyURL.path))
+    }
+
+    /// A renamed connection's link follows the new name, and removal finds it by the
+    /// connection, whatever it is called.
+    func testRenameMovesTheLinkAndRemovalFindsItByConnection() async throws {
+        let (provider, _) = try makeProviderWithMount()
+        let original = ConnectionConfig(name: "old", backendType: .sftp, host: "example.com")
+        var renamed = original
+        renamed.name = "new"
+
+        _ = try await provider.createSymlink(for: original)
+        let moved = try await provider.createSymlink(for: renamed)
+
+        XCTAssertEqual(moved?.lastPathComponent, "new")
+        XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(
+            atPath: temporaryDirectoryURL.appendingPathComponent("old").path
+        ))
+
+        try await provider.removeSymlink(for: original)
+        XCTAssertTrue(FileProviderMountProvider.managedSymlinks(for: original.id, in: temporaryDirectoryURL).isEmpty)
+    }
+
+    /// An unmarked link outside CloudStorage is the user's, whatever its name.
+    func testUnmarkedLinkOutsideCloudStorageIsNotManaged() throws {
+        let uuid = UUID()
+        let url = temporaryDirectoryURL.appendingPathComponent("nas-\(uuid.uuidString)")
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: temporaryDirectoryURL)
+        XCTAssertNil(FileProviderMountProvider.managedConnectionID(at: url))
+    }
+
+    private func makeProviderWithMount() throws -> (FileProviderMountProvider, URL) {
+        let linksURL = temporaryDirectoryURL!
+        let mountURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mount-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: mountURL) }
+        let provider = FileProviderMountProvider(symlinkBaseURL: linksURL)
+        provider.resolveMountURLOverride = { _ in mountURL }
+        return (provider, mountURL)
+    }
+
     /// Replacing the folder clears MFuse's links from the old one and nothing else.
     func testRemoveManagedSymlinksLeavesForeignItems() throws {
         let fileManager = FileManager.default
@@ -355,18 +448,12 @@ final class FileProviderMountProviderTests: XCTestCase {
         let totalResolutions = await gate.resolutionCount
         XCTAssertEqual(totalResolutions, 2)
 
-        // The link still points at the first pass's destination, and deliberately so:
-        // these temporary paths are not under `~/Library/CloudStorage`, so the ownership
-        // test refuses to replace the existing link and the queued pass leaves it alone.
-        // Asserting it keeps the outcome of this scenario written down — what the
-        // serialization above buys is that the second pass resolves *after* the first has
-        // finished, not that it overwrites what a real mount would have let it replace.
-        let symlinkURL = FileProviderMountProvider.symlinkURL(
-            for: config,
-            baseDir: temporaryDirectoryURL
-        )
+        // The queued pass resolved after the first had finished, and the link is the
+        // connection's own (it carries the connection mark), so it now points at the newer
+        // destination.
+        let symlinkURL = temporaryDirectoryURL.appendingPathComponent("Renamed")
         let destination = try FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path)
-        XCTAssertEqual(destination, olderDestinationURL.path)
+        XCTAssertEqual(destination, newerDestinationURL.path)
     }
 
     /// A link whose destination is gone resolves as absent to `fileExists`, so the
@@ -384,10 +471,7 @@ final class FileProviderMountProviderTests: XCTestCase {
         try FileManager.default.createDirectory(at: mountURL, withIntermediateDirectories: true)
         provider.resolveMountURLOverride = { _ in mountURL }
 
-        let symlinkURL = FileProviderMountProvider.symlinkURL(
-            for: config,
-            baseDir: temporaryDirectoryURL
-        )
+        let symlinkURL = temporaryDirectoryURL.appendingPathComponent(config.name)
         let missingDestinationURL = temporaryDirectoryURL.appendingPathComponent("gone")
         try FileManager.default.createSymbolicLink(
             at: symlinkURL,
@@ -396,7 +480,10 @@ final class FileProviderMountProviderTests: XCTestCase {
 
         let createdURL = try await provider.createSymlink(for: config)
 
-        XCTAssertNil(createdURL)
+        // The plain name is taken by a link MFuse did not make, so the connection's link
+        // takes the name with a short id and the user's link is left as it was.
+        let shortID = config.id.uuidString.prefix(8).lowercased()
+        XCTAssertEqual(createdURL?.lastPathComponent, "\(config.name)-\(shortID)")
         XCTAssertEqual(
             try FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path),
             missingDestinationURL.path,

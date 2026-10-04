@@ -396,7 +396,7 @@ actor MockMountProvider: MountProvider {
         }
         guard let mountURL = mountURLs[config.domainIdentifier] else { return nil }
         let symlinkURL = fixedSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         try? FileManager.default.removeItem(at: symlinkURL)
         try FileManager.default.createDirectory(
             at: fixedSymlinkBaseURL,
@@ -412,7 +412,7 @@ actor MockMountProvider: MountProvider {
             throw RemoteFileSystemError.operationFailed("mock remove symlink failure")
         }
         let symlinkURL = fixedSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         try? FileManager.default.removeItem(at: symlinkURL)
     }
 }
@@ -782,7 +782,7 @@ final class ConnectionManagerTests: XCTestCase {
         _ = await waitForMountState(config.id)
 
         let symlinkURL = testSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
 
         let gate = TestGate()
@@ -1814,7 +1814,7 @@ final class ConnectionManagerTests: XCTestCase {
         await manager.connect(config.id)
         _ = await waitForMountState(config.id)
         let symlinkURL = testSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
 
         // The gate sits after removeSymlink, so a repair starting now would recreate a
@@ -1860,7 +1860,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
 
         let symlinkURL = testSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
 
         await mountProvider.setDomainStates([
@@ -2013,7 +2013,7 @@ final class ConnectionManagerTests: XCTestCase {
         await manager.connect(config.id)
         _ = await waitForMountState(config.id)
         let symlinkURL = testSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
 
         // The domain went away behind the app's back.
@@ -2686,7 +2686,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
         XCTAssertEqual(manager.effectiveMountState(for: config.id), .mounted(path: mountURL.path))
         let symlinkURL = testSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
     }
 
@@ -2716,7 +2716,7 @@ final class ConnectionManagerTests: XCTestCase {
         XCTAssertEqual(mountedState, .mounted(path: mountURL.path))
         XCTAssertEqual(manager.effectiveMountState(for: config.id), .mounted(path: mountURL.path))
         let symlinkURL = testSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
     }
 
@@ -2847,7 +2847,7 @@ final class ConnectionManagerTests: XCTestCase {
         _ = await waitForMountState(config.id)
 
         let symlinkURL = testSymlinkBaseURL
-            .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
+            .appendingPathComponent(FileProviderMountProvider.sanitizeName(config.name))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlinkURL.path))
 
         await manager.disconnect(config.id)
