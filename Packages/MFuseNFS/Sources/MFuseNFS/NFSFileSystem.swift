@@ -121,13 +121,19 @@ public actor NFSFileSystem: RemoteFileSystem {
     }
 
     /// Refuses an existing destination, like every other backend; NFS itself would
-    /// replace it.
+    /// replace it. `moveItem` checks for one before it renames.
     public func move(from source: RemotePath, to destination: RemotePath) async throws {
         guard !source.isRoot, !destination.isRoot else {
             throw RemoteFileSystemError.operationFailed("The root of an NFS mount cannot be moved")
         }
-        try await perform(on: source) {
-            try await client.moveItem(at: source.absoluteString, to: destination.absoluteString)
+        do {
+            try await client.moveItem(at: source.absoluteString, to: destination.absoluteString, replacing: false)
+        } catch NFSClientError.alreadyExists {
+            // About the destination, where `mapped` would name the source.
+            throw RemoteFileSystemError.alreadyExists(destination)
+        } catch {
+            connected = await client.isConnected
+            throw Self.mapped(error, path: source)
         }
     }
 

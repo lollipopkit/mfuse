@@ -6,11 +6,18 @@
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
-ENV_FILE=$(mktemp); trap 'rm -f "$ENV_FILE"' EXIT
+# Values are taken literally, never evaluated: the script runs as root.
 PUBKEY=""
 while IFS= read -r line; do
   case "$line" in
-    MFUSE_E2E_*=*) echo "$line" >> "$ENV_FILE" ;;
+    MFUSE_E2E_*=*)
+      key="${line%%=*}"
+      if [[ ! "$key" =~ ^MFUSE_E2E_[A-Z0-9_]+$ ]]; then
+        echo "setup-vm.sh: invalid setting name: $key" >&2
+        exit 1
+      fi
+      printf -v "$key" '%s' "${line#*=}"
+      ;;
     ssh-ed25519\ *) PUBKEY="$line" ;;
   esac
 done
@@ -18,8 +25,6 @@ if [ -z "$PUBKEY" ]; then
   echo "setup-vm.sh: no ssh-ed25519 public key on stdin" >&2
   exit 1
 fi
-# shellcheck disable=SC1090
-. "$ENV_FILE"
 U="$MFUSE_E2E_USER"
 
 # --- user (SFTP, FTP, SMB share owner) ---

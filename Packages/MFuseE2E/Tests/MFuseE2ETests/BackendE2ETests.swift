@@ -76,6 +76,37 @@ final class BackendE2ETests: XCTestCase {
                       rangeReads: true, copy: true)
     }
 
+    /// NFS's RENAME replaces an existing file; MFuse must refuse instead, naming the
+    /// destination, and leave both files as they were.
+    func testNFSMoveRefusesExistingDestination() async throws {
+        let env = try E2EEnvironment()
+        let fileSystem = NFSFileSystem(config: try nfsConfig(env, export: "/srv/nfs"), credential: Credential())
+        try await fileSystem.connect()
+        let root = RemotePath.root.appending("mfuse-e2e-move-\(UUID().uuidString.prefix(8))")
+        let source = root.appending("a.txt")
+        let destination = root.appending("b.txt")
+        try await fileSystem.createDirectory(at: root)
+        do {
+            try await fileSystem.createFile(at: source, data: Data("a".utf8))
+            try await fileSystem.createFile(at: destination, data: Data("b".utf8))
+            do {
+                try await fileSystem.move(from: source, to: destination)
+                XCTFail("move replaced an existing destination")
+            } catch RemoteFileSystemError.alreadyExists(let path) {
+                XCTAssertEqual(path, destination)
+            }
+            let destinationData = try await fileSystem.readFile(at: destination)
+            let sourceData = try await fileSystem.readFile(at: source)
+            XCTAssertEqual(destinationData, Data("b".utf8))
+            XCTAssertEqual(sourceData, Data("a".utf8))
+        } catch {
+            try? await fileSystem.delete(at: root)
+            throw error
+        }
+        try await fileSystem.delete(at: root)
+        try await fileSystem.disconnect()
+    }
+
     /// Without `insecure` the server refuses MFuse's unprivileged port; the error has to
     /// say what to change.
     func testNFSSecureExportExplainsInsecure() async throws {
