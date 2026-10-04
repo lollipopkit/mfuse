@@ -1,0 +1,59 @@
+name: Xcode package lockfile
+
+# Xcode builds the app from its own lockfile, which Dependabot does not update. On
+# Dependabot's PRs this moves the app to the newest versions the manifests allow and commits
+# the result; on other PRs it checks that the lockfile still matches the manifests.
+on:
+  pull_request:
+    paths:
+      - "Packages/*/Package.swift"
+      - "Packages/*/Package.resolved"
+      - "project.yml"
+      - "MFuse.xcodeproj/**"
+      - ".github/workflows/xcode-lockfile.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xcode-lockfile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  LOCKFILE: MFuse.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+  FROM_DEPENDABOT: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+
+jobs:
+  lockfile:
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - run: xcodebuild -version
+
+      - name: Update the app's packages
+        if: env.FROM_DEPENDABOT == 'true'
+        run: make update-packages
+
+      - name: Commit the lockfile
+        if: env.FROM_DEPENDABOT == 'true'
+        run: |
+          if git diff --quiet -- "$LOCKFILE"; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(deps): sync the app's package lockfile" -- "$LOCKFILE"
+          git push
+
+      - name: Check the lockfile matches the manifests
+        if: env.FROM_DEPENDABOT != 'true'
+        run: |
+          make resolve
+          git diff --exit-code -- "$LOCKFILE" || {
+            echo "::error::$LOCKFILE is out of date; run 'make resolve' and commit it."
+            exit 1
+          }

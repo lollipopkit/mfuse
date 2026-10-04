@@ -1,4 +1,4 @@
-.PHONY: all build test test-stable test-all test-e2e generate clean lint debug-install release-install release-dmg sync-homebrew-cask release
+.PHONY: all build test test-stable test-all test-e2e generate resolve update-packages clean lint debug-install release-install release-dmg sync-homebrew-cask release
 
 SCHEME = MFuse
 APP_NAME = MFuse
@@ -59,6 +59,19 @@ test-e2e:
 generate:
 	$(XCODEGEN_ENV) xcodegen generate
 
+# The app's package versions are pinned in XCODE_PACKAGE_RESOLVED. Dependabot only updates
+# the lockfiles next to each Package.swift, which Xcode ignores.
+XCODE_PACKAGE_RESOLVED = MFuse.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# Brings the app's lockfile in line with the manifests, keeping every pin that still fits.
+resolve:
+	xcodebuild -resolvePackageDependencies -project MFuse.xcodeproj -scheme $(SCHEME)
+
+# Moves every app dependency to the newest version its manifest allows.
+update-packages:
+	rm -f $(XCODE_PACKAGE_RESOLVED)
+	$(MAKE) resolve
+
 clean:
 	xcodebuild -scheme $(SCHEME) clean
 	rm -rf DerivedData .build
@@ -79,7 +92,7 @@ debug-install: generate
 # and the Release profiles from project.local.yml, hardened runtime) so problems that only
 # show up in a release build can be reproduced without archiving, notarizing or publishing.
 release-install: generate
-	xcodebuild -scheme $(SCHEME) -configuration Release -derivedDataPath $(RELEASE_INSTALL_DERIVED_DATA) build \
+	xcodebuild -scheme $(SCHEME) -configuration Release -derivedDataPath $(RELEASE_INSTALL_DERIVED_DATA) -onlyUsePackageVersionsFromResolvedFile build \
 		MARKETING_VERSION="$(RELEASE_MARKETING_VERSION)" \
 		CURRENT_PROJECT_VERSION="$(COMMIT_COUNT)" \
 		OTHER_CODE_SIGN_FLAGS="--options runtime"

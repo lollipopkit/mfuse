@@ -4,6 +4,7 @@ updates:
     directories:
       - "/Packages/MFuseCore"
       - "/Packages/MFuseDropbox"
+      - "/Packages/MFuseE2E"
       - "/Packages/MFuseFTP"
       - "/Packages/MFuseGoogleDrive"
       - "/Packages/MFuseNFS"
@@ -26,6 +27,17 @@ updates:
       swift-dependencies:
         patterns:
           - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "dependencies"
+      - "github-actions"
 
   - package-ecosystem: "npm"
     directory: "/website"
