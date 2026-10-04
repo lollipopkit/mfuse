@@ -20,6 +20,7 @@ struct MFuseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var connectionManager: ConnectionManager
     @StateObject private var appSettings: AppSettingsStore
+    @StateObject private var shortcutsFolder: ShortcutsFolderStore
     @State private var didPerformInitialSetup = false
     /// What launch reconciliation left unresolved, for the user to see and retry.
     @State private var startupDomainSyncFailure: String?
@@ -38,7 +39,9 @@ struct MFuseApp: App {
         self.storage = storage
         self.credentialProvider = credentialProvider
         self.iCloudSyncService = iCloudSyncService
-        self.mountProvider = FileProviderMountProvider()
+        let shortcutsFolder = ShortcutsFolderStore()
+        let currentShortcutsFolder = shortcutsFolder.current
+        self.mountProvider = FileProviderMountProvider(symlinkDirectory: { currentShortcutsFolder.url })
         let registry = BackendRegistry.shared
         BackendRegistryFactory.register(into: registry) { updatedCredential, connectionID in
             try await credentialProvider.store(updatedCredential, for: connectionID)
@@ -83,6 +86,17 @@ struct MFuseApp: App {
                 break
             }
         }
+        // A new shortcuts folder takes the links with it: MFuse's links leave the old one,
+        // and every mounted connection gets its link again in the new one.
+        shortcutsFolder.onFolderChange = { [manager] previousFolder in
+            if let previousFolder {
+                FileProviderMountProvider.removeManagedSymlinks(in: previousFolder)
+            }
+            for config in manager.connections {
+                await manager.repairMountState(for: config.id)
+            }
+        }
+        _shortcutsFolder = StateObject(wrappedValue: shortcutsFolder)
         _connectionManager = StateObject(wrappedValue: manager)
         _appSettings = StateObject(wrappedValue: AppSettingsStore(
             storage: storage,
@@ -167,6 +181,7 @@ struct MFuseApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appSettings)
+                .environmentObject(shortcutsFolder)
         }
     }
 

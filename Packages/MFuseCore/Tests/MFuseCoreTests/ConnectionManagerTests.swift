@@ -206,7 +206,8 @@ actor TestGate {
 // MARK: - Mock MountProvider
 
 actor MockMountProvider: MountProvider {
-    let symlinkBaseURL: URL
+    let fixedSymlinkBaseURL: URL
+    nonisolated var symlinkBaseURL: URL? { fixedSymlinkBaseURL }
     var registeredDomainIDs: Set<String> = []
     var disconnectedDomainIDs: Set<String> = []
     var ensureRegisteredInvocations: [String] = []
@@ -238,7 +239,7 @@ actor MockMountProvider: MountProvider {
     var domainStatesGate: TestGate?
 
     init(symlinkBaseURL: URL) {
-        self.symlinkBaseURL = symlinkBaseURL
+        self.fixedSymlinkBaseURL = symlinkBaseURL
     }
 
     func setDomainStates(_ states: [RegisteredDomainState]) {
@@ -394,11 +395,11 @@ actor MockMountProvider: MountProvider {
             await createSymlinkGate.wait()
         }
         guard let mountURL = mountURLs[config.domainIdentifier] else { return nil }
-        let symlinkURL = symlinkBaseURL
+        let symlinkURL = fixedSymlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         try? FileManager.default.removeItem(at: symlinkURL)
         try FileManager.default.createDirectory(
-            at: symlinkBaseURL,
+            at: fixedSymlinkBaseURL,
             withIntermediateDirectories: true
         )
         try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: mountURL)
@@ -410,7 +411,7 @@ actor MockMountProvider: MountProvider {
         if removeSymlinkShouldFail {
             throw RemoteFileSystemError.operationFailed("mock remove symlink failure")
         }
-        let symlinkURL = symlinkBaseURL
+        let symlinkURL = fixedSymlinkBaseURL
             .appendingPathComponent(FileProviderMountProvider.symlinkFilename(for: config))
         try? FileManager.default.removeItem(at: symlinkURL)
     }

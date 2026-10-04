@@ -1971,7 +1971,8 @@ public final class ConnectionManager: ObservableObject {
             let path = try await resolveMountPath(for: config, using: mountProvider)
             try Task.checkCancellation()
             do {
-                if try await mountProvider.createSymlink(for: config) == nil {
+                if try await mountProvider.createSymlink(for: config) == nil,
+                   mountProvider.symlinkBaseURL != nil {
                     logger.warning(
                         "Mounted domain \(config.domainIdentifier, privacy: .public) without creating convenience symlink"
                     )
@@ -2274,8 +2275,7 @@ public final class ConnectionManager: ObservableObject {
 
     private func cleanupOrphanedSymlinks(for connections: [ConnectionConfig]) async throws {
         let fm = FileManager.default
-        guard let mountProvider else { return }
-        let baseDir = mountProvider.symlinkBaseURL
+        guard let mountProvider, let baseDir = mountProvider.symlinkBaseURL else { return }
 
         guard fm.fileExists(atPath: baseDir.path),
               let contents = try? fm.contentsOfDirectory(atPath: baseDir.path) else {

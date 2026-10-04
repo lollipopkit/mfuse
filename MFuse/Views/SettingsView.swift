@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var shortcutsFolder: ShortcutsFolderStore
 
     var body: some View {
         Form {
@@ -43,13 +44,48 @@ struct SettingsView: View {
                 }
             }
 
+            Section(AppL10n.string("settings.section.shortcuts", fallback: "Finder Shortcuts")) {
+                LabeledContent(
+                    AppL10n.string("settings.shortcuts.folder", fallback: "Folder"),
+                    value: shortcutsFolder.folderURL.map { ($0.path as NSString).abbreviatingWithTildeInPath }
+                        ?? AppL10n.string("settings.shortcuts.none", fallback: "None")
+                )
+
+                if ShortcutsFolderStore.isUserSelectable {
+                    HStack {
+                        Button(AppL10n.string("settings.shortcuts.choose", fallback: "Choose Folder…")) {
+                            Task { await shortcutsFolder.chooseFolder() }
+                        }
+                        if shortcutsFolder.folderURL != nil {
+                            Button(AppL10n.string("settings.shortcuts.clear", fallback: "Stop Using Folder")) {
+                                Task { await shortcutsFolder.clearFolder() }
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    shortcutsFolder.folderURL == nil
+                        ? AppL10n.string(
+                            "settings.shortcuts.noneDescription",
+                            fallback: "Without a folder, mounts are still in the Finder sidebar under Locations."
+                        )
+                        : AppL10n.string(
+                            "settings.shortcuts.description",
+                            fallback: "MFuse keeps a link to each mounted connection in this folder."
+                        )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             Section(AppL10n.string("settings.section.about", fallback: "About")) {
                 LabeledContent(AppL10n.string("settings.field.version", fallback: "Version"), value: appSettings.versionString)
                 LabeledContent(AppL10n.string("settings.field.build", fallback: "Build"), value: appSettings.buildString)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 340)
+        .frame(width: 460, height: 460)
         .padding(20)
         .task {
             appSettings.refreshLaunchAtLoginStatus()

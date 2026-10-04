@@ -276,8 +276,7 @@ public final class DomainManager: ObservableObject {
 
         // Remove orphaned symlinks
         let fm = FileManager.default
-        let baseDir = mountProvider.symlinkBaseURL
-        if fm.fileExists(atPath: baseDir.path) {
+        if let baseDir = mountProvider.symlinkBaseURL, fm.fileExists(atPath: baseDir.path) {
             let contents: [String]
             do {
                 contents = try fm.contentsOfDirectory(atPath: baseDir.path)

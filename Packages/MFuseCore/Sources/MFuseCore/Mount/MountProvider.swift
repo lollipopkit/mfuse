@@ -112,8 +112,8 @@ public struct RegisteredDomainState: Sendable, Equatable {
 /// Abstraction over the mounting mechanism.
 public protocol MountProvider: Sendable {
 
-    /// Base directory used for convenience symlinks.
-    var symlinkBaseURL: URL { get }
+    /// Base directory used for convenience symlinks, or `nil` when none is configured.
+    var symlinkBaseURL: URL? { get }
 
     /// Ensure a File Provider domain exists for the connection and refresh bootstrap state.
     func ensureRegistered(config: ConnectionConfig) async throws
@@ -136,7 +136,8 @@ public protocol MountProvider: Sendable {
     /// Get the user-visible filesystem URL for a mounted connection.
     func mountURL(for config: ConnectionConfig) async throws -> URL?
 
-    /// Create a convenience symlink at ~/MFuse/<name> pointing to the actual mount path.
+    /// Create a convenience symlink in `symlinkBaseURL` pointing to the actual mount path;
+    /// `nil` when no link was created, including when no directory is configured.
     @discardableResult
     func createSymlink(for config: ConnectionConfig) async throws -> URL?
 
