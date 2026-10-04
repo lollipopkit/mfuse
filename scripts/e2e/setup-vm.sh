@@ -135,6 +135,20 @@ EOF
 a2enconf -q mfuse-dav >/dev/null
 systemctl reload apache2
 
+# --- NFSv3 (nfs-kernel-server). MFuse sends from an unprivileged port, so the export it
+# mounts needs `insecure`; /srv/nfs-secure lacks it, to check how that refusal is reported.
+if ! dpkg -s nfs-kernel-server >/dev/null 2>&1; then
+  apt-get install -y -qq nfs-kernel-server >/dev/null
+fi
+install -d -o "$U" -g "$U" /srv/nfs /srv/nfs-secure
+cat > /etc/exports <<EOF
+/srv/nfs        *(rw,sync,insecure,no_subtree_check)
+/srv/nfs-secure *(rw,sync,no_subtree_check)
+EOF
+exportfs -ra
+systemctl enable --now nfs-server >/dev/null 2>&1
+systemctl restart nfs-server
+
 # --- S3 (SeaweedFS; versitygw mishandles encoding-type, see versity/versitygw#1985) ---
 if dpkg -s versitygw >/dev/null 2>&1; then apt-get remove -y -qq versitygw >/dev/null; fi
 rm -rf /srv/s3
@@ -180,4 +194,4 @@ if ! bucket_listed; then
 fi
 
 sleep 1
-for s in ssh vsftpd vsftpd-implicit smbd apache2 mfuse-s3; do printf '%-10s %s\n' "$s" "$(systemctl is-active $s)"; done
+for s in ssh vsftpd vsftpd-implicit smbd apache2 nfs-server mfuse-s3; do printf '%-10s %s\n' "$s" "$(systemctl is-active $s)"; done

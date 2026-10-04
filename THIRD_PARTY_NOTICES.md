@@ -24,9 +24,12 @@ Those licenses continue to apply to the respective third-party code.
 
 ### Apache-2.0
 
+- `nfs.swift`
+  - Source: `https://github.com/lollipopkit/nfs.swift`
+  - Used by: `Packages/MFuseNFS`
 - `swift-nio`
   - Source: `https://github.com/apple/swift-nio`
-  - Used by: `Packages/MFuseFTP`
+  - Used by: `Packages/MFuseFTP`, `Packages/MFuseNFS` (through `nfs.swift`)
 - `swift-nio-ssl`
   - Source: `https://github.com/apple/swift-nio-ssl`
   - Used by: `Packages/MFuseFTP`

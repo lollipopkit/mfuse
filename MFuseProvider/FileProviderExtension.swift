@@ -1149,7 +1149,7 @@ public final class FileProviderExtension: NSObject, NSFileProviderReplicatedExte
 
     private func supportsChunkedRead(for backendType: BackendType) -> Bool {
         switch backendType {
-        case .s3, .sftp:
+        case .s3, .sftp, .nfs:
             return true
         default:
             return false

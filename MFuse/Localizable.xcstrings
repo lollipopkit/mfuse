@@ -3192,6 +3192,122 @@
         }
       }
     },
+    "editor.field.nfsGID" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID (optional)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID (opcional)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID (facultatif)"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID (opsional)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID (facoltativo)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID（任意）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID(선택 사항)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID（可选）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GID（選填）"
+          }
+        }
+      }
+    },
+    "editor.field.nfsUID" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID (optional)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID (opcional)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID (facultatif)"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID (opsional)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID (facoltativo)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID（任意）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID(선택 사항)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID（可选）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "UID（選填）"
+          }
+        }
+      }
+    },
     "editor.field.passphraseOptional" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3719,6 +3835,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "使用 TLS（HTTPS）"
+          }
+        }
+      }
+    },
+    "editor.footer.nfs" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFSv3 over TCP. Remote Path is the exported directory. The server sees requests from these IDs (your Mac's by default) and from a port above 1024, so a Linux export needs the insecure option."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFSv3 sobre TCP. La ruta remota es el directorio exportado. El servidor recibe las solicitudes con estos ID (por defecto, los de tu Mac) y desde un puerto superior a 1024, por lo que una exportación de Linux necesita la opción insecure."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFSv3 sur TCP. Le chemin distant est le répertoire exporté. Le serveur reçoit les requêtes avec ces identifiants (ceux de votre Mac par défaut) et depuis un port supérieur à 1024 : un export Linux doit donc avoir l'option insecure."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFSv3 melalui TCP. Jalur Jarak Jauh adalah direktori yang diekspor. Server menerima permintaan dengan ID ini (secara default milik Mac Anda) dan dari port di atas 1024, sehingga ekspor Linux memerlukan opsi insecure."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFSv3 su TCP. Il percorso remoto è la directory esportata. Il server riceve le richieste con questi ID (per impostazione predefinita quelli del Mac) e da una porta superiore a 1024, quindi un export Linux richiede l'opzione insecure."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP 上の NFSv3 です。リモートパスにはエクスポートされたディレクトリを指定します。サーバにはこれらの ID（既定では Mac の ID）と 1024 より大きいポートからのリクエストとして届くため、Linux のエクスポートには insecure オプションが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TCP를 통한 NFSv3입니다. 원격 경로는 내보낸 디렉터리입니다. 서버는 이 ID(기본값은 Mac의 ID)와 1024보다 큰 포트에서 오는 요청으로 받으므로 Linux 내보내기에는 insecure 옵션이 필요합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 TCP 上的 NFSv3。远程路径填写导出的目录。服务器收到的请求使用这里的 ID（默认是这台 Mac 的），来源端口大于 1024，所以 Linux 的 export 需要加 insecure 选项。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 TCP 上的 NFSv3。遠端路徑填寫匯出的目錄。伺服器收到的請求使用這裡的 ID（預設是這台 Mac 的），來源連接埠大於 1024，所以 Linux 的 export 需要加上 insecure 選項。"
           }
         }
       }
@@ -4485,6 +4659,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一般"
+          }
+        }
+      }
+    },
+    "editor.section.nfs" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFS Settings"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configuración de NFS"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paramètres NFS"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pengaturan NFS"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impostazioni NFS"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFS 設定"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFS 설정"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFS 设置"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFS 設定"
           }
         }
       }

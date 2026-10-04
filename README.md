@@ -42,6 +42,7 @@ Google Drive sign-in uses MFuse's OAuth app, which is still in Google's verifica
 
 - SFTP directory enumeration has a compatibility fallback: when the normal SFTP listing path times out or hits certain connection-level failures, MFuse may execute a small `python3` snippet on the remote host over the existing SSH session to enumerate the directory. This fallback is not used for normal successful listings, permission-denied errors, or missing-path errors. Remote hosts that hit this fallback must have `python3` available, otherwise enumeration fails.
 - FTP uses passive mode only (`EPSV`, falling back to `PASV`); active mode cannot work behind NAT. With TLS on, port 990 uses implicit FTPS and any other port uses explicit FTPS (`AUTH TLS`); data connections are always encrypted (`PROT P`). Servers that require TLS session reuse on data connections (vsftpd's `require_ssl_reuse=YES`, FileZilla Server's default) are not supported yet: the TLS library MFuse uses cannot resume a session.
+- NFS is NFSv3 over TCP, through [nfs.swift](https://github.com/lollipopkit/nfs.swift); NFSv4-only servers are not supported. Remote Path is the exported directory, which is mounted through the portmapper (port 111) and the MOUNT service. Requests carry `AUTH_SYS` with the UID and GID set on the connection, or the Mac user's own by default, and come from a port above 1024, which the File Provider extension cannot go below: a Linux export needs the `insecure` option (for example `/srv/nfs *(rw,insecure,no_subtree_check)`), or the server refuses the mount.
 
 ## Project Structure
 
@@ -172,10 +173,10 @@ Some backend tests are placeholders or integration-oriented, so protocol coverag
 
 ### End-to-end tests
 
-`Packages/MFuseE2E` runs the same file operations — create, overwrite, range and streamed reads, unicode names, move, copy, recursive delete — against real SFTP (password and key), FTP, FTPS (explicit and implicit), WebDAV, SMB and S3 servers. It does not exercise the File Provider extension itself.
+`Packages/MFuseE2E` runs the same file operations — create, overwrite, range and streamed reads, unicode names, move, copy, recursive delete — against real SFTP (password and key), FTP, FTPS (explicit and implicit), WebDAV, SMB, NFSv3 and S3 servers. It does not exercise the File Provider extension itself.
 
-1. Provision a Debian 13 host with `scripts/e2e/setup-vm.sh`, which installs OpenSSH, vsftpd, Samba, Apache WebDAV and SeaweedFS (S3). Credentials are passed on stdin and never stored in the repository.
-2. Put the matching `MFUSE_E2E_*` settings in `~/.config/mfuse/e2e.env` (see the variables `setup-vm.sh` reads). Copy the host's test CA certificate, `/etc/mfuse-e2e/ca.pem`, and point `MFUSE_E2E_CA` at it; the FTPS tests trust it only inside the test process.
+1. Provision a Debian 13 host with `scripts/e2e/setup-vm.sh`, which installs OpenSSH, vsftpd, Samba, Apache WebDAV, the Linux NFS server and SeaweedFS (S3). Credentials are passed on stdin and never stored in the repository.
+2. Put the matching `MFUSE_E2E_*` settings in `~/.config/mfuse/e2e.env` (see the variables `setup-vm.sh` reads). Copy the host's test CA certificate, `/etc/mfuse-e2e/ca.pem`, and point `MFUSE_E2E_CA` at it; the FTPS tests trust it only inside the test process. Set `MFUSE_E2E_NFS_UID` and `MFUSE_E2E_NFS_GID` to the test user's ids on the host (`id -u`, `id -g`).
 3. Run `make test-e2e`. Without `MFUSE_E2E_HOST` the tests are skipped.
 
 HTTPS WebDAV is not covered yet.

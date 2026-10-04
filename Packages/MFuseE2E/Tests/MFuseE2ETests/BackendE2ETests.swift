@@ -2,6 +2,7 @@ import Foundation
 import MFuseCore
 import MFuseE2E
 @testable import MFuseFTP
+import MFuseNFS
 import MFuseS3
 import MFuseSFTP
 import MFuseSMB
@@ -67,6 +68,37 @@ final class BackendE2ETests: XCTestCase {
             config: config, credential: Credential(password: try env.password()), additionalTrustRoots: ca
         )
         try await run(fileSystem, rangeReads: false, copy: false)
+    }
+
+    func testNFS() async throws {
+        let env = try E2EEnvironment()
+        try await run(NFSFileSystem(config: try nfsConfig(env, export: "/srv/nfs"), credential: Credential()),
+                      rangeReads: true, copy: false)
+    }
+
+    /// Without `insecure` the server refuses MFuse's unprivileged port; the error has to
+    /// say what to change.
+    func testNFSSecureExportExplainsInsecure() async throws {
+        let env = try E2EEnvironment()
+        let fileSystem = NFSFileSystem(config: try nfsConfig(env, export: "/srv/nfs-secure"), credential: Credential())
+        do {
+            try await fileSystem.connect()
+            try await fileSystem.disconnect()
+            XCTFail("mounting an export without `insecure` succeeded")
+        } catch RemoteFileSystemError.connectionFailed(let message) {
+            XCTAssertTrue(message.contains("insecure"), message)
+        }
+    }
+
+    private func nfsConfig(_ env: E2EEnvironment, export: String) throws -> ConnectionConfig {
+        ConnectionConfig(
+            name: "e2e-nfs", backendType: .nfs, host: env.host, port: 2049,
+            authMethod: .anonymous, remotePath: export,
+            parameters: [
+                "uid": try env.require("MFUSE_E2E_NFS_UID"),
+                "gid": try env.require("MFUSE_E2E_NFS_GID")
+            ]
+        )
     }
 
     func testWebDAV() async throws {

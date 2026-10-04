@@ -13,6 +13,7 @@ let package = Package(
         .package(path: "../MFuseWebDAV"),
         .package(path: "../MFuseSMB"),
         .package(path: "../MFuseFTP"),
+        .package(path: "../MFuseNFS"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.0")
     ],
     targets: [
@@ -30,6 +31,7 @@ let package = Package(
                 .product(name: "MFuseWebDAV", package: "MFuseWebDAV"),
                 .product(name: "MFuseSMB", package: "MFuseSMB"),
                 .product(name: "MFuseFTP", package: "MFuseFTP"),
+                .product(name: "MFuseNFS", package: "MFuseNFS"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl")
             ]
         )
