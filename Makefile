@@ -1,4 +1,4 @@
-.PHONY: all build test test-stable test-all generate resolve update-packages clean lint debug-install release-install release-dmg sync-homebrew-cask release
+.PHONY: all build test test-stable test-all test-e2e generate resolve update-packages clean lint debug-install release-install release-dmg sync-homebrew-cask release
 
 SCHEME = MFuse
 APP_NAME = MFuse
@@ -48,6 +48,13 @@ test-all:
 	cd Packages/MFuseFTP && swift test
 	cd Packages/MFuseSFTP && swift test
 	cd Packages/MFuseS3 && swift test
+
+# End-to-end tests of every backend against real servers (see scripts/e2e/setup-vm.sh).
+# Server addresses and credentials come from E2E_ENV, which stays outside the repo.
+E2E_ENV ?= $(HOME)/.config/mfuse/e2e.env
+test-e2e:
+	@test -f "$(E2E_ENV)" || (echo "test-e2e needs $(E2E_ENV) with the MFUSE_E2E_* settings; see scripts/e2e/setup-vm.sh." >&2; exit 1)
+	set -a && . "$(E2E_ENV)" && set +a && cd Packages/MFuseE2E && swift test
 
 generate:
 	$(XCODEGEN_ENV) xcodegen generate

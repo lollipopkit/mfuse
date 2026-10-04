@@ -4,6 +4,7 @@ updates:
     directories:
       - "/Packages/MFuseCore"
       - "/Packages/MFuseDropbox"
+      - "/Packages/MFuseE2E"
       - "/Packages/MFuseFTP"
       - "/Packages/MFuseGoogleDrive"
       - "/Packages/MFuseNFS"

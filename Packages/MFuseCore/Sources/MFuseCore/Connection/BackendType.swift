@@ -14,6 +14,20 @@ public enum BackendType: String, Codable, Sendable, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
+    /// Whether new connections can be created with this backend.
+    ///
+    /// Dropbox and OneDrive sign in through a bundled OAuth app, and release builds do not
+    /// carry its client ID yet, so connecting them could only fail.
+    /// TODO: remove once `MFDROPBOX_CLIENT_ID` and `MFONEDRIVE_CLIENT_ID` ship in releases.
+    public var isAvailable: Bool {
+        switch self {
+        case .dropbox, .oneDrive:
+            return false
+        default:
+            return true
+        }
+    }
+
     public var displayName: String {
         switch self {
         case .sftp:        return "SFTP"
