@@ -14,6 +14,10 @@ while IFS= read -r line; do
     ssh-ed25519\ *) PUBKEY="$line" ;;
   esac
 done
+if [ -z "$PUBKEY" ]; then
+  echo "setup-vm.sh: no ssh-ed25519 public key on stdin" >&2
+  exit 1
+fi
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 U="$MFUSE_E2E_USER"
@@ -153,11 +157,27 @@ EOF
 systemctl daemon-reload
 systemctl enable mfuse-s3 >/dev/null 2>&1
 systemctl restart mfuse-s3
+# weed shell's exit status does not reflect command failures, so both steps check the
+# bucket listing instead.
+bucket_listed() {
+  echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333 2>/dev/null | grep -Eq "^[[:space:]]*$MFUSE_E2E_S3_BUCKET([[:space:]]|$)"
+}
+ready=""
 for _ in $(seq 1 30); do
-  echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333 >/dev/null 2>&1 && break
+  if echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333 >/dev/null 2>&1; then ready=1; break; fi
   sleep 2
 done
-echo "s3.bucket.create -name $MFUSE_E2E_S3_BUCKET" | weed shell -master=127.0.0.1:9333 >/dev/null 2>&1 || true
+if [ -z "$ready" ]; then
+  echo "setup-vm.sh: SeaweedFS did not become ready" >&2
+  exit 1
+fi
+if ! bucket_listed; then
+  echo "s3.bucket.create -name $MFUSE_E2E_S3_BUCKET" | weed shell -master=127.0.0.1:9333 >/dev/null 2>&1
+  if ! bucket_listed; then
+    echo "setup-vm.sh: could not create bucket $MFUSE_E2E_S3_BUCKET" >&2
+    exit 1
+  fi
+fi
 
 sleep 1
 for s in ssh vsftpd vsftpd-implicit smbd apache2 mfuse-s3; do printf '%-10s %s\n' "$s" "$(systemctl is-active $s)"; done

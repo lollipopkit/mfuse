@@ -310,7 +310,7 @@ public actor FTPFileSystem: RemoteFileSystem {
         do {
             data = try await transfer.handler.collectData(timeout: FTPConnection.operationTimeout)
         } catch {
-            await conn.abortTransfer(transfer)
+            await abort(transfer, on: conn)
             throw error
         }
         try await conn.finishTransfer()
@@ -325,10 +325,28 @@ public actor FTPFileSystem: RemoteFileSystem {
             try await write(transfer.channel)
             try await transfer.channel.close()
         } catch {
-            await conn.abortTransfer(transfer)
+            await abort(transfer, on: conn)
             throw error
         }
         try await conn.finishTransfer()
+    }
+
+    /// Cleans up after a failed transfer. A control connection that could not be brought
+    /// back in step is dropped, so the next operation fails as not connected and the caller
+    /// reconnects instead of reading a stale reply as its own.
+    private func abort(_ transfer: FTPDataConnection, on conn: FTPConnection) async {
+        do {
+            try await conn.abortTransfer(transfer)
+        } catch {
+            await drop(conn)
+        }
+    }
+
+    private func drop(_ conn: FTPConnection) async {
+        if connection === conn {
+            connection = nil
+        }
+        try? await conn.close()
     }
 
     private func beginTransfer(
@@ -338,6 +356,9 @@ public actor FTPFileSystem: RemoteFileSystem {
     ) async throws -> FTPDataConnection {
         do {
             return try await conn.beginTransfer(command)
+        } catch FTPError.controlConnectionLost(let message) {
+            await drop(conn)
+            throw FTPError.controlConnectionLost(message)
         } catch FTPError.unexpectedResponse(let response) {
             let verb = command.prefix { $0 != " " }
             // For `STOR` a 550 means the server will not take the file, not that it is missing.
@@ -391,7 +412,7 @@ public actor FTPFileSystem: RemoteFileSystem {
                 return .notConnected
             case .connectionTimedOut:
                 return .connectionFailed(error.localizedDescription)
-            case .connectionFailed(let message):
+            case .connectionFailed(let message), .controlConnectionLost(let message):
                 return .connectionFailed(message)
             case .unexpectedResponse, .protocolError, .transferFailed:
                 return .operationFailed(error.localizedDescription)

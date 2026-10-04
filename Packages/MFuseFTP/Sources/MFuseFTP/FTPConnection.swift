@@ -248,7 +248,7 @@ final class FTPConnection: @unchecked Sendable {
             do {
                 try await waitForFuture(handshake)
             } catch {
-                await abortTransfer(data)
+                try await abortTransfer(data)
                 throw error
             }
         }
@@ -265,9 +265,17 @@ final class FTPConnection: @unchecked Sendable {
 
     /// Closes the data connection of a failed transfer and consumes the server's reply to
     /// it, so the next command does not take that reply for its own.
-    func abortTransfer(_ data: FTPDataConnection) async {
+    ///
+    /// Throws `FTPError.controlConnectionLost` when that reply cannot be read: the reply may
+    /// still arrive later, so the control connection can no longer be trusted to pair
+    /// commands with their replies.
+    func abortTransfer(_ data: FTPDataConnection) async throws {
         try? await data.channel.close()
-        _ = try? await readResponse()
+        do {
+            _ = try await readResponse()
+        } catch {
+            throw FTPError.controlConnectionLost(error.localizedDescription)
+        }
     }
 
     private func openDataConnection() async throws -> FTPDataConnection {
@@ -896,6 +904,7 @@ enum FTPError: Error, LocalizedError {
     case unexpectedResponse(FTPResponse)
     case protocolError(String)
     case transferFailed(String)
+    case controlConnectionLost(String)
 
     var errorDescription: String? {
         switch self {
@@ -906,6 +915,7 @@ enum FTPError: Error, LocalizedError {
         case .unexpectedResponse(let response): return "Unexpected FTP response \(response.code): \(response.text)"
         case .protocolError(let msg): return "FTP protocol error: \(msg)"
         case .transferFailed(let msg): return "FTP transfer failed: \(msg)"
+        case .controlConnectionLost(let msg): return "FTP control connection is out of sync: \(msg)"
         }
     }
 }

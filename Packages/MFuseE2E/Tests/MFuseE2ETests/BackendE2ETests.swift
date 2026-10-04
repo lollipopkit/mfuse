@@ -20,7 +20,7 @@ final class BackendE2ETests: XCTestCase {
             name: "e2e-sftp", backendType: .sftp, host: env.host, port: 22,
             username: env.user, authMethod: .password, remotePath: "/home/\(env.user)/files"
         )
-        try await run(SFTPFileSystem(config: config, credential: Credential(password: env.password)),
+        try await run(SFTPFileSystem(config: config, credential: Credential(password: try env.password())),
                       rangeReads: true, copy: true)
     }
 
@@ -41,7 +41,7 @@ final class BackendE2ETests: XCTestCase {
             name: "e2e-ftp", backendType: .ftp, host: env.host, port: 21,
             username: env.user, authMethod: .password, remotePath: "/files"
         )
-        try await run(FTPFileSystem(config: config, credential: Credential(password: env.password)),
+        try await run(FTPFileSystem(config: config, credential: Credential(password: try env.password())),
                       rangeReads: false, copy: false)
     }
 
@@ -64,7 +64,7 @@ final class BackendE2ETests: XCTestCase {
             parameters: ["tls": "true"]
         )
         let fileSystem = FTPFileSystem(
-            config: config, credential: Credential(password: env.password), additionalTrustRoots: ca
+            config: config, credential: Credential(password: try env.password()), additionalTrustRoots: ca
         )
         try await run(fileSystem, rangeReads: false, copy: false)
     }
@@ -77,7 +77,7 @@ final class BackendE2ETests: XCTestCase {
             remotePath: try env.require("MFUSE_E2E_WEBDAV_PATH"),
             parameters: ["tls": "false"]
         )
-        try await run(WebDAVFileSystem(config: config, credential: Credential(password: env.password)),
+        try await run(WebDAVFileSystem(config: config, credential: Credential(password: try env.password())),
                       rangeReads: false, copy: true)
     }
 
@@ -88,7 +88,7 @@ final class BackendE2ETests: XCTestCase {
             username: env.user, authMethod: .password, remotePath: "/",
             parameters: ["share": try env.require("MFUSE_E2E_SMB_SHARE")]
         )
-        try await run(SMBFileSystem(config: config, credential: Credential(password: env.password)),
+        try await run(SMBFileSystem(config: config, credential: Credential(password: try env.password())),
                       rangeReads: false, copy: false)
     }
 
@@ -127,7 +127,6 @@ final class BackendE2ETests: XCTestCase {
 private struct E2EEnvironment {
     let host: String
     let user: String
-    let password: String
 
     init() throws {
         let values = ProcessInfo.processInfo.environment
@@ -136,7 +135,11 @@ private struct E2EEnvironment {
         }
         self.host = host
         self.user = values["MFUSE_E2E_USER"] ?? "mfuse"
-        self.password = values["MFUSE_E2E_PASSWORD"] ?? ""
+    }
+
+    /// Only the password-based tests need it, so it is read, and its absence skipped, there.
+    func password() throws -> String {
+        try require("MFUSE_E2E_PASSWORD")
     }
 
     func require(_ name: String) throws -> String {
