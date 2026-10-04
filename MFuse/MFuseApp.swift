@@ -303,9 +303,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var isTerminationInProgress = false
     static var shutdownHandler: (@MainActor () async -> Void)?
 
+    /// Quits from the menu bar's Quit item, which is an explicit request to quit.
+    ///
+    /// AppKit refuses to terminate while any window has a sheet attached ("App termination
+    /// blocked by modal sheet") and aborts without consulting `applicationShouldTerminate`.
+    /// From the menu bar that sheet is usually out of sight — an editor or alert left open
+    /// on a window behind others — so Quit did nothing at all. The sheets are ended first;
+    /// a draft in the connection editor is discarded, as quitting implies.
     @MainActor
     static func requestFullTermination() {
+        for window in NSApp.windows where window.sheetParent == nil {
+            endSheets(of: window)
+        }
         NSApp.terminate(nil)
+    }
+
+    @MainActor
+    private static func endSheets(of window: NSWindow) {
+        while let sheet = window.attachedSheet {
+            endSheets(of: sheet)
+            window.endSheet(sheet)
+        }
     }
 
     @MainActor
