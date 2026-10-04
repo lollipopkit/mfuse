@@ -34,6 +34,23 @@ private final class TLSHandshakeCompletionHandler: ChannelInboundHandler, Remova
     }
 }
 
+/// How an FTP connection is protected with TLS (RFC 4217).
+enum FTPSecurity: Sendable, Equatable {
+    case none
+    /// Connects in plain text and upgrades with `AUTH TLS`: standard FTPS, usually on port 21.
+    case explicit
+    /// TLS from the first byte: the older FTPS, conventionally on port 990.
+    case implicit
+}
+
+/// One passive data connection, opened for a single transfer.
+struct FTPDataConnection {
+    let channel: Channel
+    let handler: FTPDataHandler
+    /// Completes when the TLS handshake does; `nil` on an unprotected connection.
+    fileprivate let handshake: EventLoopFuture<Void>?
+}
+
 /// Low-level FTP client built on SwiftNIO.
 /// Handles control connection commands and passive data connections.
 final class FTPConnection: @unchecked Sendable {
@@ -42,16 +59,30 @@ final class FTPConnection: @unchecked Sendable {
 
     private let host: String
     private let port: Int
-    private let useTLS: Bool
+    private let security: FTPSecurity
+    /// Shared by the control and every data connection; `nil` without TLS.
+    private let tlsContext: NIOSSLContext?
     private let group: EventLoopGroup
     private let commandGate = CommandGate()
     private let channelLock = NSLock()
     private var channel: Channel?
+    /// Set once the server rejects `EPSV`, so later transfers go straight to `PASV`.
+    private let epsvRefused = NIOLockedValueBox(false)
 
-    init(host: String, port: Int, useTLS: Bool) {
+    /// `additionalTrustRoots` are trusted on top of the system's roots.
+    init(host: String, port: Int, security: FTPSecurity, additionalTrustRoots: [NIOSSLCertificate] = []) throws {
         self.host = host
         self.port = port
-        self.useTLS = useTLS
+        self.security = security
+        if security == .none {
+            self.tlsContext = nil
+        } else {
+            var configuration = TLSConfiguration.makeClientConfiguration()
+            if !additionalTrustRoots.isEmpty {
+                configuration.additionalTrustRoots = [.certificates(additionalTrustRoots)]
+            }
+            self.tlsContext = try NIOSSLContext(configuration: configuration)
+        }
         self.group = MultiThreadedEventLoopGroup.singleton
     }
 
@@ -73,9 +104,9 @@ final class FTPConnection: @unchecked Sendable {
                     let responseHandler = FTPResponseHandler()
                     handlerPromise.succeed(responseHandler)
 
-                    if self.useTLS {
+                    if self.security == .implicit {
                         do {
-                            let sslHandler = try self.makeTLSHandler(serverHostname: self.host)
+                            let sslHandler = try self.makeTLSHandler()
                             try channel.pipeline.syncOperations.addHandler(sslHandler)
                             try channel.pipeline.syncOperations.addHandler(ByteToMessageHandler(FTPLineDecoder()))
                             try channel.pipeline.syncOperations.addHandler(responseHandler)
@@ -105,6 +136,9 @@ final class FTPConnection: @unchecked Sendable {
                 let welcome = try await handler.readResponse(timeout: Self.operationTimeout)
                 guard welcome.code >= 200 && welcome.code < 400 else {
                     throw FTPError.connectionFailed("Server rejected connection: \(welcome.text)")
+                }
+                if security == .explicit {
+                    try await upgradeToTLS(connectedChannel, responses: handler)
                 }
             } catch {
                 try? await connectedChannel.close()
@@ -151,17 +185,93 @@ final class FTPConnection: @unchecked Sendable {
         return try await handler.readResponse(timeout: Self.operationTimeout)
     }
 
-    // MARK: - Data Connection (Passive Mode)
+    // MARK: - TLS
 
-    func openDataConnection() async throws -> (Channel, FTPDataHandler) {
-        // Enter passive mode
-        let response = try await sendCommand("PASV")
-        guard response.code == 227 else {
-            throw FTPError.unexpectedResponse(response)
+    /// `AUTH TLS`, then a TLS handshake over the same connection (RFC 4217 section 4).
+    private func upgradeToTLS(_ channel: Channel, responses: FTPResponseHandler) async throws {
+        var buffer = channel.allocator.buffer(capacity: 10)
+        buffer.writeString("AUTH TLS\r\n")
+        try await channel.writeAndFlush(buffer)
+        let response = try await responses.readResponse(timeout: Self.operationTimeout)
+        guard response.code == 234 else {
+            throw FTPError.connectionFailed("Server does not support FTPS (AUTH TLS): \(response.text)")
         }
 
-        let (pasvHost, dataPort) = try parsePASV(response.text)
-        let dataHost = normalizedDataConnectionHost(pasvHost)
+        let handshake = channel.eventLoop.makePromise(of: Void.self)
+        try await channel.eventLoop.submit {
+            let sslHandler = try self.makeTLSHandler()
+            let pipeline = channel.pipeline.syncOperations
+            try pipeline.addHandler(sslHandler, position: .first)
+            try pipeline.addHandler(TLSHandshakeCompletionHandler(promise: handshake), position: .after(sslHandler))
+        }.get()
+        try await waitForFuture(handshake.futureResult)
+    }
+
+    /// Every connection, control and data alike, checks the certificate against the host
+    /// the user entered: a passive reply carries only an address. An IP address cannot go
+    /// in SNI; without a name NIOSSL checks the certificate against the address connected to.
+    private func makeTLSHandler() throws -> NIOSSLClientHandler {
+        guard let tlsContext else {
+            throw FTPError.protocolError("TLS requested on a connection configured without it")
+        }
+        let serverHostname = Self.isIPAddress(host) ? nil : host
+        return try NIOSSLClientHandler(context: tlsContext, serverHostname: serverHostname)
+    }
+
+    private static func isIPAddress(_ host: String) -> Bool {
+        var ipv4 = in_addr()
+        var ipv6 = in6_addr()
+        return host.withCString { inet_pton(AF_INET, $0, &ipv4) == 1 || inet_pton(AF_INET6, $0, &ipv6) == 1 }
+    }
+
+    // MARK: - Data Connection (Passive Mode)
+
+    /// Opens a passive data connection and sends `command`, which transfers over it.
+    ///
+    /// Throws `FTPError.unexpectedResponse` when the server refuses the command. On a
+    /// protected connection the TLS handshake is awaited only once the server has accepted
+    /// the command, since servers start it at that point.
+    func beginTransfer(_ command: String) async throws -> FTPDataConnection {
+        let data = try await openDataConnection()
+        let response: FTPResponse
+        do {
+            response = try await sendCommand(command)
+        } catch {
+            try? await data.channel.close()
+            throw error
+        }
+        guard response.code == 125 || response.code == 150 else {
+            try? await data.channel.close()
+            throw FTPError.unexpectedResponse(response)
+        }
+        if let handshake = data.handshake {
+            do {
+                try await waitForFuture(handshake)
+            } catch {
+                await abortTransfer(data)
+                throw error
+            }
+        }
+        return data
+    }
+
+    /// Reads the server's verdict on a transfer whose data connection is done.
+    func finishTransfer() async throws {
+        let response = try await readResponse()
+        guard response.code == 226 || response.code == 250 else {
+            throw FTPError.transferFailed(response.text)
+        }
+    }
+
+    /// Closes the data connection of a failed transfer and consumes the server's reply to
+    /// it, so the next command does not take that reply for its own.
+    func abortTransfer(_ data: FTPDataConnection) async {
+        try? await data.channel.close()
+        _ = try? await readResponse()
+    }
+
+    private func openDataConnection() async throws -> FTPDataConnection {
+        let (dataHost, dataPort) = try await passiveDataEndpoint()
         let dataHandlerPromise = group.next().makePromise(of: FTPDataHandler.self)
         // The channel initializer runs on the channel's event loop while this function
         // reads the result afterwards, so the handshake future is handed over through a
@@ -173,9 +283,9 @@ final class FTPConnection: @unchecked Sendable {
                 let dataHandler = FTPDataHandler()
                 dataHandlerPromise.succeed(dataHandler)
 
-                if self.useTLS {
+                if self.security != .none {
                     do {
-                        let handler = try self.makeTLSHandler(serverHostname: pasvHost)
+                        let handler = try self.makeTLSHandler()
                         let handshakePromise = channel.eventLoop.makePromise(of: Void.self)
                         handshakeFutureBox.withLockedValue { $0 = handshakePromise.futureResult }
                         try channel.pipeline.syncOperations.addHandler(handler)
@@ -195,20 +305,37 @@ final class FTPConnection: @unchecked Sendable {
         )
         let dataHandler = try await waitForFuture(dataHandlerPromise.futureResult)
         // `connect` only completes after the initializer has run, so the box is settled here.
-        if let handshakeFuture = handshakeFutureBox.withLockedValue({ $0 }) {
-            do {
-                try await waitForFuture(handshakeFuture)
-            } catch {
-                try await dataChannel.close()
-                throw error
-            }
-        }
-        return (dataChannel, dataHandler)
+        return FTPDataConnection(
+            channel: dataChannel,
+            handler: dataHandler,
+            handshake: handshakeFutureBox.withLockedValue { $0 }
+        )
     }
 
-    private func makeTLSHandler(serverHostname: String) throws -> NIOSSLClientHandler {
-        let sslContext = try NIOSSLContext(configuration: .makeClientConfiguration())
-        return try NIOSSLClientHandler(context: sslContext, serverHostname: serverHostname)
+    /// Where to open the data connection. `EPSV` (RFC 2428) first: it works over IPv6 and
+    /// carries only a port, so a NAT in front of the server cannot get the address wrong.
+    /// `PASV` for servers without it.
+    private func passiveDataEndpoint() async throws -> (host: String, port: Int) {
+        if !epsvRefused.withLockedValue({ $0 }) {
+            let response = try await sendCommand("EPSV")
+            if response.code == 229 {
+                guard let controlHost = currentChannel()?.remoteAddress?.ipAddress else {
+                    throw FTPError.notConnected
+                }
+                return (controlHost, try Self.parseEPSV(response.text))
+            }
+            guard (500..<600).contains(response.code) else {
+                throw FTPError.unexpectedResponse(response)
+            }
+            epsvRefused.withLockedValue { $0 = true }
+        }
+
+        let response = try await sendCommand("PASV")
+        guard response.code == 227 else {
+            throw FTPError.unexpectedResponse(response)
+        }
+        let (pasvHost, port) = try Self.parsePASV(response.text)
+        return (normalizedDataConnectionHost(pasvHost), port)
     }
 
     private func waitForFuture<T: Sendable>(_ future: EventLoopFuture<T>) async throws -> T {
@@ -242,9 +369,24 @@ final class FTPConnection: @unchecked Sendable {
         return try await timeoutPromise.futureResult.get()
     }
 
-    // MARK: - PASV Parser
+    // MARK: - Passive Reply Parsers
 
-    private func parsePASV(_ text: String) throws -> (String, Int) {
+    /// `229 Entering Extended Passive Mode (|||6446|)` → 6446. The delimiter is whatever
+    /// character the server repeats; `|` is only the usual one.
+    static func parseEPSV(_ text: String) throws -> Int {
+        guard let open = text.firstIndex(of: "("), let close = text.lastIndex(of: ")"), open < close else {
+            throw FTPError.protocolError("Cannot parse EPSV response: \(text)")
+        }
+        let inner = Array(text[text.index(after: open)..<close])
+        guard inner.count >= 5, let delimiter = inner.first,
+              inner[1] == delimiter, inner[2] == delimiter, inner.last == delimiter,
+              let port = Int(String(inner[3..<(inner.count - 1)])), (1...65535).contains(port) else {
+            throw FTPError.protocolError("Cannot parse EPSV response: \(text)")
+        }
+        return port
+    }
+
+    static func parsePASV(_ text: String) throws -> (String, Int) {
         // Format: "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)"
         guard let start = text.firstIndex(of: "("),
               let end = text[text.index(after: start)...].firstIndex(of: ")") else {
@@ -614,6 +756,7 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
     private var completed = false
     private var terminalError: Error?
     private var channel: Channel?
+    private var lastActivity = DispatchTime.now()
 
     func handlerAdded(context: ChannelHandlerContext) {
         lock.lock()
@@ -626,6 +769,7 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
         if let bytes = buf.readBytes(length: buf.readableBytes) {
             lock.lock()
             buffer.append(contentsOf: bytes)
+            lastActivity = .now()
             lock.unlock()
         }
     }
@@ -649,6 +793,11 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
+        // Servers commonly close a protected data connection without a TLS close_notify.
+        // The end of the data is still the end of the stream, and the control connection's
+        // completion reply says whether the transfer succeeded.
+        if case NIOSSLError.uncleanShutdown = error { return }
+
         let continuations: [CheckedContinuation<Data, Error>]
 
         lock.lock()
@@ -661,6 +810,9 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
         continuations.forEach { $0.resume(throwing: error) }
     }
 
+    /// Waits for the server to close the connection and returns everything it sent.
+    /// `timeout` bounds the time without incoming data, not the whole transfer, so a large
+    /// file over a slow link is not cut off.
     func collectData(timeout: TimeAmount? = nil) async throws -> Data {
         return try await withCheckedThrowingContinuation { cont in
             let result: Result<Data, Error>?
@@ -691,10 +843,22 @@ final class FTPDataHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     private func scheduleTimeout(for waiterID: UUID, timeout: TimeAmount) {
-        let nanoseconds = max(timeout.nanoseconds, 0)
-        let deadline = DispatchTime.now() + .nanoseconds(Int(nanoseconds))
+        let interval = DispatchTimeInterval.nanoseconds(Int(max(timeout.nanoseconds, 0)))
+        lock.lock()
+        let deadline = lastActivity + interval
+        lock.unlock()
         DispatchQueue.global().asyncAfter(deadline: deadline) { [weak self] in
-            self?.failContinuationIfPending(id: waiterID, error: FTPError.connectionTimedOut)
+            guard let self else { return }
+            self.lock.lock()
+            let idleSince = self.lastActivity
+            let isPending = self.continuations.contains { $0.id == waiterID }
+            self.lock.unlock()
+            guard isPending else { return }
+            if idleSince + interval > .now() {
+                self.scheduleTimeout(for: waiterID, timeout: timeout)
+            } else {
+                self.failContinuationIfPending(id: waiterID, error: FTPError.connectionTimedOut)
+            }
         }
     }
 

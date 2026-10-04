@@ -1,11 +1,12 @@
 import Foundation
 import MFuseCore
 import MFuseE2E
-import MFuseFTP
+@testable import MFuseFTP
 import MFuseS3
 import MFuseSFTP
 import MFuseSMB
 import MFuseWebDAV
+import NIOSSL
 import XCTest
 
 /// Each backend against the e2e servers. Configured from `MFUSE_E2E_*` environment
@@ -42,6 +43,30 @@ final class BackendE2ETests: XCTestCase {
         )
         try await run(FTPFileSystem(config: config, credential: Credential(password: env.password)),
                       rangeReads: false, copy: false)
+    }
+
+    /// `AUTH TLS` on the plain port. Certificates come from the VM's own CA, trusted only here.
+    func testFTPSExplicit() async throws {
+        try await runFTPS(port: 21)
+    }
+
+    /// TLS from the first byte on port 990.
+    func testFTPSImplicit() async throws {
+        try await runFTPS(port: 990)
+    }
+
+    private func runFTPS(port: UInt16) async throws {
+        let env = try E2EEnvironment()
+        let ca = try NIOSSLCertificate.fromPEMFile(try env.require("MFUSE_E2E_CA"))
+        let config = ConnectionConfig(
+            name: "e2e-ftps-\(port)", backendType: .ftp, host: env.host, port: port,
+            username: env.user, authMethod: .password, remotePath: "/files",
+            parameters: ["tls": "true"]
+        )
+        let fileSystem = FTPFileSystem(
+            config: config, credential: Credential(password: env.password), additionalTrustRoots: ca
+        )
+        try await run(fileSystem, rangeReads: false, copy: false)
     }
 
     func testWebDAV() async throws {

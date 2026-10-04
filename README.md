@@ -41,6 +41,7 @@ Google Drive sign-in uses MFuse's OAuth app, which is still in Google's verifica
 ## Backend Notes
 
 - SFTP directory enumeration has a compatibility fallback: when the normal SFTP listing path times out or hits certain connection-level failures, MFuse may execute a small `python3` snippet on the remote host over the existing SSH session to enumerate the directory. This fallback is not used for normal successful listings, permission-denied errors, or missing-path errors. Remote hosts that hit this fallback must have `python3` available, otherwise enumeration fails.
+- FTP uses passive mode only (`EPSV`, falling back to `PASV`); active mode cannot work behind NAT. With TLS on, port 990 uses implicit FTPS and any other port uses explicit FTPS (`AUTH TLS`); data connections are always encrypted (`PROT P`). Servers that require TLS session reuse on data connections (vsftpd's `require_ssl_reuse=YES`, FileZilla Server's default) are not supported yet: the TLS library MFuse uses cannot resume a session.
 
 ## Project Structure
 
@@ -171,13 +172,13 @@ Some backend tests are placeholders or integration-oriented, so protocol coverag
 
 ### End-to-end tests
 
-`Packages/MFuseE2E` runs the same file operations — create, overwrite, range and streamed reads, unicode names, move, copy, recursive delete — against real SFTP (password and key), FTP, WebDAV, SMB and S3 servers. It does not exercise the File Provider extension itself.
+`Packages/MFuseE2E` runs the same file operations — create, overwrite, range and streamed reads, unicode names, move, copy, recursive delete — against real SFTP (password and key), FTP, FTPS (explicit and implicit), WebDAV, SMB and S3 servers. It does not exercise the File Provider extension itself.
 
 1. Provision a Debian 13 host with `scripts/e2e/setup-vm.sh`, which installs OpenSSH, vsftpd, Samba, Apache WebDAV and SeaweedFS (S3). Credentials are passed on stdin and never stored in the repository.
-2. Put the matching `MFUSE_E2E_*` settings in `~/.config/mfuse/e2e.env` (see the variables `setup-vm.sh` reads).
+2. Put the matching `MFUSE_E2E_*` settings in `~/.config/mfuse/e2e.env` (see the variables `setup-vm.sh` reads). Copy the host's test CA certificate, `/etc/mfuse-e2e/ca.pem`, and point `MFUSE_E2E_CA` at it; the FTPS tests trust it only inside the test process.
 3. Run `make test-e2e`. Without `MFUSE_E2E_HOST` the tests are skipped.
 
-TLS (FTPS, HTTPS WebDAV) is not covered: the backends verify certificates against the system trust store, and the test servers use self-signed ones.
+HTTPS WebDAV is not covered yet.
 
 ## License
 

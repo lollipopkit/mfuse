@@ -1,7 +1,8 @@
 #!/bin/bash
 # Configures the MFuse e2e servers on a Debian 13 VM. Idempotent.
 # Reads MFUSE_E2E_* assignments and then the test public key from stdin, so no secret
-# appears on a command line.
+# appears on a command line. FTPS uses a private CA created here; copy /etc/mfuse-e2e/ca.pem
+# to the test machine and set MFUSE_E2E_CA to its path.
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
@@ -33,8 +34,24 @@ Match User $U
 EOF
 systemctl restart ssh
 
-# --- FTP (plain; vsftpd) ---
-cat > /etc/vsftpd.conf <<'EOF'
+# --- TLS: a private CA for this VM; the tests trust its certificate only in-process ---
+TLS=/etc/mfuse-e2e
+install -d -m 755 "$TLS"
+if [ ! -f "$TLS/ca.pem" ]; then
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+    -subj "/CN=MFuse e2e CA" -keyout "$TLS/ca.key" -out "$TLS/ca.pem" 2>/dev/null
+fi
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=$MFUSE_E2E_HOST" \
+  -keyout "$TLS/server.key" -out "$TLS/server.csr" 2>/dev/null
+openssl x509 -req -in "$TLS/server.csr" -CA "$TLS/ca.pem" -CAkey "$TLS/ca.key" -CAcreateserial \
+  -days 825 -out "$TLS/server.pem" \
+  -extfile <(printf 'subjectAltName=IP:%s\nextendedKeyUsage=serverAuth\n' "$MFUSE_E2E_HOST") 2>/dev/null
+chmod 600 "$TLS/ca.key" "$TLS/server.key"
+
+# --- FTP (vsftpd): plain and explicit FTPS on 21, implicit FTPS on 990 ---
+# require_ssl_reuse is off: NIOSSL cannot resume the control connection's TLS session on a
+# data connection, so servers that insist on it are not supported.
+cat > /etc/vsftpd.conf <<EOF
 listen=YES
 listen_ipv6=NO
 anonymous_enable=NO
@@ -49,8 +66,33 @@ pasv_max_port=40100
 pam_service_name=vsftpd
 utf8_filesystem=YES
 seccomp_sandbox=NO
+ssl_enable=YES
+rsa_cert_file=$TLS/server.pem
+rsa_private_key_file=$TLS/server.key
+force_local_logins_ssl=NO
+force_local_data_ssl=NO
+require_ssl_reuse=NO
+ssl_ciphers=HIGH
 EOF
-systemctl restart vsftpd
+sed -e 's/^force_local_logins_ssl=NO/force_local_logins_ssl=YES/' \
+    -e 's/^force_local_data_ssl=NO/force_local_data_ssl=YES/' \
+    -e 's/^pasv_min_port=40000/pasv_min_port=40101/' \
+    -e 's/^pasv_max_port=40100/pasv_max_port=40200/' \
+    /etc/vsftpd.conf > /etc/vsftpd-implicit.conf
+printf 'listen_port=990\nimplicit_ssl=YES\n' >> /etc/vsftpd-implicit.conf
+cat > /etc/systemd/system/vsftpd-implicit.service <<'EOF'
+[Unit]
+Description=vsftpd, implicit FTPS (MFuse e2e)
+After=network-online.target
+[Service]
+ExecStart=/usr/sbin/vsftpd /etc/vsftpd-implicit.conf
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable vsftpd-implicit >/dev/null 2>&1
+systemctl restart vsftpd vsftpd-implicit
 
 # --- SMB (samba) ---
 install -d -o "$U" -g "$U" /srv/smb
@@ -118,4 +160,4 @@ done
 echo "s3.bucket.create -name $MFUSE_E2E_S3_BUCKET" | weed shell -master=127.0.0.1:9333 >/dev/null 2>&1 || true
 
 sleep 1
-for s in ssh vsftpd smbd apache2 mfuse-s3; do printf '%-10s %s\n' "$s" "$(systemctl is-active $s)"; done
+for s in ssh vsftpd vsftpd-implicit smbd apache2 mfuse-s3; do printf '%-10s %s\n' "$s" "$(systemctl is-active $s)"; done
