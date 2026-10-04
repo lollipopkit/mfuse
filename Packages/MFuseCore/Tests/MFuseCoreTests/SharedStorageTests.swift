@@ -525,6 +525,27 @@ final class SharedStorageTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: otherCachedFileURL.path))
     }
 
+    /// A bootstrap snapshot that cannot be removed must not keep the cached file contents
+    /// on disk, and the failure is still reported.
+    func testRemoveDomainStateRemovesCachedStateWhenBootstrapRemovalFails() throws {
+        let identifier = UUID().uuidString
+        let bootstrapURL = bootstrapDirectoryURL(for: identifier)
+        let cachedFileURL = try makeCachedFile(for: identifier)
+        try FileManager.default.createDirectory(at: bootstrapURL, withIntermediateDirectories: true)
+        let bootstrapRootURL = bootstrapURL.deletingLastPathComponent()
+        // A read-only parent refuses the removal of its entries.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: bootstrapRootURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: bootstrapRootURL.path)
+        }
+
+        XCTAssertThrowsError(
+            try FileProviderDomainStateStore.removeDomainState(for: identifier, containerURL: containerURL)
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bootstrapURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedFileURL.deletingLastPathComponent().path))
+    }
+
     func testRemoveDomainStateToleratesMissingDirectories() throws {
         XCTAssertNoThrow(
             try FileProviderDomainStateStore.removeDomainState(for: UUID().uuidString, containerURL: containerURL)

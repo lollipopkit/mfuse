@@ -159,13 +159,25 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         try removeDomainState(for: domainIdentifier, containerURL: requiredAppGroupContainerURL())
     }
 
+    /// Each directory is attempted even when another fails: a bootstrap snapshot that
+    /// cannot be removed must not keep the cached file contents next to it on disk. The
+    /// first failure is rethrown once both have been tried.
     static func removeDomainState(for domainIdentifier: String, containerURL: URL) throws {
-        let fileManager = FileManager.default
+        var firstError: Error?
         for rootURL in domainStateRootURLs(containerURL: containerURL) {
             let directoryURL = rootURL.appendingPathComponent(domainIdentifier, isDirectory: true)
-            if fileManager.fileExists(atPath: directoryURL.path) {
-                try fileManager.removeItem(at: directoryURL)
+            do {
+                // Removed outright rather than after an existence check, which a directory
+                // vanishing in between would turn into a reported failure.
+                try FileManager.default.removeItem(at: directoryURL)
+            } catch where isNotFound(error) {
+                continue
+            } catch {
+                firstError = firstError ?? error
             }
+        }
+        if let firstError {
+            throw firstError
         }
     }
 
@@ -186,12 +198,16 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
         keeping identifiersToKeep: Set<String>,
         containerURL: URL
     ) throws -> [(identifier: String, error: Error)] {
-        let fileManager = FileManager.default
         var orphanedIdentifiers = Set<String>()
-        for rootURL in domainStateRootURLs(containerURL: containerURL)
-        where fileManager.fileExists(atPath: rootURL.path) {
-            for name in try fileManager.contentsOfDirectory(atPath: rootURL.path)
-            where UUID(uuidString: name) != nil && !identifiersToKeep.contains(name) {
+        for rootURL in domainStateRootURLs(containerURL: containerURL) {
+            let names: [String]
+            do {
+                names = try FileManager.default.contentsOfDirectory(atPath: rootURL.path)
+            } catch where isNotFound(error) {
+                // Nothing has ever been stored under this root.
+                continue
+            }
+            for name in names where UUID(uuidString: name) != nil && !identifiersToKeep.contains(name) {
                 orphanedIdentifiers.insert(name)
             }
         }
@@ -241,6 +257,13 @@ public struct FileProviderDomainStateStore: @unchecked Sendable {
     private static func bootstrapRootURL(containerURL: URL) -> URL {
         supportDirectoryURL(containerURL: containerURL)
             .appendingPathComponent("Bootstrap", isDirectory: true)
+    }
+
+    /// Whether a file operation failed only because its target does not exist. Anything
+    /// else — a permission error above all — is a real failure and is propagated.
+    private static func isNotFound(_ error: Error) -> Bool {
+        guard let cocoaError = error as? CocoaError else { return false }
+        return cocoaError.code == .fileNoSuchFile || cocoaError.code == .fileReadNoSuchFile
     }
 
     /// Every directory that holds one subdirectory per domain identifier.

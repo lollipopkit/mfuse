@@ -52,7 +52,7 @@ MFuse sends data only to the services you configure — for example Google, Drop
 
 - Removing a connection in MFuse unmounts it and deletes its saved credentials, cached file metadata, and cached file contents. Files on the remote storage are not affected.
 - You can revoke MFuse's access to your Google account at any time at [myaccount.google.com/connections](https://myaccount.google.com/connections).
-- To delete all data MFuse keeps on your Mac, quit MFuse and delete the folder `~/Library/Group Containers/group.com.lollipopkit.mfuse.shared`, or uninstall with `brew uninstall --zap --cask mfuse`.
+- To delete all data MFuse keeps on your Mac, first remove every connection in MFuse, which deletes their credentials from the Keychain. Then quit MFuse and delete the folder `~/Library/Group Containers/group.com.lollipopkit.mfuse.shared`, or uninstall with `brew uninstall --zap --cask mfuse`. Neither of these last two steps removes Keychain credentials on its own.
 
 ## Children
 

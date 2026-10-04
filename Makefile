@@ -6,6 +6,7 @@ DEBUG_DERIVED_DATA = DerivedData
 DEBUG_APP_PATH = $(DEBUG_DERIVED_DATA)/Build/Products/Debug/$(APP_NAME).app
 RELEASE_INSTALL_DERIVED_DATA = build/release-install-derived-data
 RELEASE_INSTALL_APP_PATH = $(RELEASE_INSTALL_DERIVED_DATA)/Build/Products/Release/$(APP_NAME).app
+RELEASE_INSTALL_STAGING_PATH = build/release-install-staging/$(APP_NAME).app
 # Same derivation as scripts/release/release-from-git-version.sh.
 COMMIT_COUNT = $(shell git rev-list --count HEAD)
 RELEASE_MARKETING_VERSION = $(or $(MFUSE_BASE_VERSION),1.0).$(COMMIT_COUNT)
@@ -75,8 +76,12 @@ release-install: generate
 		MARKETING_VERSION="$(RELEASE_MARKETING_VERSION)" \
 		CURRENT_PROJECT_VERSION="$(COMMIT_COUNT)" \
 		OTHER_CODE_SIGN_FLAGS="--options runtime"
+	# Copied to a staging path first, so a failed copy leaves the installed app in place;
+	# staged outside /Applications so Launch Services never registers a second copy.
+	rm -rf $(RELEASE_INSTALL_STAGING_PATH)
+	ditto $(RELEASE_INSTALL_APP_PATH) $(RELEASE_INSTALL_STAGING_PATH)
 	rm -rf /Applications/$(APP_NAME).app
-	ditto $(RELEASE_INSTALL_APP_PATH) /Applications/$(APP_NAME).app
+	mv $(RELEASE_INSTALL_STAGING_PATH) /Applications/$(APP_NAME).app
 
 release-dmg:
 	@test -n "$(XCARCHIVE_PATH)" || (echo "release-dmg requires XCARCHIVE_PATH. Example: XCARCHIVE_PATH=/abs/path/to/MFuse.xcarchive make release-dmg; this target calls scripts/release/package-dmg-from-xcarchive.sh." >&2; exit 1)

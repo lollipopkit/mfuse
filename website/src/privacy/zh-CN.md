@@ -52,7 +52,7 @@ MFuse 只会为执行你请求的操作而向你配置的服务（例如 Google�
 
 - 在 MFuse 中删除连接会卸载该连接，并删除其保存的凭据、缓存的文件元数据和缓存的文件内容。远程存储上的文件不受影响。
 - 你可以随时在 [myaccount.google.com/connections](https://myaccount.google.com/connections) 撤销 MFuse 对你 Google 账户的访问权限。
-- 如需删除 MFuse 在你 Mac 上保存的全部数据，请退出 MFuse 并删除 `~/Library/Group Containers/group.com.lollipopkit.mfuse.shared` 文件夹，或使用 `brew uninstall --zap --cask mfuse` 卸载。
+- 如需删除 MFuse 在你 Mac 上保存的全部数据，请先在 MFuse 中删除所有连接，这会从钥匙串中删除它们的凭据。然后退出 MFuse 并删除 `~/Library/Group Containers/group.com.lollipopkit.mfuse.shared` 文件夹，或使用 `brew uninstall --zap --cask mfuse` 卸载。后两种方式本身都不会删除钥匙串中的凭据。
 
 ## 儿童
 
