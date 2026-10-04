@@ -21,6 +21,7 @@ public final class DomainManager: ObservableObject {
             case disconnect = "disconnect"
             case removeStaleDomain = "remove stale domain"
             case removeOrphanedSymlink = "remove orphaned shortcut"
+            case removeOrphanedDomainState = "remove orphaned domain state"
             case listDomains = "list domains"
             case cleanup = "cleanup"
             case removeAllDomains = "remove all domains"
@@ -216,12 +217,15 @@ public final class DomainManager: ObservableObject {
         let knownIDs = Set(connectionManager.connections.map(\.domainIdentifier))
         var errors: [SyncDomainsError.Entry] = []
         let domains: [NSFileProviderDomain]
+        let didListDomains: Bool
 
         do {
             domains = try await NSFileProviderManager.domains()
+            didListDomains = true
         } catch {
             errors.append(.init(id: "__domains__", operation: .listDomains, error: error))
             domains = []
+            didListDomains = false
         }
         let domainStates = domains.map {
             RegisteredDomainState(
@@ -231,22 +235,42 @@ public final class DomainManager: ObservableObject {
         }
 
         // Remove stale domains
+        var stillRegisteredIDs = Set<String>()
         for domainState in domainStates where !knownIDs.contains(domainState.identifier) {
             do {
                 if let domain = domains.first(where: { $0.identifier.rawValue == domainState.identifier }) {
                     try await NSFileProviderManager.remove(domain)
                 }
-                // The snapshot the domain bootstrapped from goes with it, in that order —
-                // the same order `unregister` uses, and for the same reason: before
-                // macOS 15 it is the last thing an extension can read a config from. Left
-                // behind, it waits for the day that identifier comes back — a restore, a
-                // re-import of the same UUID — and hands the new domain the settings of the
-                // one that was removed.
-                try FileProviderDomainStateStore.removeBootstrapConfig(for: domainState.identifier)
             } catch {
+                stillRegisteredIDs.insert(domainState.identifier)
                 errors.append(
                     .init(id: domainState.identifier, operation: .removeStaleDomain, error: error)
                 )
+            }
+        }
+
+        // The state each domain bootstrapped from and cached into goes after the domain —
+        // the same order `unregister` uses, and for the same reason: before macOS 15 the
+        // bootstrap snapshot is the last thing an extension can read a config from. Left
+        // behind, it waits for the day that identifier comes back — a restore, a re-import
+        // of the same UUID — and hands the new domain the settings of the one that was
+        // removed, while the caches keep copies of remote files the user disconnected.
+        //
+        // Skipped when the domain list could not be read: without it, a domain this pass
+        // could not see is indistinguishable from one that is gone. The connection list is
+        // read again rather than reusing `knownIDs`: the removals above suspend, and a
+        // connection added meanwhile already has a domain writing state of its own.
+        if didListDomains {
+            let currentIDs = Set(connectionManager.connections.map(\.domainIdentifier))
+            do {
+                let failures = try FileProviderDomainStateStore.removeOrphanedDomainStates(
+                    keeping: knownIDs.union(currentIDs).union(stillRegisteredIDs)
+                )
+                errors += failures.map {
+                    .init(id: $0.identifier, operation: .removeOrphanedDomainState, error: $0.error)
+                }
+            } catch {
+                errors.append(.init(id: "__domain_state__", operation: .removeOrphanedDomainState, error: error))
             }
         }
 

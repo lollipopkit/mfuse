@@ -239,6 +239,10 @@ struct MenuBarView: View {
             ) {
                 isQuitting = true
                 AppDelegate.requestFullTermination()
+                // `terminate` only returns once the quit has been refused — a deferred
+                // termination runs the run loop until it is answered — so the item must not
+                // stay disabled, or a refused quit leaves no way to try again.
+                isQuitting = false
             }
             .disabled(isQuitting)
         }

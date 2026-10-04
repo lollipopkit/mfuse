@@ -2,7 +2,9 @@ settings:
   base:
     # Copy this file to project.local.yml and replace with your local Apple team ID.
     DEVELOPMENT_TEAM: YOUR_TEAM_ID
-    # OAuth app IDs for bundled Dropbox / OneDrive support.
+    # OAuth app IDs for bundled Google Drive / Dropbox / OneDrive support.
+    # Google: an iOS-type OAuth client with bundle ID com.lollipopkit.mfuse.
+    MFGOOGLE_CLIENT_ID: YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com
     MFDROPBOX_CLIENT_ID: YOUR_DROPBOX_APP_KEY
     MFONEDRIVE_CLIENT_ID: YOUR_MICROSOFT_APP_ID
 

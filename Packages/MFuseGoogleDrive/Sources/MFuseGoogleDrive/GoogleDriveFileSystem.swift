@@ -4,8 +4,8 @@ import MFuseCore
 /// Google Drive implementation of `RemoteFileSystem` using the REST API v3.
 ///
 /// Uses OAuth 2.0 tokens stored in `Credential.token` (access token) and
-/// `Credential.password` (refresh token). `config.parameters["clientID"]` and
-/// `config.parameters["redirectURI"]` configure the OAuth client.
+/// `Credential.password` (refresh token), renewed against the bundled OAuth client — or,
+/// for older connections, the client recorded in `config.parameters`.
 public actor GoogleDriveFileSystem: RemoteFileSystem {
     private struct CachedPathEntry: Sendable {
         let fileID: String
@@ -30,6 +30,8 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
     /// Injectable so a test can drive the token endpoint this talks to. Production builds
     /// take the default.
     private let session: URLSession
+    /// Injectable so a test does not depend on the host bundle's Info.plist.
+    private let builtInOAuthClient: @Sendable () throws -> GoogleOAuthClient
 
     private static let apiBase = "https://www.googleapis.com/drive/v3"
     private static let uploadBase = "https://www.googleapis.com/upload/drive/v3"
@@ -41,30 +43,25 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
         config: ConnectionConfig,
         credential: Credential,
         session: URLSession = .shared,
+        builtInOAuthClient: @escaping @Sendable () throws -> GoogleOAuthClient = { try .builtIn() },
         onCredentialUpdated: (@Sendable (Credential) async throws -> Void)? = nil
     ) {
         self.config = config
         self.credential = credential
         self.session = session
+        self.builtInOAuthClient = builtInOAuthClient
         self.onCredentialUpdated = onCredentialUpdated
     }
 
     /// The OAuth client this connection renews its access token with.
     ///
     /// The one place both refresh paths read it — `connect()` renews on a 401 of its own,
-    /// and so does every operation afterwards — so neither can send what the other
-    /// normalizes away. The editor writes these trimmed, but a legacy row, or one synced
-    /// from a build that did not, carries the whitespace: `" client-id "` reaches Google's
-    /// token endpoint as a client that does not exist, and a stored refresh token that is
-    /// perfectly good stops renewing.
-    ///
-    /// `nil` when either half is missing, which each caller reports in its own terms.
-    private var oauthClient: (clientID: String, redirectURI: String)? {
-        guard let clientID = ConnectionConfig.trimmedParameter(config.parameters["clientID"]),
-              let redirectURI = ConnectionConfig.trimmedParameter(config.parameters["redirectURI"]) else {
-            return nil
-        }
-        return (clientID, redirectURI)
+    /// and so does every operation afterwards — so neither can resolve a different client
+    /// than the other. A connection that recorded a client of its own keeps it, since its
+    /// refresh token renews against no other; every other connection uses the bundled one.
+    private func oauthProvider() throws -> GoogleOAuthProvider {
+        let client = try GoogleOAuthClient.legacy(from: config.parameters) ?? builtInOAuthClient()
+        return GoogleOAuthProvider(client: client, session: session)
     }
 
     // MARK: - Lifecycle
@@ -84,33 +81,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             }
 
             if http.statusCode == 401 {
-                // Try refresh
-                if let refreshToken = credential.password {
-                    guard let oauthClient else {
-                        throw RemoteFileSystemError.connectionFailed(
-                            "Google Drive OAuth refresh requires non-empty clientID and redirectURI"
-                        )
-                    }
-                    let provider = GoogleOAuthProvider(
-                        clientID: oauthClient.clientID,
-                        redirectURI: oauthClient.redirectURI,
-                        session: session
-                    )
-                    let newToken = try await provider.refresh(refreshToken: refreshToken)
-                    let updatedCredential = Credential(
-                        password: newToken.refreshToken ?? credential.password,
-                        privateKey: credential.privateKey,
-                        passphrase: credential.passphrase,
-                        accessKeyID: credential.accessKeyID,
-                        secretAccessKey: credential.secretAccessKey,
-                        token: newToken.accessToken
-                    )
-                    try await onCredentialUpdated?(updatedCredential)
-                    self.credential = updatedCredential
-                    self.accessToken = newToken.accessToken
-                } else {
-                    throw RemoteFileSystemError.authenticationFailed
-                }
+                try await refreshAccessToken()
             } else if http.statusCode == 200 {
                 self.accessToken = token
             } else {
@@ -647,16 +618,7 @@ public actor GoogleDriveFileSystem: RemoteFileSystem {
             throw RemoteFileSystemError.authenticationFailed
         }
 
-        guard let oauthClient else {
-            throw RemoteFileSystemError.authenticationFailed
-        }
-
-        let provider = GoogleOAuthProvider(
-            clientID: oauthClient.clientID,
-            redirectURI: oauthClient.redirectURI,
-            session: session
-        )
-        let newToken = try await provider.refresh(refreshToken: refreshToken)
+        let newToken = try await oauthProvider().refresh(refreshToken: refreshToken)
         let updatedCredential = Credential(
             password: newToken.refreshToken ?? credential.password,
             privateKey: credential.privateKey,
