@@ -46,6 +46,15 @@
       }
     },
     {
+      "identity" : "nfs.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lollipopkit/nfs.swift.git",
+      "state" : {
+        "revision" : "9b56de1d69183f3acc9129f5ed395c8f93576de8",
+        "version" : "0.2.0"
+      }
+    },
+    {
       "identity" : "smbclient",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/kishikawakatsumi/SMBClient.git",

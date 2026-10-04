@@ -66,6 +66,8 @@ struct ConnectionEditorSheet: View {
     @State private var webdavTLS: Bool = true
     @State private var smbShare: String = ""
     @State private var smbDomain: String = ""
+    @State private var nfsUID: String = ""
+    @State private var nfsGID: String = ""
     @State private var ftpTLS: Bool = false
     /// The user-supplied OAuth client a Google Drive mount from before the bundled client
     /// was authorized against; `nil` once it is (re-)authorized against the bundled one.
@@ -165,6 +167,8 @@ struct ConnectionEditorSheet: View {
         _webdavTLS = State(initialValue: params["tls"] != "false")
         _smbShare = State(initialValue: params["share"] ?? "")
         _smbDomain = State(initialValue: params["domain"] ?? "")
+        _nfsUID = State(initialValue: params["uid"] ?? "")
+        _nfsGID = State(initialValue: params["gid"] ?? "")
         _ftpTLS = State(initialValue: params["tls"] == "true")
         _legacyGoogleOAuthClient = State(initialValue: savedLegacyGoogleOAuthClient)
         _oauthAccountName = State(initialValue: params["oauthAccountName"] ?? "")
@@ -315,6 +319,20 @@ struct ConnectionEditorSheet: View {
                 case .ftp:
                     Section(AppL10n.string("editor.section.ftp", fallback: "FTP Settings")) {
                         Toggle(AppL10n.string("editor.field.useTLSFTPS", fallback: "Use TLS (FTPS)"), isOn: $ftpTLS)
+                    }
+                case .nfs:
+                    Section {
+                        TextField(AppL10n.string("editor.field.nfsUID", fallback: "UID (optional)"), text: $nfsUID, prompt: Text(String(getuid())))
+                        TextField(AppL10n.string("editor.field.nfsGID", fallback: "GID (optional)"), text: $nfsGID, prompt: Text(String(getgid())))
+                    } header: {
+                        Text(AppL10n.string("editor.section.nfs", fallback: "NFS Settings"))
+                    } footer: {
+                        Text(AppL10n.string(
+                            "editor.footer.nfs",
+                            fallback: "NFSv3 over TCP. Remote Path is the exported directory. The server sees requests from these IDs (your Mac's by default) and from a port above 1024, so a Linux export needs the insecure option."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                 default:
                     EmptyView()
@@ -524,6 +542,9 @@ struct ConnectionEditorSheet: View {
         if backendType == .googleDrive || usesBundledOAuthFlow {
             return hasConnectedOAuthAccount
         }
+        if backendType == .nfs, !Self.isValidNFSID(nfsUID) || !Self.isValidNFSID(nfsGID) {
+            return false
+        }
         if backendType == .s3 {
             let hasRequiredAccessKeyCredentials =
                 authMethod != .accessKey || (!s3AccessKeyID.isEmpty && !s3SecretAccessKey.isEmpty)
@@ -539,6 +560,15 @@ struct ConnectionEditorSheet: View {
             return false
         }
         return !backendType.requiresServerEndpoint || (!Self.isBlank(host) && hasValidPort)
+    }
+
+    /// An NFS uid or gid as typed: empty for the default, or a 32-bit id.
+    private static func nfsID(_ text: String) -> UInt32? {
+        UInt32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func isValidNFSID(_ text: String) -> Bool {
+        isBlank(text) || nfsID(text) != nil
     }
 
     /// A port the backends can dial. Zero parses and is persisted, but every host-based
@@ -1123,6 +1153,9 @@ struct ConnectionEditorSheet: View {
             if !smbDomain.isEmpty { params["domain"] = smbDomain }
         case .ftp:
             if ftpTLS { params["tls"] = "true" }
+        case .nfs:
+            if let uid = Self.nfsID(nfsUID) { params["uid"] = String(uid) }
+            if let gid = Self.nfsID(nfsGID) { params["gid"] = String(gid) }
         case .googleDrive:
             // Kept only while the stored token still belongs to a user-supplied client,
             // which is the only one it renews against. TODO: remove with

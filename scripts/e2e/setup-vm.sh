@@ -6,11 +6,18 @@
 set -euo pipefail
 export LC_ALL=C DEBIAN_FRONTEND=noninteractive
 
-ENV_FILE=$(mktemp); trap 'rm -f "$ENV_FILE"' EXIT
+# Values are taken literally, never evaluated: the script runs as root.
 PUBKEY=""
 while IFS= read -r line; do
   case "$line" in
-    MFUSE_E2E_*=*) echo "$line" >> "$ENV_FILE" ;;
+    MFUSE_E2E_*=*)
+      key="${line%%=*}"
+      if [[ ! "$key" =~ ^MFUSE_E2E_[A-Z0-9_]+$ ]]; then
+        echo "setup-vm.sh: invalid setting name: $key" >&2
+        exit 1
+      fi
+      printf -v "$key" '%s' "${line#*=}"
+      ;;
     ssh-ed25519\ *) PUBKEY="$line" ;;
   esac
 done
@@ -18,8 +25,6 @@ if [ -z "$PUBKEY" ]; then
   echo "setup-vm.sh: no ssh-ed25519 public key on stdin" >&2
   exit 1
 fi
-# shellcheck disable=SC1090
-. "$ENV_FILE"
 U="$MFUSE_E2E_USER"
 
 # --- user (SFTP, FTP, SMB share owner) ---
@@ -135,6 +140,20 @@ EOF
 a2enconf -q mfuse-dav >/dev/null
 systemctl reload apache2
 
+# --- NFSv3 (nfs-kernel-server). MFuse sends from an unprivileged port, so the export it
+# mounts needs `insecure`; /srv/nfs-secure lacks it, to check how that refusal is reported.
+if ! dpkg -s nfs-kernel-server >/dev/null 2>&1; then
+  apt-get install -y -qq nfs-kernel-server >/dev/null
+fi
+install -d -o "$U" -g "$U" /srv/nfs /srv/nfs-secure
+cat > /etc/exports <<EOF
+/srv/nfs        *(rw,sync,insecure,no_subtree_check)
+/srv/nfs-secure *(rw,sync,no_subtree_check)
+EOF
+exportfs -ra
+systemctl enable --now nfs-server >/dev/null 2>&1
+systemctl restart nfs-server
+
 # --- S3 (SeaweedFS; versitygw mishandles encoding-type, see versity/versitygw#1985) ---
 if dpkg -s versitygw >/dev/null 2>&1; then apt-get remove -y -qq versitygw >/dev/null; fi
 rm -rf /srv/s3
@@ -180,4 +199,4 @@ if ! bucket_listed; then
 fi
 
 sleep 1
-for s in ssh vsftpd vsftpd-implicit smbd apache2 mfuse-s3; do printf '%-10s %s\n' "$s" "$(systemctl is-active $s)"; done
+for s in ssh vsftpd vsftpd-implicit smbd apache2 nfs-server mfuse-s3; do printf '%-10s %s\n' "$s" "$(systemctl is-active $s)"; done
