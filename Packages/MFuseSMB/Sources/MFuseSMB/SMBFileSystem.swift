@@ -55,9 +55,9 @@ public actor SMBFileSystem: RemoteFileSystem {
     // MARK: - Enumeration
 
     public func enumerate(at path: RemotePath) async throws -> [RemoteItem] {
-        let client = try requireClient()
-        let smbPath = resolvedPath(path)
-        let files = try await client.listDirectory(path: smbPath)
+        let files = try await perform(on: path) { client, smbPath in
+            try await client.listDirectory(path: smbPath)
+        }
         return files.compactMap { file -> RemoteItem? in
             let name = file.name
             guard name != "." && name != ".." else { return nil }
@@ -74,9 +74,9 @@ public actor SMBFileSystem: RemoteFileSystem {
     }
 
     public func itemInfo(at path: RemotePath) async throws -> RemoteItem {
-        let client = try requireClient()
-        let smbPath = resolvedPath(path)
-        let stat = try await client.fileStat(path: smbPath)
+        let stat = try await perform(on: path) { client, smbPath in
+            try await client.fileStat(path: smbPath)
+        }
         return RemoteItem(
             path: path,
             type: stat.isDirectory ? .directory : .file,
@@ -90,17 +90,20 @@ public actor SMBFileSystem: RemoteFileSystem {
     // MARK: - Read
 
     public func readFile(at path: RemotePath) async throws -> Data {
-        let client = try requireClient()
-        let smbPath = resolvedPath(path)
-        return try await client.download(path: smbPath)
+        try await perform(on: path) { client, smbPath in
+            try await client.download(path: smbPath)
+        }
     }
 
     // MARK: - Write
 
     public func writeFile(at path: RemotePath, data: Data) async throws {
-        let client = try requireClient()
-        let smbPath = resolvedPath(path)
-        try await client.upload(content: data, path: smbPath)
+        // Not `upload`: SMBClient opens with `.create`, which refuses a file that exists,
+        // so replacing one — every save from Finder — failed with "object name already
+        // exists". `.overwriteIf` truncates the existing file, or creates it when missing.
+        try await perform(on: path) { client, smbPath in
+            try await Self.write(data, to: smbPath, session: client.session, disposition: .overwriteIf)
+        }
     }
 
     public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
@@ -109,14 +112,8 @@ public actor SMBFileSystem: RemoteFileSystem {
     }
 
     public func createFile(at path: RemotePath, data: Data) async throws {
-        let client = try requireClient()
-        let smbPath = resolvedPath(path)
-        do {
-            try await client.upload(content: data, path: smbPath)
-        } catch let error as ErrorResponse where NTStatus(error.header.status) == .objectNameCollision {
-            throw RemoteFileSystemError.alreadyExists(path)
-        } catch {
-            throw error
+        try await perform(on: path) { client, smbPath in
+            try await Self.write(data, to: smbPath, session: client.session, disposition: .create)
         }
     }
 
@@ -128,28 +125,118 @@ public actor SMBFileSystem: RemoteFileSystem {
     // MARK: - Mutations
 
     public func createDirectory(at path: RemotePath) async throws {
-        let client = try requireClient()
-        let smbPath = resolvedPath(path)
-        try await client.createDirectory(path: smbPath)
+        try await perform(on: path) { client, smbPath in
+            try await client.createDirectory(path: smbPath)
+        }
     }
 
+    /// Deletes a file, or a directory with everything in it — what every other backend
+    /// does, and what the extension asks for. SMB refuses to delete a directory that is not
+    /// empty, so its contents go first.
     public func delete(at path: RemotePath) async throws {
-        let client = try requireClient()
-        let smbPath = resolvedPath(path)
-        let stat = try await client.fileStat(path: smbPath)
-        if stat.isDirectory {
-            try await client.deleteDirectory(path: smbPath)
+        let item = try await itemInfo(at: path)
+        if item.isDirectory {
+            for child in try await enumerate(at: path) {
+                try await delete(at: child.path)
+            }
+            try await perform(on: path) { client, smbPath in
+                try await client.deleteDirectory(path: smbPath)
+            }
         } else {
-            try await client.deleteFile(path: smbPath)
+            try await perform(on: path) { client, smbPath in
+                try await client.deleteFile(path: smbPath)
+            }
         }
     }
 
     public func move(from source: RemotePath, to destination: RemotePath) async throws {
         let client = try requireClient()
-        try await client.move(from: resolvedPath(source), to: resolvedPath(destination))
+        do {
+            try await client.move(from: resolvedPath(source), to: resolvedPath(destination))
+        } catch {
+            // A name collision is about where the item was going; anything else is about
+            // the item being moved.
+            let mapped = Self.mapped(error, path: source)
+            if case RemoteFileSystemError.alreadyExists = mapped {
+                throw RemoteFileSystemError.alreadyExists(destination)
+            }
+            throw mapped
+        }
     }
 
     // MARK: - Helpers
+
+    /// Runs one SMB request for `path`, with its failure translated.
+    private func perform<T>(
+        on path: RemotePath,
+        _ body: (SMBClient, String) async throws -> T
+    ) async throws -> T {
+        let client = try requireClient()
+        do {
+            return try await body(client, resolvedPath(path))
+        } catch {
+            throw Self.mapped(error, path: path)
+        }
+    }
+
+    /// SMBClient reports failures as raw NT status codes. The File Provider extension maps
+    /// `RemoteFileSystemError` onto the errors Finder acts on — a missing item, a name
+    /// collision — so an untranslated status reached Finder as a generic failure: a file
+    /// that was simply gone read as an error.
+    static func mapped(_ error: Error, path: RemotePath) -> Error {
+        guard let response = error as? ErrorResponse else { return error }
+        let status = NTStatus(response.header.status)
+        if status == .objectNameNotFound || status == .objectPathNotFound || status == .noSuchFile {
+            return RemoteFileSystemError.notFound(path)
+        }
+        if status == .objectNameCollision {
+            return RemoteFileSystemError.alreadyExists(path)
+        }
+        if status == .accessDenied {
+            return RemoteFileSystemError.permissionDenied(path)
+        }
+        if status == .notADirectory {
+            return RemoteFileSystemError.notDirectory(path)
+        }
+        if status == .fileIsADirectory {
+            return RemoteFileSystemError.notFile(path)
+        }
+        return error
+    }
+
+    /// Writes `data` to a file opened with `disposition`, in chunks the server accepts.
+    private static func write(
+        _ data: Data,
+        to smbPath: String,
+        session: Session,
+        disposition: Create.CreateDisposition
+    ) async throws {
+        let created = try await session.create(
+            desiredAccess: [.readData, .writeData, .appendData, .readAttributes, .readControl, .writeDac],
+            fileAttributes: [.archive, .normal],
+            shareAccess: [.read, .write, .delete],
+            createDisposition: disposition,
+            createOptions: [],
+            name: smbPath
+        )
+        do {
+            let chunkSize = max(Int(session.maxWriteSize), 1)
+            var offset = 0
+            while offset < data.count {
+                let end = min(offset + chunkSize, data.count)
+                _ = try await session.write(
+                    data: data.subdata(in: offset..<end),
+                    fileId: created.fileId,
+                    offset: UInt64(offset)
+                )
+                offset = end
+            }
+        } catch {
+            _ = try? await session.close(fileId: created.fileId)
+            throw error
+        }
+        _ = try await session.close(fileId: created.fileId)
+    }
 
     private func requireClient() throws -> SMBClient {
         guard let client = client else {

@@ -217,7 +217,9 @@ struct ConnectionEditorSheet: View {
                         prompt: Text(AppL10n.string("editor.prompt.name", fallback: "My Server"))
                     )
                     Picker(AppL10n.string("detail.field.type", fallback: "Type"), selection: $backendType) {
-                        ForEach(BackendType.allCases) { type in
+                        // An unavailable backend is still listed for a connection saved with
+                        // it, so the sheet can show and edit that connection.
+                        ForEach(BackendType.allCases.filter { $0.isAvailable || $0 == savedBackendType }) { type in
                             Text(type.displayName).tag(type)
                         }
                     }

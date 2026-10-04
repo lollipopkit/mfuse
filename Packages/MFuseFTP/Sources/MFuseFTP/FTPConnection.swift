@@ -119,7 +119,11 @@ final class FTPConnection: @unchecked Sendable {
     func close() async throws {
         try await commandGate.withLock {
             let channel = takeChannel()
-            try await channel?.close()
+            do {
+                try await channel?.close()
+            } catch ChannelError.alreadyClosed {
+                // The server closes its end after QUIT; the connection is closed either way.
+            }
         }
     }
 
