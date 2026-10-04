@@ -889,8 +889,21 @@ public actor S3FileSystem: RemoteFileSystem {
                 )
                 let listResp = try await s3.listObjectsV2(listReq)
 
-                for key in (listResp.contents ?? []).compactMap(\.key) {
+                for object in listResp.contents ?? [] {
+                    guard let key = object.key else { continue }
                     let suffix = String(key.dropFirst(sourcePrefix.count))
+                    // A directory marker is written afresh rather than copied: it carries
+                    // no content, and servers that keep directories as real directories —
+                    // SeaweedFS among them — list the marker but answer a copy of it with
+                    // NoSuchKey, which failed every directory rename and copy. A key ending
+                    // in "/" that does hold data is an ordinary object and is copied, or a
+                    // move would delete its contents with the source.
+                    if key.hasSuffix("/"), (object.size ?? 0) == 0 {
+                        _ = try await s3.putObject(
+                            S3.PutObjectRequest(body: AWSHTTPBody(), bucket: bucket, key: destinationPrefix + suffix)
+                        )
+                        continue
+                    }
                     try await copyObject(
                         fromKey: key,
                         toKey: destinationPrefix + suffix,

@@ -67,7 +67,6 @@ struct ConnectionEditorSheet: View {
     @State private var smbShare: String = ""
     @State private var smbDomain: String = ""
     @State private var ftpTLS: Bool = false
-    @State private var ftpPassive: Bool = true
     /// The user-supplied OAuth client a Google Drive mount from before the bundled client
     /// was authorized against; `nil` once it is (re-)authorized against the bundled one.
     /// TODO: remove with `GoogleOAuthClient.legacy(from:)`.
@@ -167,7 +166,6 @@ struct ConnectionEditorSheet: View {
         _smbShare = State(initialValue: params["share"] ?? "")
         _smbDomain = State(initialValue: params["domain"] ?? "")
         _ftpTLS = State(initialValue: params["tls"] == "true")
-        _ftpPassive = State(initialValue: params["passive"] != "false")
         _legacyGoogleOAuthClient = State(initialValue: savedLegacyGoogleOAuthClient)
         _oauthAccountName = State(initialValue: params["oauthAccountName"] ?? "")
         _oauthAccountEmail = State(initialValue: params["oauthAccountEmail"] ?? "")
@@ -217,7 +215,9 @@ struct ConnectionEditorSheet: View {
                         prompt: Text(AppL10n.string("editor.prompt.name", fallback: "My Server"))
                     )
                     Picker(AppL10n.string("detail.field.type", fallback: "Type"), selection: $backendType) {
-                        ForEach(BackendType.allCases) { type in
+                        // An unavailable backend is still listed for a connection saved with
+                        // it, so the sheet can show and edit that connection.
+                        ForEach(BackendType.allCases.filter { $0.isAvailable || $0 == savedBackendType }) { type in
                             Text(type.displayName).tag(type)
                         }
                     }
@@ -315,7 +315,6 @@ struct ConnectionEditorSheet: View {
                 case .ftp:
                     Section(AppL10n.string("editor.section.ftp", fallback: "FTP Settings")) {
                         Toggle(AppL10n.string("editor.field.useTLSFTPS", fallback: "Use TLS (FTPS)"), isOn: $ftpTLS)
-                        Toggle(AppL10n.string("editor.field.passiveMode", fallback: "Passive Mode"), isOn: $ftpPassive)
                     }
                 default:
                     EmptyView()
@@ -1124,7 +1123,6 @@ struct ConnectionEditorSheet: View {
             if !smbDomain.isEmpty { params["domain"] = smbDomain }
         case .ftp:
             if ftpTLS { params["tls"] = "true" }
-            if !ftpPassive { params["passive"] = "false" }
         case .googleDrive:
             // Kept only while the stored token still belongs to a user-supplied client,
             // which is the only one it renews against. TODO: remove with

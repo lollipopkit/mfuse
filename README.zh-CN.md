@@ -30,13 +30,18 @@ MFuse 是一个 macOS 应用，通过 File Provider 把远端存储暴露到 Fin
 - SMB
 - FTP
 - NFS
-- Google Drive
-- Dropbox
-- Microsoft OneDrive
+- Google Drive（Google 审核通过前可能无法登录）
+- Dropbox（暂不可用）
+- Microsoft OneDrive（暂不可用）
+
+Dropbox 和 OneDrive 目前在应用中已隐藏：发布版本尚未包含它们的 OAuth client ID，无法登录。已有的此类连接会保留，但无法连接。
+
+Google Drive 使用 MFuse 的 OAuth 应用登录，该应用正在等待 Google 审核。审核通过前，登录可能被拒绝，或显示“未经验证的应用”警告。
 
 ## 后端说明
 
 - SFTP 的目录枚举带有一个兼容性 fallback：当常规 SFTP 列表请求超时，或遇到某些连接级错误时，MFuse 可能会复用现有 SSH 会话，在远端主机上执行一小段 `python3` 脚本来完成目录枚举。这个 fallback 不会用于正常成功的列表请求，也不会用于权限不足或路径不存在这类错误。触发该 fallback 的远端主机需要提供 `python3`，否则目录枚举会失败。
+- FTP 只支持被动模式（先用 `EPSV`，不支持时改用 `PASV`）；主动模式在 NAT 后无法工作。开启 TLS 时，端口 990 使用隐式 FTPS，其他端口使用显式 FTPS（`AUTH TLS`），数据连接始终加密（`PROT P`）。要求数据连接复用 TLS session 的服务器（vsftpd 的 `require_ssl_reuse=YES`、FileZilla Server 的默认设置）暂不支持：MFuse 使用的 TLS 库不支持 session 复用。
 
 ## 仓库结构
 
@@ -77,7 +82,7 @@ make generate
 
 ### 配置内置 OAuth 应用
 
-Google Drive、Dropbox 和 OneDrive 走内置 PKCE OAuth 配置，运行前需要在 `project.local.yml`
+Google Drive、Dropbox 和 OneDrive 走内置 PKCE OAuth 配置（Dropbox 和 OneDrive 目前在应用中已禁用，见上文），运行前需要在 `project.local.yml`
 里填入对应的应用 ID：
 
 ```yaml
@@ -175,6 +180,16 @@ make clean      # 清理构建产物
 - `MFuseWebDAV` 的 XML 解析逻辑
 
 部分后端测试仍是占位或偏集成测试，因此不同协议的测试覆盖度目前还不一致。
+
+### 端到端测试
+
+`Packages/MFuseE2E` 针对真实的 SFTP（密码和密钥）、FTP、FTPS（显式和隐式）、WebDAV、SMB、S3 服务器执行同一组文件操作：创建、覆盖写、范围读与流式写入、中文文件名、移动、复制、递归删除。它不覆盖 File Provider extension 本身。
+
+1. 用 `scripts/e2e/setup-vm.sh` 配置一台 Debian 13 主机，脚本会安装 OpenSSH、vsftpd、Samba、Apache WebDAV 和 SeaweedFS（S3）。凭据通过标准输入传入，不会保存到仓库。
+2. 把对应的 `MFUSE_E2E_*` 配置写入 `~/.config/mfuse/e2e.env`（变量名见 `setup-vm.sh`）。把主机上的测试 CA 证书 `/etc/mfuse-e2e/ca.pem` 复制到本机，并用 `MFUSE_E2E_CA` 指向它；FTPS 测试只在测试进程内信任该证书。
+3. 运行 `make test-e2e`。未设置 `MFUSE_E2E_HOST` 时测试会跳过。
+
+HTTPS WebDAV 暂未覆盖。
 
 ## 许可证
 

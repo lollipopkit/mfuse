@@ -2,6 +2,7 @@ import Foundation
 import MFuseCore
 import NIO
 import NIOFoundationCompat
+import NIOSSL
 
 /// FTP/FTPS implementation of `RemoteFileSystem` using SwiftNIO.
 public actor FTPFileSystem: RemoteFileSystem {
@@ -16,55 +17,87 @@ public actor FTPFileSystem: RemoteFileSystem {
 
     private let config: ConnectionConfig
     private let credential: Credential
+    private let additionalTrustRoots: [NIOSSLCertificate]
     private var connection: FTPConnection?
+    private var isBusy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     public var isConnected: Bool { connection != nil }
 
     public init(config: ConnectionConfig, credential: Credential) {
+        self.init(config: config, credential: credential, additionalTrustRoots: [])
+    }
+
+    /// For tests against servers whose certificate a private CA signed.
+    init(config: ConnectionConfig, credential: Credential, additionalTrustRoots: [NIOSSLCertificate]) {
         self.config = config
         self.credential = credential
+        self.additionalTrustRoots = additionalTrustRoots
     }
 
     // MARK: - Config Helpers
 
-    private var useTLS: Bool { config.parameters["tls"] == "true" }
+    /// With TLS on, port 990 means implicit FTPS, the port's registered use; any other port
+    /// means explicit FTPS (`AUTH TLS`), the standard form.
+    private var security: FTPSecurity {
+        guard config.parameters["tls"] == "true" else { return .none }
+        return config.port == 990 ? .implicit : .explicit
+    }
 
     // MARK: - Lifecycle
 
     public func connect() async throws {
-        let conn = FTPConnection(host: config.host, port: Int(config.port), useTLS: useTLS)
+        try await serialized { try await openConnection() }
+    }
 
+    public func disconnect() async throws {
+        try await serialized {
+            guard let conn = connection else { return }
+            defer { connection = nil }
+            _ = try? await conn.sendCommand("QUIT")
+            try await conn.close()
+        }
+    }
+
+    private func openConnection() async throws {
+        let conn: FTPConnection
         do {
+            conn = try FTPConnection(
+                host: config.host,
+                port: Int(config.port),
+                security: security,
+                additionalTrustRoots: additionalTrustRoots
+            )
             try await conn.connect()
         } catch {
             throw RemoteFileSystemError.connectionFailed(error.localizedDescription)
         }
 
         do {
-            // Authenticate
-            if config.authMethod == .anonymous {
-                let userResp = try await conn.sendCommand("USER anonymous")
-                if userResp.code == 331 {
-                    let passResp = try await conn.sendCommand("PASS anonymous@")
-                    guard passResp.code == 230 else {
-                        throw RemoteFileSystemError.authenticationFailed
-                    }
-                } else if userResp.code != 230 {
+            let user = config.authMethod == .anonymous ? "anonymous" : config.username
+            let password = config.authMethod == .anonymous ? "anonymous@" : (credential.password ?? "")
+            let userResp = try await conn.sendCommand("USER \(user)")
+            if userResp.code == 331 {
+                let passResp = try await conn.sendCommand("PASS \(password)")
+                guard passResp.code == 230 else {
                     throw RemoteFileSystemError.authenticationFailed
                 }
-            } else {
-                let userResp = try await conn.sendCommand("USER \(config.username)")
-                if userResp.code == 331 {
-                    let passResp = try await conn.sendCommand("PASS \(credential.password ?? "")")
-                    guard passResp.code == 230 else {
-                        throw RemoteFileSystemError.authenticationFailed
+            } else if userResp.code != 230 {
+                throw RemoteFileSystemError.authenticationFailed
+            }
+
+            if security != .none {
+                // Without `PROT P` data connections stay in plain text (RFC 4217 section 9).
+                for command in ["PBSZ 0", "PROT P"] {
+                    let response = try await conn.sendCommand(command)
+                    guard (200..<300).contains(response.code) else {
+                        throw RemoteFileSystemError.connectionFailed(
+                            "Server refused to protect data connections (\(command)): \(response.text)"
+                        )
                     }
-                } else if userResp.code != 230 {
-                    throw RemoteFileSystemError.authenticationFailed
                 }
             }
 
-            // Set binary mode
             let typeResp = try await conn.sendCommand("TYPE I")
             guard (200..<300).contains(typeResp.code) else {
                 throw FTPError.unexpectedResponse(typeResp)
@@ -77,60 +110,28 @@ public actor FTPFileSystem: RemoteFileSystem {
         self.connection = conn
     }
 
-    public func disconnect() async throws {
-        if let conn = connection {
-            defer { connection = nil }
-            _ = try? await conn.sendCommand("QUIT")
-            try await conn.close()
-        }
-    }
-
     // MARK: - Enumeration
 
     public func enumerate(at path: RemotePath) async throws -> [RemoteItem] {
-        let conn = try requireConnection()
-        let remotePath = resolvedPath(path)
-
-        // Open data connection and send LIST
-        let (dataChannel, dataHandler) = try await conn.openDataConnection()
-        let response: FTPResponse
-        do {
-            response = try await conn.sendCommand("LIST \(remotePath)")
-        } catch {
-            try? await dataChannel.close()
-            throw error
-        }
-        guard response.code == 150 || response.code == 125 else {
-            try await dataChannel.close()
-            throw RemoteFileSystemError.operationFailed("LIST failed: \(response.text)")
-        }
-
-        let rawData: Data
-        do {
-            rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
-        } catch {
-            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
-            throw error
-        }
-        try validateTransferCompletion(
-            try await conn.readResponse(),
-            failurePrefix: "LIST completion failed"
-        )
-        let listing = String(data: rawData, encoding: .utf8) ?? ""
-
-        return FTPDirectoryParser.parse(listing).map { entry in
-            let childPath = path.appending(entry.name)
-            return RemoteItem(
-                path: childPath,
-                type: entry.isDirectory ? .directory : .file,
-                size: entry.size,
-                modificationDate: entry.modificationDate ?? Date(),
-                permissions: entry.permissions
-            )
+        try await serialized {
+            let listing = try await download("LIST \(resolvedPath(path))", path: path)
+            return Self.entries(in: listing).map { entry in
+                RemoteItem(
+                    path: path.appending(entry.name),
+                    type: entry.isDirectory ? .directory : .file,
+                    size: entry.size,
+                    modificationDate: entry.modificationDate ?? Date(),
+                    permissions: entry.permissions
+                )
+            }
         }
     }
 
     public func itemInfo(at path: RemotePath) async throws -> RemoteItem {
+        try await serialized { try await info(at: path) }
+    }
+
+    private func info(at path: RemotePath) async throws -> RemoteItem {
         let conn = try requireConnection()
         let remotePath = resolvedPath(path)
 
@@ -159,144 +160,83 @@ public actor FTPFileSystem: RemoteFileSystem {
             return RemoteItem(path: path, type: .file, size: size, modificationDate: date)
         }
 
-        return try await itemInfoFromListingFallback(at: path, using: conn)
+        return try await infoFromParentListing(at: path)
+    }
+
+    private func infoFromParentListing(at path: RemotePath) async throws -> RemoteItem {
+        if path.isRoot {
+            return RemoteItem(path: path, type: .directory, modificationDate: Date())
+        }
+        let parent = path.parent ?? path
+        let listing = try await download("LIST \(resolvedPath(parent))", path: path)
+        guard let entry = Self.entries(in: listing)
+            .first(where: { $0.name == path.name }) else {
+            throw RemoteFileSystemError.notFound(path)
+        }
+        return RemoteItem(
+            path: path,
+            type: entry.isDirectory ? .directory : .file,
+            size: entry.size,
+            modificationDate: entry.modificationDate ?? Date(),
+            permissions: entry.permissions
+        )
     }
 
     // MARK: - Read
 
     public func readFile(at path: RemotePath) async throws -> Data {
-        let conn = try requireConnection()
-        let remotePath = resolvedPath(path)
-
-        let (dataChannel, dataHandler) = try await conn.openDataConnection()
-        let response: FTPResponse
-        do {
-            response = try await conn.sendCommand("RETR \(remotePath)")
-        } catch {
-            try? await dataChannel.close()
-            throw error
-        }
-        guard response.code == 150 || response.code == 125 else {
-            try await dataChannel.close()
-            if response.code == 550 {
-                throw RemoteFileSystemError.notFound(path)
-            }
-            throw RemoteFileSystemError.operationFailed("RETR failed: \(response.text)")
-        }
-
-        let data: Data
-        do {
-            data = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
-        } catch {
-            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
-            throw error
-        }
-        try validateTransferCompletion(
-            try await conn.readResponse(),
-            failurePrefix: "RETR completion failed"
-        )
-        return data
+        try await serialized { try await download("RETR \(resolvedPath(path))", path: path) }
     }
 
     // MARK: - Write
 
     public func writeFile(at path: RemotePath, data: Data) async throws {
-        let conn = try requireConnection()
-        let remotePath = resolvedPath(path)
-
-        let (dataChannel, _) = try await conn.openDataConnection()
-        let response: FTPResponse
-        do {
-            response = try await conn.sendCommand("STOR \(remotePath)")
-        } catch {
-            try? await dataChannel.close()
-            throw error
-        }
-        guard response.code == 150 || response.code == 125 else {
-            try await dataChannel.close()
-            throw RemoteFileSystemError.operationFailed("STOR failed: \(response.text)")
-        }
-
-        do {
-            var buffer = dataChannel.allocator.buffer(capacity: data.count)
-            buffer.writeBytes(data)
-            try await dataChannel.writeAndFlush(buffer)
-            try await dataChannel.close()
-        } catch {
-            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
-            throw error
-        }
-
-        // Wait for transfer complete
-        let doneResp = try await conn.readResponse()
-        if doneResp.code != 226 && doneResp.code != 250 {
-            throw RemoteFileSystemError.operationFailed("Upload failed: \(doneResp.text)")
-        }
+        try await serialized { try await store(data, at: path) }
     }
 
     public func writeFile(at path: RemotePath, from localFileURL: URL) async throws {
-        let conn = try requireConnection()
-        let remotePath = resolvedPath(path)
-
-        let (dataChannel, _) = try await conn.openDataConnection()
-        let response: FTPResponse
-        do {
-            response = try await conn.sendCommand("STOR \(remotePath)")
-        } catch {
-            try? await dataChannel.close()
-            throw error
-        }
-        guard response.code == 150 || response.code == 125 else {
-            try await dataChannel.close()
-            throw RemoteFileSystemError.operationFailed("STOR failed: \(response.text)")
-        }
-
-        do {
-            let handle = try FileHandle(forReadingFrom: localFileURL)
-            defer { try? handle.close() }
-
-            while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
-                var buffer = dataChannel.allocator.buffer(capacity: chunk.count)
-                buffer.writeBytes(chunk)
-                try await dataChannel.writeAndFlush(buffer)
-            }
-
-            try await dataChannel.close()
-        } catch {
-            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
-            throw error
-        }
-
-        let doneResp = try await conn.readResponse()
-        if doneResp.code != 226 && doneResp.code != 250 {
-            throw RemoteFileSystemError.operationFailed("Upload failed: \(doneResp.text)")
-        }
+        try await serialized { try await store(contentsOf: localFileURL, at: path) }
     }
 
     public func createFile(at path: RemotePath, data: Data) async throws {
-        do {
-            _ = try await itemInfo(at: path)
-            throw RemoteFileSystemError.alreadyExists(path)
-        } catch let error as RemoteFileSystemError {
-            switch error {
-            case .notFound:
-                try await writeFile(at: path, data: data)
-            default:
-                throw error
-            }
+        try await serialized {
+            try await requireMissing(path)
+            try await store(data, at: path)
         }
     }
 
     public func createFile(at path: RemotePath, from localFileURL: URL) async throws {
+        try await serialized {
+            try await requireMissing(path)
+            try await store(contentsOf: localFileURL, at: path)
+        }
+    }
+
+    private func requireMissing(_ path: RemotePath) async throws {
         do {
-            _ = try await itemInfo(at: path)
-            throw RemoteFileSystemError.alreadyExists(path)
-        } catch let error as RemoteFileSystemError {
-            switch error {
-            case .notFound:
-                try await writeFile(at: path, from: localFileURL)
-            default:
-                throw error
+            _ = try await info(at: path)
+        } catch RemoteFileSystemError.notFound {
+            return
+        }
+        throw RemoteFileSystemError.alreadyExists(path)
+    }
+
+    private func store(_ data: Data, at path: RemotePath) async throws {
+        try await upload(to: path) { channel in
+            var buffer = channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            try await channel.writeAndFlush(buffer)
+        }
+    }
+
+    private func store(contentsOf localFileURL: URL, at path: RemotePath) async throws {
+        let handle = try FileHandle(forReadingFrom: localFileURL)
+        defer { try? handle.close() }
+        try await upload(to: path) { channel in
+            while let chunk = try handle.read(upToCount: Self.uploadChunkSize), !chunk.isEmpty {
+                var buffer = channel.allocator.buffer(capacity: chunk.count)
+                buffer.writeBytes(chunk)
+                try await channel.writeAndFlush(buffer)
             }
         }
     }
@@ -304,20 +244,24 @@ public actor FTPFileSystem: RemoteFileSystem {
     // MARK: - Mutations
 
     public func createDirectory(at path: RemotePath) async throws {
-        let conn = try requireConnection()
-        let remotePath = resolvedPath(path)
-        let resp = try await conn.sendCommand("MKD \(remotePath)")
-        guard resp.code == 257 else {
-            throw RemoteFileSystemError.operationFailed("MKD failed: \(resp.text)")
+        try await serialized {
+            let resp = try await requireConnection().sendCommand("MKD \(resolvedPath(path))")
+            guard resp.code == 257 else {
+                throw RemoteFileSystemError.operationFailed("MKD failed: \(resp.text)")
+            }
         }
     }
 
     public func delete(at path: RemotePath) async throws {
-        let item = try await itemInfo(at: path)
+        try await serialized { try await deleteRecursively(at: path) }
+    }
+
+    private func deleteRecursively(at path: RemotePath) async throws {
+        let item = try await info(at: path)
         if item.isDirectory {
-            let children = try await enumerate(at: path)
-            for child in children {
-                try await delete(at: child.path)
+            let listing = try await download("LIST \(resolvedPath(path))", path: path)
+            for entry in Self.entries(in: listing) {
+                try await deleteRecursively(at: path.appending(entry.name))
             }
         }
         try await deleteFileOrEmptyDirectory(at: path)
@@ -343,21 +287,110 @@ public actor FTPFileSystem: RemoteFileSystem {
     }
 
     public func move(from source: RemotePath, to destination: RemotePath) async throws {
-        let conn = try requireConnection()
-        let srcPath = resolvedPath(source)
-        let dstPath = resolvedPath(destination)
-
-        let rnfrResp = try await conn.sendCommand("RNFR \(srcPath)")
-        guard rnfrResp.code == 350 else {
-            throw RemoteFileSystemError.operationFailed("RNFR failed: \(rnfrResp.text)")
+        try await serialized {
+            let conn = try requireConnection()
+            let rnfrResp = try await conn.sendCommand("RNFR \(resolvedPath(source))")
+            guard rnfrResp.code == 350 else {
+                throw RemoteFileSystemError.operationFailed("RNFR failed: \(rnfrResp.text)")
+            }
+            let rntoResp = try await conn.sendCommand("RNTO \(resolvedPath(destination))")
+            guard rntoResp.code == 250 else {
+                throw RemoteFileSystemError.operationFailed("RNTO failed: \(rntoResp.text)")
+            }
         }
-        let rntoResp = try await conn.sendCommand("RNTO \(dstPath)")
-        guard rntoResp.code == 250 else {
-            throw RemoteFileSystemError.operationFailed("RNTO failed: \(rntoResp.text)")
+    }
+
+    // MARK: - Transfers
+
+    /// Runs `command` (`RETR`, `LIST`) and returns what the server sends on the data connection.
+    private func download(_ command: String, path: RemotePath) async throws -> Data {
+        let conn = try requireConnection()
+        let transfer = try await beginTransfer(command, path: path, on: conn)
+        let data: Data
+        do {
+            data = try await transfer.handler.collectData(timeout: FTPConnection.operationTimeout)
+        } catch {
+            await abort(transfer, on: conn)
+            throw error
+        }
+        try await conn.finishTransfer()
+        return data
+    }
+
+    /// `STOR`s whatever `write` sends on the data connection.
+    private func upload(to path: RemotePath, write: (Channel) async throws -> Void) async throws {
+        let conn = try requireConnection()
+        let transfer = try await beginTransfer("STOR \(resolvedPath(path))", path: path, on: conn)
+        do {
+            try await write(transfer.channel)
+            try await transfer.channel.close()
+        } catch {
+            await abort(transfer, on: conn)
+            throw error
+        }
+        try await conn.finishTransfer()
+    }
+
+    /// Cleans up after a failed transfer. A control connection that could not be brought
+    /// back in step is dropped, so the next operation fails as not connected and the caller
+    /// reconnects instead of reading a stale reply as its own.
+    private func abort(_ transfer: FTPDataConnection, on conn: FTPConnection) async {
+        do {
+            try await conn.abortTransfer(transfer)
+        } catch {
+            await drop(conn)
+        }
+    }
+
+    private func drop(_ conn: FTPConnection) async {
+        if connection === conn {
+            connection = nil
+        }
+        try? await conn.close()
+    }
+
+    private func beginTransfer(
+        _ command: String,
+        path: RemotePath,
+        on conn: FTPConnection
+    ) async throws -> FTPDataConnection {
+        do {
+            return try await conn.beginTransfer(command)
+        } catch FTPError.controlConnectionLost(let message) {
+            await drop(conn)
+            throw FTPError.controlConnectionLost(message)
+        } catch FTPError.unexpectedResponse(let response) {
+            let verb = command.prefix { $0 != " " }
+            // For `STOR` a 550 means the server will not take the file, not that it is missing.
+            if response.code == 550 && verb != "STOR" {
+                throw RemoteFileSystemError.notFound(path)
+            }
+            throw RemoteFileSystemError.operationFailed("\(verb) failed: \(response.text)")
         }
     }
 
     // MARK: - Helpers
+
+    /// Runs one operation at a time. The control connection carries one command sequence
+    /// at a time, and actor reentrancy would otherwise let a second call send its commands
+    /// while the first awaits its replies, so each would read the other's.
+    private func serialized<T>(_ operation: () async throws -> T) async throws -> T {
+        while isBusy {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        isBusy = true
+        defer {
+            isBusy = false
+            if !waiters.isEmpty {
+                waiters.removeFirst().resume()
+            }
+        }
+        do {
+            return try await operation()
+        } catch let error as FTPError {
+            throw mapConnectionError(error)
+        }
+    }
 
     private func requireConnection() throws -> FTPConnection {
         guard let connection = connection else {
@@ -379,7 +412,7 @@ public actor FTPFileSystem: RemoteFileSystem {
                 return .notConnected
             case .connectionTimedOut:
                 return .connectionFailed(error.localizedDescription)
-            case .connectionFailed(let message):
+            case .connectionFailed(let message), .controlConnectionLost(let message):
                 return .connectionFailed(message)
             case .unexpectedResponse, .protocolError, .transferFailed:
                 return .operationFailed(error.localizedDescription)
@@ -401,57 +434,12 @@ public actor FTPFileSystem: RemoteFileSystem {
         return base + path.components.joined(separator: "/")
     }
 
-    private func isUnsupportedMLSTResponse(_ response: FTPResponse) -> Bool {
-        [500, 501, 502, 504].contains(response.code)
+    private static func entries(in listing: Data) -> [FTPDirectoryParser.Entry] {
+        FTPDirectoryParser.parse(String(bytes: listing, encoding: .utf8) ?? "")
     }
 
-    private func itemInfoFromListingFallback(at path: RemotePath, using conn: FTPConnection) async throws -> RemoteItem {
-        let targetPath = path.parent ?? path
-        let remotePath = resolvedPath(targetPath)
-        let (dataChannel, dataHandler) = try await conn.openDataConnection()
-        let response: FTPResponse
-        do {
-            response = try await conn.sendCommand("LIST \(remotePath)")
-        } catch {
-            try? await dataChannel.close()
-            throw error
-        }
-        guard response.code == 150 || response.code == 125 else {
-            try await dataChannel.close()
-            if response.code == 550 {
-                throw RemoteFileSystemError.notFound(path)
-            }
-            throw RemoteFileSystemError.operationFailed("LIST failed: \(response.text)")
-        }
-
-        let rawData: Data
-        do {
-            rawData = try await dataHandler.collectData(timeout: FTPConnection.operationTimeout)
-        } catch {
-            await cleanupFailedDataTransfer(on: dataChannel, using: conn)
-            throw error
-        }
-        try validateTransferCompletion(
-            try await conn.readResponse(),
-            failurePrefix: "LIST completion failed"
-        )
-
-        if path.isRoot {
-            return RemoteItem(path: path, type: .directory, modificationDate: Date())
-        }
-
-        let listing = String(data: rawData, encoding: .utf8) ?? ""
-        guard let entry = FTPDirectoryParser.parse(listing).first(where: { $0.name == path.name }) else {
-            throw RemoteFileSystemError.notFound(path)
-        }
-
-        return RemoteItem(
-            path: path,
-            type: entry.isDirectory ? .directory : .file,
-            size: entry.size,
-            modificationDate: entry.modificationDate ?? Date(),
-            permissions: entry.permissions
-        )
+    private func isUnsupportedMLSTResponse(_ response: FTPResponse) -> Bool {
+        [500, 501, 502, 504].contains(response.code)
     }
 
     private func parseMLSTResponse(_ text: String, path: RemotePath) -> RemoteItem? {
@@ -497,17 +485,4 @@ public actor FTPFileSystem: RemoteFileSystem {
         return Self.mdtmFormatter.date(from: timeStr)
     }
 
-    private func validateTransferCompletion(_ response: FTPResponse, failurePrefix: String) throws {
-        guard response.code == 226 || response.code == 250 else {
-            throw RemoteFileSystemError.operationFailed("\(failurePrefix): \(response.text)")
-        }
-    }
-
-    private func cleanupFailedDataTransfer(
-        on dataChannel: Channel,
-        using connection: FTPConnection
-    ) async {
-        try? await dataChannel.close()
-        _ = try? await connection.readResponse()
-    }
 }
