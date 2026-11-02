@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Effective date: October 4, 2026
+Effective date: November 3, 2026
 
 MFuse is an open-source macOS app that mounts remote storage (SFTP, Amazon S3, WebDAV, SMB, FTP, NFS, Google Drive, Dropbox, and OneDrive) in Finder. This policy explains what data MFuse accesses, how it is used, and where it is stored. The source code is available at [github.com/lollipopkit/mfuse](https://github.com/lollipopkit/mfuse), so every statement here can be checked against it.
 
@@ -21,9 +21,11 @@ MFuse is an open-source macOS app that mounts remote storage (SFTP, Amazon S3, W
 
 When you connect a Google Drive account, MFuse requests the following permission:
 
-- `https://www.googleapis.com/auth/drive` — to list, read, create, modify, move, rename, and delete files in your Google Drive. MFuse performs these operations only in response to your actions in Finder or in MFuse, so that your Drive appears and behaves as a folder on your Mac.
+- `https://www.googleapis.com/auth/drive` — to list, read, create, modify, move, rename, and delete files in your Google Drive. MFuse performs these operations only in response to your actions in Finder or in MFuse, so that your Drive appears and behaves as a folder on your Mac. Deleting an item in the mounted folder deletes it permanently from Google Drive; it is not moved to the Google Drive trash.
 
 MFuse also reads your Google account display name and email address through the Google Drive API, to show which account a connection belongs to.
+
+MFuse handles only this raw data, on your Mac. It does not create aggregated or anonymized data from Google user data.
 
 Google user data is used only to provide this feature. In particular, MFuse:
 
@@ -40,6 +42,13 @@ MFuse's use and transfer of information received from Google APIs adheres to the
 - **Connection settings**, together with cached file metadata and cached file contents used to make Finder fast, are stored on your Mac in `~/Library/Group Containers/group.com.lollipopkit.mfuse.shared`.
 - Files you open in Finder are also kept by macOS in its File Provider storage under `~/Library/CloudStorage`, as with other cloud storage apps.
 
+## Data protection
+
+- All requests to Google APIs and other cloud APIs use HTTPS (TLS).
+- OAuth tokens and other credentials are stored only in the macOS Keychain, never in plain files.
+- Cached data is stored inside MFuse's App Group container, which macOS restricts to MFuse and its File Provider extension, and is encrypted at rest when FileVault is enabled.
+- Because the developer operates no server, no Google user data is stored outside your Mac and the services you connect.
+
 ## iCloud sync (optional)
 
 iCloud sync is off by default. If you turn it on, MFuse syncs your connection settings through your iCloud Drive and your credentials through iCloud Keychain, so that the same connections are available on your other Macs. This data is handled by Apple under your Apple Account and Apple's privacy policy; the developer has no access to it. File contents are never synced through iCloud by MFuse.
@@ -49,6 +58,8 @@ iCloud sync is off by default. If you turn it on, MFuse syncs your connection se
 MFuse sends data only to the services you configure — for example Google, Dropbox, Microsoft, or your own servers — in order to carry out the operations you request, and to Apple if you enable iCloud sync. Cloud APIs are accessed over HTTPS. MFuse does not share data with anyone else.
 
 ## Retention and deletion
+
+- Credentials, cached file metadata, and cached file contents are kept on your Mac only for as long as the connection exists in MFuse.
 
 - Removing a connection in MFuse unmounts it and deletes its saved credentials, cached file metadata, and cached file contents. Files on the remote storage are not affected.
 - You can revoke MFuse's access to your Google account at any time at [myaccount.google.com/connections](https://myaccount.google.com/connections).
